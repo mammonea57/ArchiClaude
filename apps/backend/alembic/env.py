@@ -4,20 +4,24 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from db.base import Base
-# Import all models so Base.metadata is populated
-from db.models import audit_logs, feature_flags  # noqa: F401
-
 config = context.config
 
-# Remplace l'URL synchrone par celle de l'env si présente (avec driver sync pour Alembic)
-database_url = os.getenv("DATABASE_URL", "postgresql://archiclaude:archiclaude@localhost:5432/archiclaude")
-# Alembic utilise le driver sync, pas asyncpg
-sync_url = database_url.replace("postgresql+asyncpg://", "postgresql://")
-config.set_main_option("sqlalchemy.url", sync_url)
-
+# Logging config from alembic.ini MUST be loaded before any project imports
+# so model-level logging uses the right handlers.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+from db.base import Base  # noqa: E402
+
+# Import all models so Base.metadata is populated
+from db.models import audit_logs, feature_flags  # noqa: F401, E402
+
+# Remplace l'URL async par la version sync (Alembic n'utilise pas asyncpg)
+database_url = os.getenv("DATABASE_URL", "postgresql://archiclaude:archiclaude@localhost:5432/archiclaude")
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+sync_url = database_url.replace("+asyncpg", "")
+config.set_main_option("sqlalchemy.url", sync_url)
 
 target_metadata = Base.metadata
 
