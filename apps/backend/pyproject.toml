@@ -11,7 +11,7 @@ dependencies = [
     # Web framework
     "fastapi[standard]==0.115.4",
     "uvicorn[standard]==0.32.0",
-    "python-multipart==0.0.17",
+    "python-multipart==0.0.18",
 
     # DB
     "sqlalchemy[asyncio]==2.0.36",
@@ -49,7 +49,7 @@ dependencies = [
 
     # Auth
     "passlib[bcrypt]==1.7.4",
-    "python-jose[cryptography]==3.3.0",
+    "pyjwt[crypto]==2.9.0",
     "slowapi==0.1.9",
 
     # Logging / observabilité
@@ -98,4 +98,13 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-ra --cov=core --cov=api --cov=db --cov-report=term-missing"
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["core", "api", "db", "schemas", "workers"]
+branch = true
+omit = ["*/tests/*", "alembic/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
