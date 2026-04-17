@@ -1,0 +1,118 @@
+{
+  "zone_urba_nogent": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [2.48300, 48.83600],
+                [2.48600, 48.83600],
+                [2.48600, 48.83900],
+                [2.48300, 48.83900],
+                [2.48300, 48.83600]
+              ]
+            ]
+          ]
+        },
+        "properties": {
+          "libelle": "UB",
+          "libelong": "Zone urbaine mixte de densité moyenne",
+          "typezone": "U",
+          "partition": "94052",
+          "idurba": "94052_PLUi_20210610",
+          "nomfic": "PLUi_Nogent_reglement_UB.pdf",
+          "urlfic": "https://www.geoportail-urbanisme.gouv.fr/document/94052_PLUi_20210610/PLUi_Nogent_reglement_UB.pdf"
+        }
+      }
+    ]
+  },
+  "document_nogent": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": null,
+        "properties": {
+          "idurba": "94052_PLUi_20210610",
+          "typedoc": "PLUi",
+          "datappro": "2021-06-10",
+          "nom": "PLUi Val de Marne Est"
+        }
+      }
+    ]
+  },
+  "servitudes_surf_nogent": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [2.48000, 48.83000],
+                [2.49000, 48.83000],
+                [2.49000, 48.84000],
+                [2.48000, 48.84000],
+                [2.48000, 48.83000]
+              ]
+            ]
+          ]
+        },
+        "properties": {
+          "libelle": "Périmètre de protection des monuments historiques",
+          "categorie": "AC1",
+          "txt": "Monument historique classé — Périmètre de 500m"
+        }
+      }
+    ]
+  },
+  "servitudes_lin_nogent": {
+    "type": "FeatureCollection",
+    "features": []
+  },
+  "servitudes_pct_nogent": {
+    "type": "FeatureCollection",
+    "features": []
+  },
+  "prescriptions_surf_nogent": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [2.48200, 48.83500],
+                [2.48700, 48.83500],
+                [2.48700, 48.83900],
+                [2.48200, 48.83900],
+                [2.48200, 48.83500]
+              ]
+            ]
+          ]
+        },
+        "properties": {
+          "libelle": "Espace boisé classé",
+          "txt": "EBC — Article L.113-1 du code de l'urbanisme",
+          "typepsc": "15"
+        }
+      }
+    ]
+  },
+  "prescriptions_lin_nogent": {
+    "type": "FeatureCollection",
+    "features": []
+  },
+  "prescriptions_pct_nogent": {
+    "type": "FeatureCollection",
+    "features": []
+  }
+}
