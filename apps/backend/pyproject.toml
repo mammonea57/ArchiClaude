@@ -60,6 +60,9 @@ dependencies = [
 
     # Config fixtures
     "pyyaml==6.0.2",
+
+    # Markdown rendering
+    "markdown>=3.5",
 ]
 
 [project.optional-dependencies]
