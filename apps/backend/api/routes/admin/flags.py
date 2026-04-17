@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from db.models.feature_flags import FeatureFlagRow
@@ -21,17 +21,25 @@ async def upsert_flag(
     payload: FeatureFlagUpdate,
     session: SessionDep,
 ) -> FeatureFlagRow:
-    values = {
+    insert_values = {
         "key": key,
         "enabled_globally": payload.enabled_globally if payload.enabled_globally is not None else False,
-        "enabled_for_user_ids": payload.enabled_for_user_ids or [],
+        "enabled_for_user_ids": payload.enabled_for_user_ids if payload.enabled_for_user_ids is not None else [],
         "description": payload.description,
     }
-    update_cols = {k: v for k, v in values.items() if k != "key" and v is not None or k == "enabled_globally"}
+
+    update_cols: dict = {}
+    if payload.enabled_globally is not None:
+        update_cols["enabled_globally"] = payload.enabled_globally
+    if payload.enabled_for_user_ids is not None:
+        update_cols["enabled_for_user_ids"] = payload.enabled_for_user_ids
+    if payload.description is not None:
+        update_cols["description"] = payload.description
+    update_cols["updated_at"] = func.now()
 
     stmt = (
         pg_insert(FeatureFlagRow)
-        .values(**values)
+        .values(**insert_values)
         .on_conflict_do_update(index_elements=["key"], set_=update_cols)
         .returning(FeatureFlagRow)
     )

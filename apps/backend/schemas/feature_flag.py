@@ -20,7 +20,3 @@ class FeatureFlagUpdate(BaseModel):
     enabled_globally: bool | None = None
     enabled_for_user_ids: list[UUID] | None = None
     description: str | None = None
-
-
-class FeatureFlagCreate(FeatureFlagBase):
-    pass
