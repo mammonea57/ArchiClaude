@@ -75,3 +75,30 @@ def test_model_pricing_has_required_keys() -> None:
         assert "output_per_mtok_usd" in pricing, model
         assert "cache_read_per_mtok_usd" in pricing, model
         assert "cache_creation_per_mtok_usd" in pricing, model
+
+
+def test_extract_usage_no_cache_fields() -> None:
+    from types import SimpleNamespace
+
+    from api.middleware.cost_tracking import extract_usage_from_anthropic_message
+
+    response = SimpleNamespace(usage=SimpleNamespace(input_tokens=100, output_tokens=50))
+    result = extract_usage_from_anthropic_message(response, "claude-sonnet-4-6")
+    assert result == AnthropicUsage("claude-sonnet-4-6", 100, 0, 0, 50)
+
+
+def test_extract_usage_with_cache_fields() -> None:
+    from types import SimpleNamespace
+
+    from api.middleware.cost_tracking import extract_usage_from_anthropic_message
+
+    response = SimpleNamespace(
+        usage=SimpleNamespace(
+            input_tokens=500,
+            output_tokens=200,
+            cache_creation_input_tokens=1000,
+            cache_read_input_tokens=3000,
+        )
+    )
+    result = extract_usage_from_anthropic_message(response, "claude-opus-4-6")
+    assert result == AnthropicUsage("claude-opus-4-6", 500, 1000, 3000, 200)
