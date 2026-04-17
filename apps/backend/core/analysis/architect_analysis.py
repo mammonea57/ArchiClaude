@@ -173,6 +173,4 @@ async def run_architect_analysis(
 
     # --- Step 4: Call Opus ---
     logger.info("Calling Claude Opus for architect analysis — commune %s zone %s", commune_name, zone_code)
-    result = await _call_opus(system=SYSTEM_PROMPT, user=user_prompt)
-
-    return result
+    return await _call_opus(system=SYSTEM_PROMPT, user=user_prompt)

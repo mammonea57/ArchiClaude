@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.analysis.architect_prompt import SYSTEM_PROMPT, build_architect_prompt
 
 # ---------------------------------------------------------------------------

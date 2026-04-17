@@ -5,8 +5,6 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from core.analysis.rag.jurisprudences import JurisprudenceMatch
 from core.analysis.rag.recours import RecoursMatch
 

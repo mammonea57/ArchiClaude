@@ -17,31 +17,31 @@ from core.analysis.rag.recours import RecoursMatch
 
 
 def _make_jur_match(**kwargs) -> JurisprudenceMatch:
-    defaults = dict(
-        id=str(uuid.uuid4()),
-        reference="TA Paris 2023-001",
-        source="Légifrance",
-        motif_principal="Dépassement COS",
-        resume="Le tribunal annule le permis pour dépassement du COS.",
-        decision="Annulation",
-        commune_insee="75056",
-        similarity=0.87,
-    )
+    defaults = {
+        "id": str(uuid.uuid4()),
+        "reference": "TA Paris 2023-001",
+        "source": "Légifrance",
+        "motif_principal": "Dépassement COS",
+        "resume": "Le tribunal annule le permis pour dépassement du COS.",
+        "decision": "Annulation",
+        "commune_insee": "75056",
+        "similarity": 0.87,
+    }
     defaults.update(kwargs)
     return JurisprudenceMatch(**defaults)
 
 
 def _make_rec_match(**kwargs) -> RecoursMatch:
-    defaults = dict(
-        id=str(uuid.uuid4()),
-        commune_insee="75056",
-        association="SOS Paris Vert",
-        projet_conteste="Tour de logements R+12",
-        motifs=["hauteur excessive", "non-conformité PLU"],
-        resultat="rejeté",
-        resume="Recours rejeté pour défaut d'intérêt à agir.",
-        similarity=0.78,
-    )
+    defaults = {
+        "id": str(uuid.uuid4()),
+        "commune_insee": "75056",
+        "association": "SOS Paris Vert",
+        "projet_conteste": "Tour de logements R+12",
+        "motifs": ["hauteur excessive", "non-conformité PLU"],
+        "resultat": "rejeté",
+        "resume": "Recours rejeté pour défaut d'intérêt à agir.",
+        "similarity": 0.78,
+    }
     defaults.update(kwargs)
     return RecoursMatch(**defaults)
 

@@ -96,7 +96,14 @@
       "Bash(python -m alembic upgrade head)",
       "Bash(python -m pytest tests/integration/test_projects_endpoints.py::TestProjectsEndpoints::test_create_project -v)",
       "Bash(python -m pytest tests/integration/test_projects_endpoints.py -v)",
-      "Bash(python -m pytest tests/ --tb=short -q)"
+      "Bash(python -m pytest tests/ --tb=short -q)",
+      "Bash(pip list *)",
+      "Bash(python -c \"import openai; print\\(openai.__version__\\)\")",
+      "Bash(python -m pip show pip)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(python -c \"import openai; print\\('openai', openai.__version__\\)\")",
+      "Bash(python -m pytest tests/unit/test_architect_prompt.py tests/unit/test_architect_analysis.py tests/unit/test_rag_endpoints.py tests/unit/test_rag_ingest.py -v --tb=short)",
+      "Bash(python -m pytest tests/ -q --tb=short)"
     ],
     "additionalDirectories": [
       "/Users/anthonymammone/Desktop/ArchiClaude/docs/superpowers"

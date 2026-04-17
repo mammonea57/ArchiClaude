@@ -6,9 +6,6 @@ import json
 import uuid
 from pathlib import Path
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -158,7 +155,6 @@ async def test_ingest_recours_empty_list(tmp_path: Path) -> None:
 def test_worker_has_ingest_functions() -> None:
     """Workers.main.Worker.functions includes both ingest worker functions."""
     from workers.main import Worker
-    from workers.rag_ingest import ingest_jurisprudences_from_json, ingest_recours_from_json
 
     function_names = {f.__name__ for f in Worker.functions}
     assert "ingest_jurisprudences_from_json" in function_names
