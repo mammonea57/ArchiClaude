@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.plu.commune_filter import normalize_commune_name, strip_other_communes
-
 
 # ---------------------------------------------------------------------------
 # normalize_commune_name

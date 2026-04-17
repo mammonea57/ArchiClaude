@@ -6,7 +6,8 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID  # noqa: N811
+from sqlalchemy.dialects.postgresql import JSONB  # noqa: N811
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base

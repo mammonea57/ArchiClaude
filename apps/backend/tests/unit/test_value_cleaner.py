@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.plu.value_cleaner import clean_value, hoist_chiffre_front, is_error_pattern
-
 
 # ---------------------------------------------------------------------------
 # is_error_pattern

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.plu.json_repair import extract_and_parse_json
-
 
 # ---------------------------------------------------------------------------
 # Happy-path

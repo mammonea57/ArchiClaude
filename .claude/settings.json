@@ -76,7 +76,18 @@
       "Bash(xargs cat *)",
       "Bash(python -m pytest tests/unit/test_source_mapillary.py tests/unit/test_source_streetview.py tests/unit/test_source_cerema_bruit.py tests/unit/test_source_bruitparif.py tests/unit/test_source_ign_transports.py tests/unit/test_source_navitia.py -v)",
       "Bash(python -m pytest tests/unit/test_source_sitadel.py tests/unit/test_source_insee_sru.py tests/unit/test_site_orientation.py tests/unit/test_site_bruit.py tests/unit/test_site_transports.py tests/unit/test_site_voisinage.py -v)",
-      "Bash(python -m pytest tests/ --tb=short)"
+      "Bash(python -m pytest tests/ --tb=short)",
+      "Bash(python -m pytest tests/unit/test_plu_schemas.py tests/unit/test_json_repair.py tests/unit/test_value_cleaner.py -v)",
+      "Bash(python -m pytest tests/unit/test_json_repair.py -v)",
+      "Bash(python -m pytest tests/ -v --ignore=tests/integration)",
+      "Bash(python -m pytest tests/ -q)",
+      "Read(//Users/anthonymammone/Desktop/Urbanisme app/**)",
+      "Bash(python -m pytest tests/unit/test_section_finder.py tests/unit/test_commune_filter.py -v)",
+      "Bash(python -m pytest tests/unit/test_commune_filter.py -v)",
+      "Bash(cat /Users/anthonymammone/Desktop/ArchiClaude/apps/backend/requirements*.txt)",
+      "Bash(python -m pytest tests/unit/test_extractor.py tests/unit/test_numericizer.py -v)",
+      "Bash(python -m pytest tests/unit/test_paris_bioclim.py -v)",
+      "Bash(python -m pytest tests/integration/test_plu_rules_endpoints.py -v)"
     ],
     "additionalDirectories": [
       "/Users/anthonymammone/Desktop/ArchiClaude/docs/superpowers"

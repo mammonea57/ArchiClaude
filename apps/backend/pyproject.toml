@@ -88,6 +88,8 @@ ignore = ["E501"]  # line length géré par formatter
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["TCH"]  # TYPE_CHECKING blocks inutiles dans les tests
 "core/site/**" = ["TCH"]  # runtime imports needed for dataclass field types
+"core/plu/**" = ["TCH", "E402"]  # runtime imports + conditional imports
+"db/models/**" = ["TCH", "N811"]  # runtime imports + UUID alias convention
 
 [tool.ruff.format]
 quote-style = "double"

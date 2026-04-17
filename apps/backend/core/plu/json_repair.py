@@ -49,10 +49,7 @@ def _repair_truncated(raw: str) -> str | None:
             # Truncate after the comma/brace that ends this last complete field
             end_pos = last_match.end()
             # If the boundary character was a comma, replace with }
-            if s[end_pos - 1] == ",":
-                s = s[: end_pos - 1] + "}"
-            else:
-                s = s[:end_pos]
+            s = s[: end_pos - 1] + "}" if s[end_pos - 1] == "," else s[:end_pos]
         elif last_brace > 0:
             s = s[: last_brace + 1]
         else:
@@ -84,9 +81,7 @@ def _repair_truncated(raw: str) -> str | None:
         s += "}" * depth
 
     # --- Step 4: final cleanup of trailing commas before } ---
-    s = re.sub(r",\s*}", "}", s)
-
-    return s
+    return re.sub(r",\s*}", "}", s)
 
 
 def extract_and_parse_json(raw: str) -> dict | None:  # type: ignore[type-arg]

@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from core.plu.schemas import Bande, NumericRules, ParsedRules, RuleFormula
 
-
 # ---------------------------------------------------------------------------
 # ParsedRules
 # ---------------------------------------------------------------------------

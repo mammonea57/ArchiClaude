@@ -150,10 +150,8 @@ def _commune_matches(mentioned_norm: str, target_norm: str) -> bool:
     has_sep_target = "-" in target_norm or " " in target_norm
     if has_sep_mentioned and has_sep_target:
         return False
-    if (
+    return (
         len(mentioned_norm) >= 4
         and len(target_norm) >= 4
         and mentioned_norm[:4] == target_norm[:4]
-    ):
-        return True
-    return False
+    )

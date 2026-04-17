@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.plu.section_finder import find_zone_section, generate_zone_variants, score_candidate
-
 
 # ---------------------------------------------------------------------------
 # generate_zone_variants
