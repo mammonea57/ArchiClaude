@@ -1,0 +1,30 @@
+{
+  "monuments_vincennes": {
+    "hits": {
+      "total": {"value": 1, "relation": "eq"},
+      "hits": [
+        {
+          "_index": "merimee",
+          "_id": "PA00079781",
+          "_source": {
+            "REF": "PA00079781",
+            "TICO": "Château de Vincennes",
+            "DPRO": "1913-06-19 : classé MH",
+            "COM": "Vincennes",
+            "DPT": "94",
+            "POP_COORDONNEES": {
+              "lat": 48.8444,
+              "lon": 2.4352
+            }
+          }
+        }
+      ]
+    }
+  },
+  "monuments_empty": {
+    "hits": {
+      "total": {"value": 0, "relation": "eq"},
+      "hits": []
+    }
+  }
+}

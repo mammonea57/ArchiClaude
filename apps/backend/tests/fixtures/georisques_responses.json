@@ -1,0 +1,27 @@
+{
+  "gaspar_nogent": {
+    "data": [
+      {
+        "type_risque": "ppri",
+        "code_risque": "PPRi-Val-de-Marne",
+        "libelle_risque": "Plan de prévention du risque inondation",
+        "niveau_alea": "moyen"
+      }
+    ]
+  },
+  "gaspar_empty": {
+    "data": []
+  },
+  "argiles_nogent": {
+    "data": [
+      {
+        "code_alea": "G2",
+        "libelle_alea": "Retrait-gonflement des argiles",
+        "niveau_alea": "moyen"
+      }
+    ]
+  },
+  "argiles_empty": {
+    "data": []
+  }
+}
