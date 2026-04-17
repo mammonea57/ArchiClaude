@@ -6,7 +6,7 @@ All surface values are indicative and pending calibration against real projects.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------
 # Constants

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.compliance.lls_sru import compute_lls_obligation
 
 

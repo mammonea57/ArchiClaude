@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-
-from core.feasibility.servitudes import ServitudeAlert, detect_servitudes_alerts
+from core.feasibility.servitudes import detect_servitudes_alerts
 from core.sources.georisques import RisqueResult
 from core.sources.gpu import GpuServitude
 from core.sources.pop import MonumentResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers

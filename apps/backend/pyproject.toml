@@ -87,9 +87,11 @@ ignore = ["E501"]  # line length géré par formatter
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["TCH"]  # TYPE_CHECKING blocks inutiles dans les tests
-"core/site/**" = ["TCH"]  # runtime imports needed for dataclass field types
-"core/plu/**" = ["TCH", "E402"]  # runtime imports + conditional imports
-"db/models/**" = ["TCH", "N811"]  # runtime imports + UUID alias convention
+"core/**" = ["TCH"]  # runtime imports needed for dataclass/pydantic field types
+"db/**" = ["TCH", "N811"]  # runtime imports + UUID alias convention
+"api/**" = ["TCH"]  # runtime imports in FastAPI routes
+"workers/**" = ["TCH"]  # runtime imports in workers
+"schemas/**" = ["TCH"]  # runtime imports in Pydantic schemas
 
 [tool.ruff.format]
 quote-style = "double"

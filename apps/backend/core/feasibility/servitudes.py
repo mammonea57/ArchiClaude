@@ -86,7 +86,7 @@ def detect_servitudes_alerts(
                         level="warning",
                         type="argiles",
                         message=(
-                            f"Retrait-gonflement des argiles — aléa fort. "
+                            "Retrait-gonflement des argiles — aléa fort. "
                             "Étude géotechnique G2 obligatoire (art. L.112-22 CC)."
                         ),
                         source="georisques",

@@ -87,7 +87,16 @@
       "Bash(cat /Users/anthonymammone/Desktop/ArchiClaude/apps/backend/requirements*.txt)",
       "Bash(python -m pytest tests/unit/test_extractor.py tests/unit/test_numericizer.py -v)",
       "Bash(python -m pytest tests/unit/test_paris_bioclim.py -v)",
-      "Bash(python -m pytest tests/integration/test_plu_rules_endpoints.py -v)"
+      "Bash(python -m pytest tests/integration/test_plu_rules_endpoints.py -v)",
+      "Bash(python -m pytest tests/unit/test_feasibility_footprint.py tests/unit/test_feasibility_capacity.py -v)",
+      "Bash(python -m pytest tests/unit/test_feasibility_servitudes.py tests/unit/test_feasibility_brief_compare.py tests/unit/test_compliance_incendie.py tests/unit/test_compliance_pmr.py tests/unit/test_compliance_re2020.py tests/unit/test_compliance_lls_sru.py tests/unit/test_compliance_rsdu.py -v)",
+      "Bash(python -m pytest tests/unit/test_feasibility_engine.py -v)",
+      "Bash(python -c \"from core.sources.georisques import RisqueResult; import inspect; print\\(inspect.signature\\(RisqueResult.__init__\\)\\)\")",
+      "Bash(python -m pytest tests/unit/test_feasibility_engine.py tests/integration/test_projects_endpoints.py -v)",
+      "Bash(python -m alembic upgrade head)",
+      "Bash(python -m pytest tests/integration/test_projects_endpoints.py::TestProjectsEndpoints::test_create_project -v)",
+      "Bash(python -m pytest tests/integration/test_projects_endpoints.py -v)",
+      "Bash(python -m pytest tests/ --tb=short -q)"
     ],
     "additionalDirectories": [
       "/Users/anthonymammone/Desktop/ArchiClaude/docs/superpowers"

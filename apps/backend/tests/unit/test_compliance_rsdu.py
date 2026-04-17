@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.compliance.rsdu import compute_rsdu_obligations
 
 

@@ -65,7 +65,7 @@ def compute_lls_obligation(
             pass
         return None, None, warnings
 
-    elif commune_statut == "rattrapage":
+    if commune_statut == "rattrapage":
         above_threshold = sdp_m2 > _RATTRAPAGE_SDP_SEUIL or nb_logements > _RATTRAPAGE_LOGEMENTS_SEUIL
         if above_threshold:
             obligation_pct = _OBLIGATION_RATTRAPAGE

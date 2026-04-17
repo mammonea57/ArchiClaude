@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.compliance.re2020 import estimate_re2020
 
 

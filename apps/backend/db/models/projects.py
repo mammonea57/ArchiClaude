@@ -15,14 +15,15 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID  # noqa: N811
+from sqlalchemy.dialects.postgresql import JSONB  # noqa: N811
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from db.base import Base
+import db.models.parcels  # noqa: F401, E402
 
 # Ensure FK targets are in Base.metadata regardless of import order
 import db.models.users  # noqa: F401, E402
-import db.models.parcels  # noqa: F401, E402
+from db.base import Base
 
 
 class ProjectRow(Base):
