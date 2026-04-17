@@ -1,0 +1,39 @@
+# Dataset de référence ArchiClaude — parcelles aux valeurs attendues pré-validées.
+# Chaque entrée DOIT avoir été vérifiée manuellement contre le PLU officiel.
+# Les valeurs chiffrées servent aux tests de régression (écart ≤ 1%).
+
+parcelles:
+  - id: paris_8e_ug_reference
+    address: "8 Rue de la Paix, 75002 Paris"
+    insee: "75102"
+    section: "AB"
+    numero: "0001"
+    zone_plu_code: "UG"
+
+  - id: nogent_sur_marne_ub_reference
+    address: "Exemple à préciser"
+    insee: "94052"
+    section: "A"
+    numero: "0001"
+    zone_plu_code: "UB"
+
+  - id: saint_denis_um_reference
+    address: "Exemple à préciser"
+    insee: "93066"
+    section: "A"
+    numero: "0001"
+    zone_plu_code: "UM"
+
+  - id: versailles_ua_reference
+    address: "Exemple à préciser"
+    insee: "78646"
+    section: "A"
+    numero: "0001"
+    zone_plu_code: "UA"
+
+  - id: meaux_uc_reference
+    address: "Exemple à préciser"
+    insee: "77284"
+    section: "A"
+    numero: "0001"
+    zone_plu_code: "UC"
