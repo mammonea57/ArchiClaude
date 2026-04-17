@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from workers.extraction import run_extraction
 from workers.feasibility import run_feasibility_job
+from workers.pdf import generate_pdf_job
 from workers.rag_ingest import ingest_jurisprudences_from_json, ingest_recours_from_json
 
 
@@ -24,7 +25,7 @@ async def noop_task(ctx: dict, message: str) -> str:
 class Worker:
     """ARQ worker settings. Entry point: `arq workers.main.Worker`."""
 
-    functions = [noop_task, run_extraction, run_feasibility_job, ingest_jurisprudences_from_json, ingest_recours_from_json]
+    functions = [noop_task, run_extraction, run_feasibility_job, generate_pdf_job, ingest_jurisprudences_from_json, ingest_recours_from_json]
     redis_settings = RedisSettings.from_dsn(_worker_settings.redis_url)
     max_jobs = 10
     job_timeout = 600
