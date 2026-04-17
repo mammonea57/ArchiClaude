@@ -56,3 +56,50 @@ class PluAtPointResponse(BaseModel):
     prescriptions: list[PrescriptionOut]
     risques: list[RisqueOut]
     monuments: list[MonumentOut]
+
+
+# ---------------------------------------------------------------------------
+# Zone rules extraction schemas
+# ---------------------------------------------------------------------------
+
+
+class ParsedRulesOut(BaseModel):
+    hauteur: str | None = None
+    emprise: str | None = None
+    implantation_voie: str | None = None
+    limites_separatives: str | None = None
+    stationnement: str | None = None
+    lls: str | None = None
+    espaces_verts: str | None = None
+    destinations: str | None = None
+    pages: dict[str, int | None] = {}
+    source: str
+    cached: bool
+
+
+class NumericRulesOut(BaseModel):
+    hauteur_max_m: float | None = None
+    emprise_max_pct: float | None = None
+    recul_voirie_m: float | None = None
+    pleine_terre_min_pct: float = 0.0
+    extraction_confidence: float
+    extraction_warnings: list[str] = []
+
+
+class ZoneRulesResponse(BaseModel):
+    text: ParsedRulesOut
+    numeric: NumericRulesOut | None = None
+    confidence: float | None = None
+    validated: bool = False
+
+
+class ExtractionJobResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class ExtractionStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    progress: str | None = None
+    result: dict | None = None

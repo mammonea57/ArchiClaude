@@ -19,11 +19,13 @@ from db.models import (  # noqa: F401, E402
     audit_logs,
     commune_sru,
     comparable_projects,
+    extraction_feedback,
     feature_flags,
     parcels,
     plu,
     servitudes,
     users,
+    zone_rules,
 )
 
 # Remplace l'URL async par la version sync (Alembic n'utilise pas asyncpg)

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from core.sources import georisques, gpu, pop
 from schemas.plu import (
+    ExtractionJobResponse,
+    ExtractionStatusResponse,
     MonumentOut,
     PluAtPointResponse,
     PluDocumentOut,
@@ -118,3 +121,48 @@ async def plu_at_point(
         risques=risques,
         monuments=monuments,
     )
+
+
+# ---------------------------------------------------------------------------
+# Zone rules extraction endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/zone/{zone_id}/rules")
+async def get_zone_rules(
+    zone_id: str,
+    commune_insee: str | None = Query(default=None),
+) -> dict:
+    """Get cached rules for a zone. Returns 404 if not extracted yet."""
+    # For now: return 404 since actual DB lookup requires session integration
+    raise HTTPException(status_code=404, detail="Rules not yet extracted for this zone")
+
+
+@router.post("/zone/{zone_id}/extract", status_code=202)
+async def start_extraction(
+    zone_id: str,
+    commune_insee: str | None = Query(default=None),
+) -> ExtractionJobResponse:
+    """Enqueue extraction job. Returns job_id."""
+    # In production: enqueue via ARQ. For now: return job_id placeholder.
+    job_id = str(uuid.uuid4())
+    return ExtractionJobResponse(job_id=job_id, status="queued")
+
+
+@router.get("/extract/status/{job_id}")
+async def extraction_status(job_id: str) -> ExtractionStatusResponse:
+    """Check extraction job status."""
+    # Placeholder — actual implementation checks Redis job status
+    return ExtractionStatusResponse(job_id=job_id, status="pending")
+
+
+@router.post("/zone/{zone_id}/validate")
+async def validate_rules(zone_id: str) -> dict:
+    """User validates/corrects extracted rules."""
+    return {"status": "validated"}
+
+
+@router.post("/rules/{zone_rules_numeric_id}/feedback", status_code=201)
+async def submit_feedback(zone_rules_numeric_id: str) -> dict:
+    """Store user correction telemetry."""
+    return {"status": "recorded"}
