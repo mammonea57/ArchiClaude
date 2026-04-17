@@ -11,6 +11,7 @@ geographic CRS, and (easting, northing) for projected CRS.
 
 from functools import lru_cache
 
+import numpy as np
 from pyproj import Transformer
 from shapely import transform
 from shapely.geometry import Point, Polygon
@@ -51,8 +52,6 @@ def _reproject(geom: BaseGeometry, source_crs: str, target_crs: str = _TARGET_CR
     """
     if source_crs == target_crs:
         return geom
-    import numpy as np
-
     transformer = _get_transformer(source_crs, target_crs)
 
     def _apply(coords: "np.ndarray") -> "np.ndarray":
