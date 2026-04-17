@@ -4,12 +4,15 @@ Stratégie Phase 0 : on exporte d'abord en JSON Schema, puis on utilise un post-
 minimal pour produire un fichier TypeScript avec types + zod schemas. En Phase 1+, on
 passera à un outil plus complet si le volume le justifie.
 """
+
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -70,7 +73,7 @@ def main() -> None:
         parts.append("")
 
     OUTPUT_FILE.write_text("\n".join(parts))
-    print(f"Wrote {OUTPUT_FILE}")
+    sys.stdout.write(f"Wrote {OUTPUT_FILE}\n")
 
 
 if __name__ == "__main__":

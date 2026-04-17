@@ -23,16 +23,12 @@ async def test_database_is_reachable(db_engine) -> None:
 @pytest.mark.asyncio
 async def test_postgis_extension_available(db_engine) -> None:
     async with db_engine.connect() as conn:
-        result = await conn.execute(
-            text("SELECT extname FROM pg_extension WHERE extname='postgis'")
-        )
+        result = await conn.execute(text("SELECT extname FROM pg_extension WHERE extname='postgis'"))
         assert result.scalar() == "postgis"
 
 
 @pytest.mark.asyncio
 async def test_pgvector_extension_available(db_engine) -> None:
     async with db_engine.connect() as conn:
-        result = await conn.execute(
-            text("SELECT extname FROM pg_extension WHERE extname='vector'")
-        )
+        result = await conn.execute(text("SELECT extname FROM pg_extension WHERE extname='vector'"))
         assert result.scalar() == "vector"

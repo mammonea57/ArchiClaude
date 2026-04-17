@@ -29,6 +29,6 @@ def test_loader_raises_if_file_missing(tmp_path: Path) -> None:
     missing = tmp_path / "nonexistent.yaml"
     try:
         load_reference_parcels(path=missing)
-        assert False, "Should have raised"
+        raise AssertionError("Should have raised")
     except FileNotFoundError:
         pass

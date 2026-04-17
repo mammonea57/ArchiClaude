@@ -40,7 +40,9 @@ def compute_cost_cents(usage: AnthropicUsage) -> Decimal:
 
     cost_usd = (
         Decimal(usage.input_tokens) * pricing["input_per_mtok_usd"] / Decimal(1_000_000)
-        + Decimal(usage.cache_creation_input_tokens) * pricing["cache_creation_per_mtok_usd"] / Decimal(1_000_000)
+        + Decimal(usage.cache_creation_input_tokens)
+        * pricing["cache_creation_per_mtok_usd"]
+        / Decimal(1_000_000)
         + Decimal(usage.cache_read_input_tokens) * pricing["cache_read_per_mtok_usd"] / Decimal(1_000_000)
         + Decimal(usage.output_tokens) * pricing["output_per_mtok_usd"] / Decimal(1_000_000)
     )

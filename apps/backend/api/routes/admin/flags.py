@@ -24,7 +24,9 @@ async def upsert_flag(
     insert_values = {
         "key": key,
         "enabled_globally": payload.enabled_globally if payload.enabled_globally is not None else False,
-        "enabled_for_user_ids": payload.enabled_for_user_ids if payload.enabled_for_user_ids is not None else [],
+        "enabled_for_user_ids": payload.enabled_for_user_ids
+        if payload.enabled_for_user_ids is not None
+        else [],
         "description": payload.description,
     }
 

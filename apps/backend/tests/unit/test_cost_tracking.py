@@ -3,9 +3,9 @@ from decimal import Decimal
 import pytest
 
 from api.middleware.cost_tracking import (
+    MODEL_PRICING,
     AnthropicUsage,
     compute_cost_cents,
-    MODEL_PRICING,
 )
 
 
