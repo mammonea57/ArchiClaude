@@ -14,29 +14,6 @@ jobs:
   backend:
     name: Backend (Python)
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgis/postgis:16-3.4
-        env:
-          POSTGRES_USER: archiclaude
-          POSTGRES_PASSWORD: archiclaude
-          POSTGRES_DB: archiclaude
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U archiclaude"
-          --health-interval=5s
-          --health-timeout=3s
-          --health-retries=10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=3s
-          --health-retries=10
 
     defaults:
       run:
@@ -44,6 +21,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Start Postgres + Redis via Docker Compose
+        working-directory: .
+        run: docker compose up -d postgres redis --wait --wait-timeout 60
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
@@ -55,13 +36,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libcairo2 libpango-1.0-0 libpangoft2-1.0-0 libgdk-pixbuf-2.0-0 libgeos-dev libproj-dev proj-data
-
-      - name: Install pgvector inside Postgres service container
-        working-directory: .
-        run: |
-          PG_CONTAINER=$(docker ps -q --filter "ancestor=postgis/postgis:16-3.4")
-          docker exec -u root $PG_CONTAINER bash -c "apt-get update -qq && apt-get install -y -qq postgresql-16-pgvector"
-          PGPASSWORD=archiclaude psql -h localhost -U archiclaude -d archiclaude -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
       - name: Install Python deps
         run: |
@@ -84,6 +58,11 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://archiclaude:archiclaude@localhost:5432/archiclaude
           REDIS_URL: redis://localhost:6379/0
         run: pytest -v
+
+      - name: Teardown
+        if: always()
+        working-directory: .
+        run: docker compose down
 
   frontend:
     name: Frontend (Next.js)
