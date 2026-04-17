@@ -1,0 +1,71 @@
+name: archiclaude
+
+services:
+  postgres:
+    build:
+      context: ./docker/postgres
+    container_name: archiclaude-postgres
+    environment:
+      POSTGRES_USER: archiclaude
+      POSTGRES_PASSWORD: archiclaude
+      POSTGRES_DB: archiclaude
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U archiclaude"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: archiclaude-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile.dev
+    container_name: archiclaude-backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://archiclaude:archiclaude@postgres:5432/archiclaude
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["full"]
+
+  worker:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile.dev
+    container_name: archiclaude-worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://archiclaude:archiclaude@postgres:5432/archiclaude
+      REDIS_URL: redis://redis:6379/0
+    command: ["arq", "workers.main.Worker"]
+    volumes:
+      - ./apps/backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["full"]
+
+volumes:
+  postgres_data:
