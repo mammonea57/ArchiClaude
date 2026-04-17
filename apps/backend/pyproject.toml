@@ -37,6 +37,7 @@ dependencies = [
     "redis==5.2.0",
 
     # Geospatial
+    "geoalchemy2>=0.15",
     "shapely==2.0.6",
     "pyproj==3.7.0",
     "geopandas==1.0.1",
