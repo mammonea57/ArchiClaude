@@ -10,7 +10,7 @@ import re
 import pytest
 from pytest_httpx import HTTPXMock
 
-from core.sources.mapillary import MapillaryPhoto, fetch_photos_around
+from core.sources.mapillary import fetch_photos_around
 
 _MAPILLARY_URL_RE = re.compile(r"https://graph\.mapillary\.com/images.*")
 

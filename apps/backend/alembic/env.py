@@ -15,7 +15,16 @@ if config.config_file_name is not None:
 from db.base import Base  # noqa: E402
 
 # Import all models so Base.metadata is populated
-from db.models import audit_logs, comparable_projects, commune_sru, feature_flags, parcels, plu, servitudes, users  # noqa: F401, E402
+from db.models import (  # noqa: F401, E402
+    audit_logs,
+    commune_sru,
+    comparable_projects,
+    feature_flags,
+    parcels,
+    plu,
+    servitudes,
+    users,
+)
 
 # Remplace l'URL async par la version sync (Alembic n'utilise pas asyncpg)
 database_url = os.getenv("DATABASE_URL", "postgresql://archiclaude:archiclaude@localhost:5432/archiclaude")

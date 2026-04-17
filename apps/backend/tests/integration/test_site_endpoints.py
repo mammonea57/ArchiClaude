@@ -12,9 +12,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import AsyncClient
 
-from core.site.bruit import BruitSiteResult
-from core.site.transports import DesserteResult
-from core.site.voisinage import VoisinEnrichi
 from core.sources.bruitparif import BruitparifResult
 from core.sources.cerema_bruit import ClassementSonore
 from core.sources.dpe import DpeResult

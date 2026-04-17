@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.site.voisinage import VoisinEnrichi, enrich_voisinage
 from core.sources.dpe import DpeResult
 from core.sources.ign_bdtopo import BatimentResult

@@ -71,7 +71,12 @@
       "Bash(pip install *)",
       "Bash(python -c ' *)",
       "Bash(python -m pytest tests/ -v)",
-      "Bash(ruff check *)"
+      "Bash(ruff check *)",
+      "WebSearch",
+      "Bash(xargs cat *)",
+      "Bash(python -m pytest tests/unit/test_source_mapillary.py tests/unit/test_source_streetview.py tests/unit/test_source_cerema_bruit.py tests/unit/test_source_bruitparif.py tests/unit/test_source_ign_transports.py tests/unit/test_source_navitia.py -v)",
+      "Bash(python -m pytest tests/unit/test_source_sitadel.py tests/unit/test_source_insee_sru.py tests/unit/test_site_orientation.py tests/unit/test_site_bruit.py tests/unit/test_site_transports.py tests/unit/test_site_voisinage.py -v)",
+      "Bash(python -m pytest tests/ --tb=short)"
     ],
     "additionalDirectories": [
       "/Users/anthonymammone/Desktop/ArchiClaude/docs/superpowers"

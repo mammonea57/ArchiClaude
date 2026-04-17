@@ -10,7 +10,7 @@ import re
 import pytest
 from pytest_httpx import HTTPXMock
 
-from core.sources.ign_transports import ArretTC, fetch_arrets_around
+from core.sources.ign_transports import fetch_arrets_around
 
 _WFS_URL_RE = re.compile(r"https://data\.geopf\.fr/wfs/ows.*")
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from core.http_client import fetch_json
 

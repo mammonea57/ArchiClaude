@@ -82,7 +82,7 @@ def test_degenerate_segment_skipped() -> None:
     segments = compute_orientations(tiny)
     # The degenerate segment (0.001 m) must be filtered out
     lengths = [s.longueur_m for s in segments]
-    assert all(l >= 0.01 for l in lengths)
+    assert all(length >= 0.01 for length in lengths)
 
 
 def test_north_facing_segment() -> None:

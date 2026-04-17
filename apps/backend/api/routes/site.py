@@ -9,8 +9,17 @@ from fastapi import APIRouter, Query
 from core.site import bruit as bruit_module
 from core.site import transports as transports_module
 from core.site import voisinage as voisinage_module
-from core.sources import mapillary, google_streetview, cerema_bruit, bruitparif
-from core.sources import ign_transports, ign_bdtopo, dpe, dvf, sitadel
+from core.sources import (
+    bruitparif,
+    cerema_bruit,
+    dpe,
+    dvf,
+    google_streetview,
+    ign_bdtopo,
+    ign_transports,
+    mapillary,
+    sitadel,
+)
 from schemas.site import (
     ArretTCOut,
     ComparableProjectOut,
