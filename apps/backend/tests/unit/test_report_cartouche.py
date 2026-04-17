@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.reports.cartouche import build_cartouche
 
 

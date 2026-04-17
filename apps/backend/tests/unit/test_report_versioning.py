@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.reports.versioning import build_version_diff, compute_next_version
-
 
 # ---------------------------------------------------------------------------
 # compute_next_version

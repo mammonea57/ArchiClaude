@@ -5,8 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Text, UniqueConstraint, func
-from sqlalchemy import ForeignKey
+from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 

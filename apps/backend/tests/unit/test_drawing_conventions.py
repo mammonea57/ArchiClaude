@@ -5,13 +5,12 @@ from __future__ import annotations
 import pytest
 
 from core.drawing.conventions import (
+    CARTOUCHE_DEFAULTS,
     HACHURES,
     POLICES,
     SYMBOLES,
-    CARTOUCHE_DEFAULTS,
     TRAIT_EPAISSEURS,
 )
-
 
 # ---------------------------------------------------------------------------
 # TRAIT_EPAISSEURS
