@@ -1,0 +1,71 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "🚀 Backend (FastAPI)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["api.main:app", "--reload", "--port", "8000"],
+      "cwd": "${workspaceFolder}/apps/backend",
+      "python": "${workspaceFolder}/apps/backend/.venv/bin/python",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "DATABASE_URL": "postgresql+asyncpg://archiclaude:archiclaude@localhost:5432/archiclaude",
+        "REDIS_URL": "redis://localhost:6379/0",
+        "PYTHONPATH": "${workspaceFolder}/apps/backend"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "⚙️ Worker (ARQ)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "arq",
+      "args": ["workers.main.Worker"],
+      "cwd": "${workspaceFolder}/apps/backend",
+      "python": "${workspaceFolder}/apps/backend/.venv/bin/python",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "DATABASE_URL": "postgresql+asyncpg://archiclaude:archiclaude@localhost:5432/archiclaude",
+        "REDIS_URL": "redis://localhost:6379/0",
+        "PYTHONPATH": "${workspaceFolder}/apps/backend"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "🌐 Frontend (Next.js)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@archiclaude/frontend", "dev"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "🧪 Tests Backend (pytest current file)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v"],
+      "cwd": "${workspaceFolder}/apps/backend",
+      "python": "${workspaceFolder}/apps/backend/.venv/bin/python",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/apps/backend"
+      },
+      "justMyCode": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "🧱 Full Stack (Backend + Worker + Frontend)",
+      "configurations": ["🚀 Backend (FastAPI)", "⚙️ Worker (ARQ)", "🌐 Frontend (Next.js)"],
+      "stopAll": true,
+      "presentation": {
+        "hidden": false,
+        "order": 1
+      }
+    }
+  ]
+}

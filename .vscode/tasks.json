@@ -1,0 +1,54 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "🐳 docker: up (postgres+redis)",
+      "type": "shell",
+      "command": "docker compose up -d postgres redis",
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared" }
+    },
+    {
+      "label": "🐳 docker: down",
+      "type": "shell",
+      "command": "docker compose down",
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared" }
+    },
+    {
+      "label": "🔄 alembic: upgrade head",
+      "type": "shell",
+      "command": "source .venv/bin/activate && DATABASE_URL='postgresql://archiclaude:archiclaude@localhost:5432/archiclaude' alembic upgrade head",
+      "options": {
+        "cwd": "${workspaceFolder}/apps/backend",
+        "shell": { "executable": "/bin/bash", "args": ["-c"] }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "🧪 pytest (all backend)",
+      "type": "shell",
+      "command": "source .venv/bin/activate && pytest -v",
+      "options": {
+        "cwd": "${workspaceFolder}/apps/backend",
+        "shell": { "executable": "/bin/bash", "args": ["-c"] }
+      },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "🎨 format: ruff + prettier",
+      "type": "shell",
+      "command": "cd apps/backend && source .venv/bin/activate && ruff format . && ruff check --fix . && cd ../.. && pnpm format",
+      "options": { "shell": { "executable": "/bin/bash", "args": ["-c"] } },
+      "problemMatcher": []
+    },
+    {
+      "label": "🔧 generate types (Pydantic → TS)",
+      "type": "shell",
+      "command": "cd apps/backend && source .venv/bin/activate && python scripts/generate_ts_schemas.py",
+      "options": { "shell": { "executable": "/bin/bash", "args": ["-c"] } },
+      "problemMatcher": []
+    }
+  ]
+}
