@@ -1,0 +1,45 @@
+{
+  "geocode_12_rue_paix_paris": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [2.331, 48.869]
+        },
+        "properties": {
+          "label": "12 Rue de la Paix 75002 Paris",
+          "score": 0.95,
+          "housenumber": "12",
+          "street": "Rue de la Paix",
+          "postcode": "75002",
+          "citycode": "75102",
+          "city": "Paris",
+          "x": 651427.5,
+          "y": 6863289.3
+        }
+      }
+    ]
+  },
+  "geocode_nogent": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [2.4833, 48.8375]
+        },
+        "properties": {
+          "label": "1 Place Pierre Sémard 94130 Nogent-sur-Marne",
+          "score": 0.88,
+          "citycode": "94052",
+          "city": "Nogent-sur-Marne",
+          "x": 661234.0,
+          "y": 6860456.0
+        }
+      }
+    ]
+  }
+}
