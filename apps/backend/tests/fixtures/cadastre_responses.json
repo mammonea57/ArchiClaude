@@ -1,0 +1,64 @@
+{
+  "parcelle_by_ref_nogent_AB_42": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [2.48420, 48.83700],
+                [2.48450, 48.83700],
+                [2.48450, 48.83730],
+                [2.48420, 48.83730],
+                [2.48420, 48.83700]
+              ]
+            ]
+          ]
+        },
+        "properties": {
+          "numero": "0042",
+          "section": "AB",
+          "code_dep": "94",
+          "nom_com": "Nogent-sur-Marne",
+          "code_com": "052",
+          "code_arr": "94052",
+          "contenance": 412
+        }
+      }
+    ]
+  },
+  "parcelle_at_point_paris": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [2.33050, 48.86900],
+                [2.33090, 48.86900],
+                [2.33090, 48.86935],
+                [2.33050, 48.86935],
+                [2.33050, 48.86900]
+              ]
+            ]
+          ]
+        },
+        "properties": {
+          "numero": "0018",
+          "section": "AV",
+          "code_dep": "75",
+          "nom_com": "Paris 2e Arrondissement",
+          "code_com": "056",
+          "code_arr": "75102",
+          "contenance": 287
+        }
+      }
+    ]
+  }
+}
