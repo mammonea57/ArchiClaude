@@ -23,6 +23,7 @@ from db.models import (  # noqa: F401, E402
     feature_flags,
     parcels,
     plu,
+    projects,
     servitudes,
     users,
     zone_rules,
