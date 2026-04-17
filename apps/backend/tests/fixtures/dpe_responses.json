@@ -1,0 +1,23 @@
+{
+  "dpe_nogent": {
+    "results": [
+      {
+        "nombre_niveau_immeuble": 4,
+        "hauteur_sous_plafond": 2.7,
+        "classe_consommation_energie": "C",
+        "type_batiment": "immeuble",
+        "geo_adresse": "12 rue de la Paix 94130 Nogent-sur-Marne"
+      },
+      {
+        "nombre_niveau_immeuble": null,
+        "hauteur_sous_plafond": 2.5,
+        "classe_consommation_energie": "D",
+        "type_batiment": "maison",
+        "geo_adresse": "14 rue de la Paix 94130 Nogent-sur-Marne"
+      }
+    ]
+  },
+  "dpe_empty": {
+    "results": []
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "dvf_nogent_ab_42": {
+    "resultats": [
+      {
+        "date_mutation": "2022-03-15",
+        "nature_mutation": "Vente",
+        "valeur_fonciere": 450000.0,
+        "type_local": "Appartement",
+        "surface_reelle_bati": 68.5,
+        "nombre_pieces_principales": 3,
+        "code_commune": "94052",
+        "no_voie": "12",
+        "type_voie": "RUE",
+        "voie": "DE LA PAIX",
+        "code_postal": "94130",
+        "commune": "NOGENT-SUR-MARNE"
+      },
+      {
+        "date_mutation": "2021-07-20",
+        "nature_mutation": "Vente",
+        "valeur_fonciere": 520000.0,
+        "type_local": "Appartement",
+        "surface_reelle_bati": 82.0,
+        "nombre_pieces_principales": 4,
+        "code_commune": "94052",
+        "no_voie": null,
+        "type_voie": null,
+        "voie": null,
+        "code_postal": null,
+        "commune": null,
+        "adresse_norm": "12 RUE DE LA PAIX 94130 NOGENT-SUR-MARNE"
+      }
+    ]
+  },
+  "dvf_empty": {
+    "resultats": []
+  }
+}
