@@ -5,8 +5,9 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
-        serif: ["Playfair Display", "serif"],
+        sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
+        serif: ["var(--font-playfair)", "Playfair Display", "serif"],
+        display: ["var(--font-playfair)", "Playfair Display", "serif"],
       },
       colors: {
         brand: {
