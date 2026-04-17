@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Étude de faisabilité — {{ project_name }}</title>
+  <style>
+    /* -----------------------------------------------------------------------
+       Fonts (Google Fonts via CDN — weasyprint fetches at render time)
+    ----------------------------------------------------------------------- */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@400;700&display=swap');
+
+    /* -----------------------------------------------------------------------
+       Page setup — A4 portrait
+    ----------------------------------------------------------------------- */
+    @page {
+      size: A4 portrait;
+      margin: 20mm 15mm 30mm 15mm;
+
+      @bottom-center {
+        content: element(cartouche-footer);
+        height: 40mm;
+      }
+    }
+
+    @page :first {
+      margin-top: 0;
+    }
+
+    /* -----------------------------------------------------------------------
+       Reset & base
+    ----------------------------------------------------------------------- */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', Arial, sans-serif;
+      font-size: 9pt;
+      color: #1a1a1a;
+      line-height: 1.5;
+    }
+
+    h1, h2, h3, h4 {
+      font-family: 'Playfair Display', Georgia, serif;
+      font-weight: 700;
+    }
+
+    h1 { font-size: 22pt; }
+    h2 { font-size: 14pt; margin-top: 6mm; margin-bottom: 3mm; color: #0d9488; border-bottom: 1pt solid #0d9488; padding-bottom: 1mm; }
+    h3 { font-size: 11pt; margin-top: 4mm; margin-bottom: 2mm; }
+    h4 { font-size: 9pt; margin-top: 3mm; margin-bottom: 1mm; }
+
+    p { margin-bottom: 2mm; }
+
+    /* -----------------------------------------------------------------------
+       Cover page
+    ----------------------------------------------------------------------- */
+    .cover {
+      page-break-after: always;
+      min-height: 257mm; /* A4 - margins */
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 20mm 15mm;
+      background: linear-gradient(135deg, #f0fdfa 0%, #ffffff 60%);
+      border-left: 6mm solid {{ cartouche.brand_primary_color | default('#0d9488') }};
+    }
+
+    .cover-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 8pt;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: {{ cartouche.brand_primary_color | default('#0d9488') }};
+      margin-bottom: 4mm;
+    }
+
+    .cover-title {
+      font-size: 28pt;
+      color: #0f172a;
+      margin-bottom: 3mm;
+      line-height: 1.2;
+    }
+
+    .cover-subtitle {
+      font-size: 13pt;
+      color: #475569;
+      font-weight: 400;
+      margin-bottom: 8mm;
+    }
+
+    .cover-meta {
+      display: flex;
+      gap: 8mm;
+      margin-top: 4mm;
+    }
+
+    .cover-badge {
+      background: {{ cartouche.brand_primary_color | default('#0d9488') }};
+      color: white;
+      padding: 2mm 4mm;
+      border-radius: 2mm;
+      font-size: 8pt;
+      font-weight: 600;
+    }
+
+    /* -----------------------------------------------------------------------
+       Sommaire
+    ----------------------------------------------------------------------- */
+    .sommaire {
+      page-break-after: always;
+    }
+
+    .sommaire ol {
+      margin-left: 6mm;
+      margin-top: 3mm;
+    }
+
+    .sommaire li {
+      margin-bottom: 2mm;
+      font-size: 9pt;
+    }
+
+    /* -----------------------------------------------------------------------
+       Sections
+    ----------------------------------------------------------------------- */
+    .section {
+      margin-bottom: 8mm;
+    }
+
+    .page-break {
+      page-break-before: always;
+    }
+
+    /* -----------------------------------------------------------------------
+       KPI cards
+    ----------------------------------------------------------------------- */
+    .kpi-grid {
+      display: flex;
+      gap: 4mm;
+      flex-wrap: wrap;
+      margin: 3mm 0 5mm;
+    }
+
+    .kpi-card {
+      flex: 1;
+      min-width: 35mm;
+      background: #f0fdfa;
+      border: 1pt solid #ccfbf1;
+      border-radius: 2mm;
+      padding: 3mm 4mm;
+      text-align: center;
+    }
+
+    .kpi-value {
+      font-size: 18pt;
+      font-weight: 700;
+      color: {{ cartouche.brand_primary_color | default('#0d9488') }};
+      font-family: 'Inter', sans-serif;
+      line-height: 1.1;
+    }
+
+    .kpi-label {
+      font-size: 7pt;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 1mm;
+    }
+
+    /* -----------------------------------------------------------------------
+       Typography table
+    ----------------------------------------------------------------------- */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 3mm 0;
+      font-size: 8pt;
+    }
+
+    thead th {
+      background: {{ cartouche.brand_primary_color | default('#0d9488') }};
+      color: white;
+      padding: 2mm 3mm;
+      text-align: left;
+      font-weight: 600;
+    }
+
+    tbody tr:nth-child(even) {
+      background: #f8fafc;
+    }
+
+    tbody td {
+      padding: 2mm 3mm;
+      border-bottom: 0.5pt solid #e2e8f0;
+    }
+
+    .text-right { text-align: right; }
+    .text-center { text-align: center; }
+
+    /* -----------------------------------------------------------------------
+       Compliance badges
+    ----------------------------------------------------------------------- */
+    .compliance-grid {
+      display: flex;
+      gap: 4mm;
+      flex-wrap: wrap;
+      margin: 3mm 0;
+    }
+
+    .compliance-card {
+      flex: 1;
+      min-width: 50mm;
+      border: 1pt solid #e2e8f0;
+      border-radius: 2mm;
+      padding: 3mm 4mm;
+    }
+
+    .compliance-card.conforme {
+      border-left: 3mm solid #22c55e;
+      background: #f0fdf4;
+    }
+
+    .compliance-card.non-conforme {
+      border-left: 3mm solid #ef4444;
+      background: #fef2f2;
+    }
+
+    .compliance-card.a-verifier {
+      border-left: 3mm solid #f59e0b;
+      background: #fffbeb;
+    }
+
+    .compliance-title {
+      font-weight: 600;
+      font-size: 8pt;
+      margin-bottom: 1mm;
+    }
+
+    .compliance-detail {
+      font-size: 7pt;
+      color: #64748b;
+    }
+
+    /* -----------------------------------------------------------------------
+       Alertes
+    ----------------------------------------------------------------------- */
+    .alertes {
+      margin: 3mm 0;
+    }
+
+    .alerte {
+      border-radius: 2mm;
+      padding: 2.5mm 4mm;
+      margin-bottom: 2mm;
+      font-size: 8pt;
+      display: flex;
+      align-items: flex-start;
+      gap: 3mm;
+    }
+
+    .alerte.critical {
+      background: #fef2f2;
+      border: 1pt solid #fecaca;
+      border-left: 3mm solid #ef4444;
+      color: #991b1b;
+    }
+
+    .alerte.warning {
+      background: #fffbeb;
+      border: 1pt solid #fde68a;
+      border-left: 3mm solid #f59e0b;
+      color: #92400e;
+    }
+
+    .alerte.info {
+      background: #eff6ff;
+      border: 1pt solid #bfdbfe;
+      border-left: 3mm solid #3b82f6;
+      color: #1e40af;
+    }
+
+    .alerte-code {
+      font-weight: 700;
+      font-size: 7pt;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }
+
+    .alerte-message {
+      flex: 1;
+    }
+
+    /* -----------------------------------------------------------------------
+       Analyse architecte (markdown rendered)
+    ----------------------------------------------------------------------- */
+    .analyse-content {
+      background: #fafafa;
+      border: 1pt solid #e2e8f0;
+      border-radius: 2mm;
+      padding: 4mm 5mm;
+    }
+
+    .analyse-content h1, .analyse-content h2, .analyse-content h3 {
+      margin-top: 4mm;
+      margin-bottom: 2mm;
+    }
+
+    .analyse-content ul, .analyse-content ol {
+      margin-left: 6mm;
+      margin-bottom: 2mm;
+    }
+
+    .analyse-content li {
+      margin-bottom: 1mm;
+    }
+
+    .analyse-content strong {
+      font-weight: 600;
+    }
+
+    .analyse-content em {
+      font-style: italic;
+    }
+
+    /* -----------------------------------------------------------------------
+       Cartouche footer (fixed at bottom of each page)
+    ----------------------------------------------------------------------- */
+    #cartouche-footer {
+      position: running(cartouche-footer);
+      width: 100%;
+      height: 40mm;
+      border-top: 1.5pt solid {{ cartouche.brand_primary_color | default('#0d9488') }};
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 2mm 0;
+      font-size: 7pt;
+      color: #64748b;
+    }
+
+    .cartouche-logo {
+      max-height: 12mm;
+      max-width: 30mm;
+    }
+
+    .cartouche-agency {
+      font-family: 'Playfair Display', Georgia, serif;
+      font-size: 10pt;
+      font-weight: 700;
+      color: {{ cartouche.brand_primary_color | default('#0d9488') }};
+    }
+
+    .cartouche-meta {
+      text-align: right;
+      line-height: 1.6;
+    }
+
+    .cartouche-center {
+      text-align: center;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- =====================================================================
+       CARTOUCHE FOOTER (runs on every page via CSS running element)
+  ====================================================================== -->
+  <div id="cartouche-footer">
+    <div>
+      {% if cartouche.logo_url %}
+        <img src="{{ cartouche.logo_url }}" alt="{{ cartouche.agency_name }}" class="cartouche-logo">
+      {% else %}
+        <div class="cartouche-agency">{{ cartouche.agency_name }}</div>
+      {% endif %}
+    </div>
+    <div class="cartouche-center">
+      <strong>{{ project_name }}</strong><br>
+      {{ commune }} · Zone {{ zone }}
+      {% if cartouche.project_ref %}<br>Réf. {{ cartouche.project_ref }}{% endif %}
+    </div>
+    <div class="cartouche-meta">
+      {% if cartouche.scale %}Échelle {{ cartouche.scale }}<br>{% endif %}
+      {% if cartouche.drawn_by %}Dessiné: {{ cartouche.drawn_by }}<br>{% endif %}
+      Date: {{ date }}
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       PAGE 1 — COVER
+  ====================================================================== -->
+  <div class="cover">
+    <div class="cover-label">Étude de faisabilité architecturale</div>
+    <h1 class="cover-title">{{ project_name }}</h1>
+    <div class="cover-subtitle">{{ commune }} &mdash; Zone PLU {{ zone }}</div>
+    <div class="cover-meta">
+      <span class="cover-badge">{{ date }}</span>
+      <span class="cover-badge">{{ surface_parcelle_m2 | int }} m² parcelle</span>
+      <span class="cover-badge">R+{{ niveaux - 1 }}</span>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       PAGE 2 — SOMMAIRE
+  ====================================================================== -->
+  <div class="sommaire section">
+    <h2>Sommaire</h2>
+    <ol>
+      <li>Données du terrain</li>
+      <li>Règles d'urbanisme applicables</li>
+      <li>Capacité constructible</li>
+      <li>Conformité réglementaire</li>
+      <li>Alertes et points de vigilance</li>
+      <li>Analyse architecturale</li>
+    </ol>
+  </div>
+
+  <!-- =====================================================================
+       SECTION 1 — DONNÉES DU TERRAIN
+  ====================================================================== -->
+  <div class="section page-break">
+    <h2>1. Données du terrain</h2>
+
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-value">{{ surface_parcelle_m2 | int }}</div>
+        <div class="kpi-label">Surface parcelle (m²)</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value">{{ zone }}</div>
+        <div class="kpi-label">Zone PLU</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value">{{ commune }}</div>
+        <div class="kpi-label">Commune</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       SECTION 3 — CAPACITÉ CONSTRUCTIBLE
+  ====================================================================== -->
+  <div class="section">
+    <h2>3. Capacité constructible</h2>
+
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-value">{{ sdp_brute_m2 | int }}</div>
+        <div class="kpi-label">SDP brute (m²)</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value">R+{{ niveaux - 1 }}</div>
+        <div class="kpi-label">Hauteur retenue</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value">{{ nb_logements }}</div>
+        <div class="kpi-label">Logements estimés</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value">{{ emprise_sol_m2 | int }}</div>
+        <div class="kpi-label">Emprise au sol (m²)</div>
+      </div>
+    </div>
+
+    {% if typologies %}
+    <h3>Répartition typologique</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Typologie</th>
+          <th class="text-right">Nombre</th>
+          <th class="text-right">Surface (m²)</th>
+          <th class="text-right">SDP partielle (m²)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in typologies %}
+        <tr>
+          <td>{{ t.type }}</td>
+          <td class="text-right">{{ t.nb }}</td>
+          <td class="text-right">{{ t.surface_m2 | int }}</td>
+          <td class="text-right">{{ (t.nb * t.surface_m2) | int }}</td>
+        </tr>
+        {% endfor %}
+        <tr>
+          <td><strong>Total</strong></td>
+          <td class="text-right"><strong>{{ typologies | sum(attribute='nb') }}</strong></td>
+          <td class="text-right">—</td>
+          <td class="text-right"><strong>{{ typologies | sum(attribute='nb') }}</strong> log.</td>
+        </tr>
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
+  <!-- =====================================================================
+       SECTION 4 — CONFORMITÉ RÉGLEMENTAIRE
+  ====================================================================== -->
+  <div class="section">
+    <h2>4. Conformité réglementaire</h2>
+
+    <div class="compliance-grid">
+      <div class="compliance-card {{ compliance_incendie.statut | replace('_', '-') }}">
+        <div class="compliance-title">Sécurité incendie</div>
+        <div class="compliance-detail">{{ compliance_incendie.details }}</div>
+      </div>
+      <div class="compliance-card {{ compliance_pmr.statut | replace('_', '-') }}">
+        <div class="compliance-title">Accessibilité PMR</div>
+        <div class="compliance-detail">{{ compliance_pmr.details }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       SECTION 5 — ALERTES
+  ====================================================================== -->
+  <div class="section">
+    <h2>5. Alertes et points de vigilance</h2>
+
+    {% if alertes %}
+    <div class="alertes">
+      {% for alerte in alertes %}
+      <div class="alerte {{ alerte.niveau }}">
+        <span class="alerte-code">{{ alerte.code }}</span>
+        <span class="alerte-message">{{ alerte.message }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p>Aucune alerte identifiée à ce stade.</p>
+    {% endif %}
+  </div>
+
+  <!-- =====================================================================
+       SECTION 6 — ANALYSE ARCHITECTURALE
+  ====================================================================== -->
+  <div class="section page-break">
+    <h2>6. Analyse architecturale</h2>
+    <div class="analyse-content">
+      {{ analyse_architecte_html | safe }}
+    </div>
+  </div>
+
+</body>
+</html>
