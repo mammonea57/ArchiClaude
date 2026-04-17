@@ -50,11 +50,6 @@ def classify_incendie(
         classement = "3A"
     else:
         # h ≤ 8 m
-        if is_individuel and nb_niveaux <= 2:
-            # individuel ≤ R+1 (2 storeys)
-            classement = "1ere"
-        else:
-            # collectif ≤ R+3, or individuel R+2/R+3
-            classement = "2eme"
+        classement = "1ere" if is_individuel and nb_niveaux <= 2 else "2eme"
 
     return classement, 1.0

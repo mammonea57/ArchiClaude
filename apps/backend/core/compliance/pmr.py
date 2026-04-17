@@ -40,14 +40,8 @@ def compute_pmr(
     """
     ascenseur_obligatoire = nb_niveaux >= 4
 
-    if ascenseur_obligatoire:
-        surface_circulations_m2 = 15.0 * nb_niveaux
-    else:
-        surface_circulations_m2 = 0.0
+    surface_circulations_m2 = 15.0 * nb_niveaux if ascenseur_obligatoire else 0.0
 
-    if nb_places > 0:
-        nb_places_pmr = max(1, math.ceil(nb_places * 0.02))
-    else:
-        nb_places_pmr = 0
+    nb_places_pmr = max(1, math.ceil(nb_places * 0.02)) if nb_places > 0 else 0
 
     return ascenseur_obligatoire, surface_circulations_m2, nb_places_pmr

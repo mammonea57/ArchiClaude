@@ -47,7 +47,7 @@ def estimate_re2020(
           - warnings: List of advisory messages (always at least one).
     """
     seuil_label = "2022"
-    for debut, fin, label, _ in _SEUILS:
+    for debut, _fin, label, _ in _SEUILS:
         if annee_cible >= debut:
             seuil_label = label
 

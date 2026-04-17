@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from core.feasibility.engine import run_feasibility
 from core.feasibility.schemas import Brief, FeasibilityResult
 from core.plu.schemas import NumericRules
@@ -11,24 +9,24 @@ from core.plu.schemas import NumericRules
 
 class TestRunFeasibility:
     def _make_rules(self, **kwargs) -> NumericRules:
-        defaults = dict(
-            hauteur_max_m=15,
-            emprise_max_pct=60,
-            pleine_terre_min_pct=30,
-            recul_voirie_m=5,
-            stationnement_par_logement=1.0,
-            article_refs={},
-            extraction_confidence=0.9,
-            extraction_warnings=[],
-        )
+        defaults = {
+            "hauteur_max_m": 15,
+            "emprise_max_pct": 60,
+            "pleine_terre_min_pct": 30,
+            "recul_voirie_m": 5,
+            "stationnement_par_logement": 1.0,
+            "article_refs": {},
+            "extraction_confidence": 0.9,
+            "extraction_warnings": [],
+        }
         defaults.update(kwargs)
         return NumericRules(**defaults)
 
     def _make_brief(self, **kwargs) -> Brief:
-        defaults = dict(
-            destination="logement_collectif",
-            mix_typologique={"T2": 0.3, "T3": 0.4, "T4": 0.3},
-        )
+        defaults = {
+            "destination": "logement_collectif",
+            "mix_typologique": {"T2": 0.3, "T3": 0.4, "T4": 0.3},
+        }
         defaults.update(kwargs)
         return Brief(**defaults)
 

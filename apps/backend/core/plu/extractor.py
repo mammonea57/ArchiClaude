@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 import anthropic
 
@@ -40,9 +41,7 @@ _PLUI_KEYWORDS = (
     r"PLUi|PLU intercommunal|communaut[eé]s?\s+concern[eé]es?|territoire intercommunal"
 )
 
-import re as _re
-
-_PLUI_RE = _re.compile(_PLUI_KEYWORDS, _re.IGNORECASE)
+_PLUI_RE = re.compile(_PLUI_KEYWORDS, re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,6 @@ import pytest
 from core.feasibility.brief_compare import classify_ratio, compare_brief_to_max
 from core.feasibility.schemas import EcartItem
 
-
 # ---------------------------------------------------------------------------
 # classify_ratio
 # ---------------------------------------------------------------------------
@@ -66,7 +65,7 @@ def test_all_targets() -> None:
         max_emprise_pct=70.0,
     )
     assert set(result.keys()) == {"nb_logements", "sdp_m2", "hauteur_niveaux", "emprise_pct"}
-    for key, item in result.items():
+    for _key, item in result.items():
         assert isinstance(item, EcartItem)
         assert item.ratio > 0
 

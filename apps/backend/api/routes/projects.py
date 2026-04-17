@@ -64,7 +64,7 @@ async def get_project(
     try:
         pid = uuid.UUID(project_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(status_code=404, detail="Project not found") from None
 
     result = await session.execute(select(ProjectRow).where(ProjectRow.id == pid))
     row = result.scalar_one_or_none()
