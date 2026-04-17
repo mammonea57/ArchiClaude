@@ -16,6 +16,7 @@ from db.base import Base  # noqa: E402
 
 # Import all models so Base.metadata is populated
 from db.models import (  # noqa: F401, E402
+    agency_settings,
     audit_logs,
     commune_sru,
     comparable_projects,
@@ -27,6 +28,7 @@ from db.models import (  # noqa: F401, E402
     project_versions,
     projects,
     recours_cases,
+    reports,
     servitudes,
     users,
     zone_rules,
