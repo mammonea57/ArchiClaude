@@ -1,0 +1,33 @@
+{
+  "batiments_nogent": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [2.4832, 48.8374],
+              [2.4836, 48.8374],
+              [2.4836, 48.8378],
+              [2.4832, 48.8378],
+              [2.4832, 48.8374]
+            ]
+          ]
+        },
+        "properties": {
+          "hauteur": 12.5,
+          "nombre_d_etages_sur_rez_de_chaussee": 3,
+          "usage_1": "Résidentiel",
+          "altitude_minimale_sol": 48.2,
+          "altitude_maximale_toit": 60.7
+        }
+      }
+    ]
+  },
+  "batiments_empty": {
+    "type": "FeatureCollection",
+    "features": []
+  }
+}

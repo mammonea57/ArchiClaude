@@ -1,0 +1,23 @@
+{
+  "altitude_nogent": {
+    "elevations": [
+      {
+        "lat": 48.8375,
+        "lon": 2.4833,
+        "z": 52.3
+      }
+    ]
+  },
+  "altitude_no_data": {
+    "elevations": [
+      {
+        "lat": 48.0,
+        "lon": 2.0,
+        "z": -99999
+      }
+    ]
+  },
+  "altitude_empty": {
+    "elevations": []
+  }
+}
