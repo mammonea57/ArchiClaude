@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
 import fakeredis.aioredis
+import pytest
 
 from core.cache import RedisCache
 

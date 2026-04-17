@@ -13,7 +13,7 @@ import pytest
 from httpx import AsyncClient
 
 from core.sources.georisques import RisqueResult
-from core.sources.gpu import GpuDocument, GpuPrescription, GpuServitude, GpuZone
+from core.sources.gpu import GpuDocument, GpuServitude, GpuZone
 from core.sources.pop import MonumentResult
 
 

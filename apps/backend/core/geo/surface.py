@@ -101,5 +101,4 @@ def buffer_point_m(
     """
     projected_point = _reproject(point, source_crs)
     # shapely buffer with quad_segs=64 gives a close circular approximation
-    buffered = projected_point.buffer(radius_m, quad_segs=64)
-    return buffered
+    return projected_point.buffer(radius_m, quad_segs=64)

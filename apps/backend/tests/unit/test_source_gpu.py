@@ -116,7 +116,6 @@ async def test_servitudes_found(httpx_mock: HTTPXMock) -> None:
 
 async def test_servitudes_degraded_mode(httpx_mock: HTTPXMock) -> None:
     """When one servitude sub-endpoint fails, the others still succeed (mode dégradé)."""
-    import httpx
 
     httpx_mock.add_response(url=_SUP_S_RE, json=_load_fixture("servitudes_surf_nogent"))
     httpx_mock.add_response(url=_SUP_L_RE, status_code=503)

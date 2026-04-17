@@ -31,7 +31,7 @@ async def close_http_client() -> None:
 
 
 def _is_retryable(exc: BaseException) -> bool:
-    return isinstance(exc, (httpx.ConnectError, httpx.ReadTimeout))
+    return isinstance(exc, httpx.ConnectError | httpx.ReadTimeout)
 
 
 @retry(

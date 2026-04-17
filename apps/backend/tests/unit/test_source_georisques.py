@@ -10,10 +10,9 @@ import json
 import re
 from pathlib import Path
 
-import pytest
 from pytest_httpx import HTTPXMock
 
-from core.sources.georisques import RisqueResult, fetch_risques
+from core.sources.georisques import fetch_risques
 
 # ---------------------------------------------------------------------------
 # Fixture data

@@ -85,6 +85,9 @@ exclude = ["alembic/versions"]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "T20", "RET", "SIM", "TCH"]
 ignore = ["E501"]  # line length géré par formatter
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["TCH"]  # TYPE_CHECKING blocks inutiles dans les tests
+
 [tool.ruff.format]
 quote-style = "double"
 

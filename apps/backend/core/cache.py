@@ -18,10 +18,12 @@ Usage::
 from __future__ import annotations
 
 import json
-from collections.abc import Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from redis.asyncio import Redis
+if TYPE_CHECKING:
+    from collections.abc import Coroutine
+
+    from redis.asyncio import Redis
 
 
 class RedisCache:

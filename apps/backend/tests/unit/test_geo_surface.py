@@ -7,11 +7,9 @@ conformal conic projection that preserves area well for metropolitan France.
 
 import math
 
-import pytest
 from shapely.geometry import Point, Polygon
 
 from core.geo.surface import buffer_point_m, polygon_area_m2
-
 
 # ---------------------------------------------------------------------------
 # polygon_area_m2
