@@ -63,6 +63,9 @@ dependencies = [
 
     # Markdown rendering
     "markdown>=3.5",
+
+    # DXF export
+    "ezdxf>=1.0",
 ]
 
 [project.optional-dependencies]
