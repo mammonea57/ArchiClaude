@@ -84,6 +84,82 @@ class ComplianceResult(BaseModel):
     rsdu_obligations: list[str] = Field(default_factory=list)
 
 
+class RiskScore(BaseModel):
+    score_calcule: int = 0
+    score_opus: int | None = None
+    score_final: int = 0
+    justification_opus: str | None = None
+    detail_calcul: dict[str, int] = Field(default_factory=dict)
+
+
+class RefusalPattern(BaseModel):
+    motif: str
+    occurrences_500m: int = 0
+    dernier_cas: str | None = None
+    projet_concerne: bool = False
+    recommandation: str = ""
+
+
+class LocalContext(BaseModel):
+    gabarit_dominant_niveaux: int | None = None
+    gabarit_dominant_m: float | None = None
+    projet_depasse_gabarit: bool = False
+    depassement_niveaux: int = 0
+    pc_acceptes_500m: list[dict] = Field(default_factory=list)
+    pc_refuses_500m: list[dict] = Field(default_factory=list)
+    patterns: list[RefusalPattern] = Field(default_factory=list)
+
+
+class PreInstructionItem(BaseModel):
+    demarche: str
+    timing_jours: int
+    priorite: Literal["obligatoire", "fortement_recommande", "recommande"] = "recommande"
+    raison: str = ""
+    contact_type: str | None = None
+
+
+class Ouverture(BaseModel):
+    batiment_id: str
+    etage: int
+    type: str
+    lat: float
+    lng: float
+
+
+class VueConflict(BaseModel):
+    ouverture: Ouverture
+    distance_m: float
+    type_vue: Literal["droite", "oblique"]
+    distance_min_requise_m: float
+    deficit_m: float
+
+
+class VueAnalysisResult(BaseModel):
+    ouvertures_detectees: list[Ouverture] = Field(default_factory=list)
+    conflits: list[VueConflict] = Field(default_factory=list)
+    nb_conflits_droite: int = 0
+    nb_conflits_oblique: int = 0
+    risque_vue: Literal["aucun", "mineur", "majeur"] = "aucun"
+
+
+class ShadowResult(BaseModel):
+    critical_shadows: list[dict] = Field(default_factory=list)
+    max_shadow_length_m: float = 0.0
+    ombre_existante_m2: float | None = None
+    ombre_future_m2: float | None = None
+    ombre_ajoutee_m2: float | None = None
+    pct_aggravation: float | None = None
+    batiments_impactes: list[dict] = Field(default_factory=list)
+
+
+class RecommendedProgramme(BaseModel):
+    marge_pct: float
+    sdp_recommandee_m2: float
+    sdp_max_m2: float
+    raison_marge: str
+    ajustement_comparables: bool = False
+
+
 class FeasibilityResult(BaseModel):
     """Full feasibility result — geometry, capacity, compliance, and analysis."""
 
@@ -107,4 +183,10 @@ class FeasibilityResult(BaseModel):
     points_vigilance: list[VigilancePoint] = Field(default_factory=list)
     confidence_score: float = 0.0
     warnings: list[str] = Field(default_factory=list)
+    risk_score: RiskScore | None = None
+    refusal_patterns: LocalContext | None = None
+    pre_instruction_checklist: list[PreInstructionItem] = Field(default_factory=list)
+    vue_analysis: VueAnalysisResult | None = None
+    shadow_analysis: ShadowResult | None = None
+    recommended_programme: RecommendedProgramme | None = None
     computed_at: datetime = Field(default_factory=datetime.utcnow)
