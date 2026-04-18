@@ -8,7 +8,7 @@ Ce guide explique comment configurer l'identité visuelle de votre agence. Ces i
 
 Depuis n'importe quelle page de l'application :
 1. Cliquez sur le lien **Paramètres de l'agence** dans le menu de navigation, ou
-2. Accédez directement à l'URL http://localhost:3001/agency.
+2. Accédez directement à l'URL http://localhost:3010/agency.
 
 La page **Identité visuelle & cartouche** s'affiche.
 

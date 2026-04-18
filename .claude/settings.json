@@ -183,7 +183,8 @@
       "Bash(curl -s -w \"\\\\nHTTP %{http_code}\" \"http://localhost:8000/api/v1/plu/at-point?lat=48.8566&lng=2.3522\")",
       "Bash(curl -s \"http://localhost:8000/api/v1/parcels/search?q=12+rue+de+la+Paix+Paris&limit=3\")",
       "Bash(curl -s \"http://localhost:8000/api/v1/projects/test-id/scenarios\")",
-      "Bash(curl -s \"http://localhost:8000/api/v1/projects/test-id/plans/masse\")"
+      "Bash(curl -s \"http://localhost:8000/api/v1/projects/test-id/plans/masse\")",
+      "Bash(python -m pytest apps/backend/tests/ -q --tb=no)"
     ],
     "additionalDirectories": [
       "/Users/anthonymammone/Desktop/ArchiClaude/docs/superpowers",

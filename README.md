@@ -36,11 +36,11 @@ cp .env.example .env
 ```
 
 Accès :
-- **Frontend** — http://localhost:3001
+- **Frontend** — http://localhost:3010
 - **API (Swagger)** — http://localhost:8000/docs
-- **Admin flags** — http://localhost:3001/admin/flags
+- **Admin flags** — http://localhost:3010/admin/flags
 
-> Port 3001 pour éviter tout conflit avec d'autres apps sur le port 3000.
+> Port 3010 pour éviter tout conflit avec d'autres apps sur le port 3000.
 
 ---
 
@@ -121,7 +121,7 @@ alembic upgrade head
 
 # --- Frontend ---
 
-# Développement (port 3001)
+# Développement (port 3010)
 pnpm --filter @archiclaude/frontend dev
 
 # Vérification TypeScript

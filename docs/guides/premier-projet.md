@@ -6,7 +6,7 @@ Ce guide décrit les étapes pour créer et analyser votre premier projet de fai
 
 ## 1. Se connecter
 
-1. Ouvrez http://localhost:3001 (ou l'URL de production).
+1. Ouvrez http://localhost:3010 (ou l'URL de production).
 2. Cliquez sur **Commencer** ou **Se connecter** depuis la page d'accueil.
 3. Saisissez votre adresse e-mail et votre mot de passe.
 4. Cliquez sur **Se connecter**.
