@@ -210,7 +210,14 @@
       "Bash(xargs kill *)",
       "Bash(open -a \"Google Chrome\" http://localhost:3010)",
       "Bash(open -a \"Google Chrome\" http://localhost:8000/docs)",
-      "Bash(open -a \"Google Chrome\" http://localhost:3010/projects/new)"
+      "Bash(open -a \"Google Chrome\" http://localhost:3010/projects/new)",
+      "Bash(/usr/sbin/screencapture -x /tmp/archiclaude-screenshot.png)",
+      "Bash(screencapture -x /tmp/archiclaude-check.png)",
+      "Bash(osascript -e 'tell application \"System Events\" to keystroke \"s\" using {command down, shift down, control down}')",
+      "Bash(curl -s -o /dev/null -w \"Frontend: HTTP %{http_code}\\\\n\" http://localhost:3010/projects/new)",
+      "Bash(curl -s -o /dev/null -w \"Backend: HTTP %{http_code}\\\\n\" http://localhost:8000/api/v1/health)",
+      "Bash(node -e ' *)",
+      "Bash(curl -s -m 60 http://localhost:3010/projects/new)"
     ],
     "additionalDirectories": [
       "/Users/anthonymammone/Desktop/ArchiClaude/docs/superpowers",
