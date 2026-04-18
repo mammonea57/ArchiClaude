@@ -142,7 +142,17 @@
       "Bash(node_modules/.bin/eslint src *)",
       "Bash(ls /Users/anthonymammone/Desktop/ArchiClaude/apps/frontend/.eslint*)",
       "Bash(ls /Users/anthonymammone/Desktop/ArchiClaude/apps/frontend/eslint.config*)",
-      "Bash(node_modules/.bin/next build *)"
+      "Bash(node_modules/.bin/next build *)",
+      "Bash(npm exec *)",
+      "Bash(npx pnpm *)",
+      "Bash(export PNPM=/usr/local/lib/node_modules/corepack/shims/pnpm)",
+      "Bash(/usr/local/lib/node_modules/corepack/shims/pnpm --version)",
+      "Bash(/usr/local/lib/node_modules/corepack/shims/pnpm add *)",
+      "Bash(npx playwright *)",
+      "Bash(python3 /Users/anthonymammone/Desktop/ArchiClaude/apps/backend/scripts/smoke_test.py --help)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/anthonymammone/Desktop/ArchiClaude/apps/backend/scripts/smoke_test.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "Bash(python3 -m pytest /Users/anthonymammone/Desktop/ArchiClaude/apps/backend/tests/ --collect-only -q)",
+      "Bash(/usr/local/lib/node_modules/corepack/shims/pnpm build *)"
     ],
     "additionalDirectories": [
       "/Users/anthonymammone/Desktop/ArchiClaude/docs/superpowers",
