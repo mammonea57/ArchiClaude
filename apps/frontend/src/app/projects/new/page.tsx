@@ -14,6 +14,10 @@ const MapView = dynamic(() => import("@/components/map/MapView"), { ssr: false }
 
 interface ParcelFromApi {
   id?: string;
+  code_insee?: string;
+  section?: string;
+  numero?: string;
+  contenance_m2?: number;
   commune?: string;
   geometry?: GeoJSON.Geometry;
   [key: string]: unknown;
@@ -37,7 +41,7 @@ export default function NewProjectPage() {
   const [mapCenter, setMapCenter] = useState<[number, number]>([2.35, 48.85]);
   const [mapZoom, setMapZoom] = useState(12);
   const [selectedResult, setSelectedResult] = useState<GeocodingResult | null>(null);
-  const [parcelGeometry, setParcelGeometry] = useState<GeoJSON.Geometry | null>(null);
+  const [selectedParcels, setSelectedParcels] = useState<ParcelFromApi[]>([]);
   const [fetchingParcel, setFetchingParcel] = useState(false);
 
   // Form state
@@ -49,11 +53,9 @@ export default function NewProjectPage() {
     setSelectedResult(result);
     setMapCenter([result.lng, result.lat]);
     setMapZoom(17);
-    // Reset any previously fetched parcel
-    setParcelGeometry(null);
   }, []);
 
-  // When user clicks on the map — fetch parcel at that point
+  // When user clicks on the map — fetch parcel and toggle selection
   const handleMapClick = useCallback(async (lngLat: { lng: number; lat: number }) => {
     setFetchingParcel(true);
     try {
@@ -61,7 +63,19 @@ export default function NewProjectPage() {
         `/parcels/at-point?lat=${lngLat.lat}&lng=${lngLat.lng}`,
       );
       if (parcel?.geometry) {
-        setParcelGeometry(parcel.geometry);
+        setSelectedParcels((prev) => {
+          // Check if this parcel is already selected (same section+numero)
+          const key = `${parcel.code_insee}-${parcel.section}-${parcel.numero}`;
+          const exists = prev.findIndex(
+            (p) => `${p.code_insee}-${p.section}-${p.numero}` === key,
+          );
+          if (exists >= 0) {
+            // Deselect — remove it
+            return prev.filter((_, i) => i !== exists);
+          }
+          // Add to selection
+          return [...prev, parcel];
+        });
       }
     } catch {
       // Parcel fetch is optional — swallow errors silently
@@ -70,24 +84,28 @@ export default function NewProjectPage() {
     }
   }, []);
 
+  // Remove a specific parcel from selection
+  const handleRemoveParcel = useCallback((index: number) => {
+    setSelectedParcels((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
   // Build the parcels overlay for MapView
-  const parcels = parcelGeometry
-    ? [{ geometry: parcelGeometry, selected: true }]
+  const parcels = selectedParcels.length > 0
+    ? selectedParcels.map((p) => ({ geometry: p.geometry as GeoJSON.Geometry, selected: true }))
     : undefined;
 
   // On brief form submit
   async function handleBriefSubmit(brief: Brief) {
-    if (!selectedResult) {
-      setError("Veuillez d'abord rechercher et sélectionner une adresse.");
+    if (selectedParcels.length === 0) {
+      setError("Veuillez sélectionner au moins une parcelle sur la carte.");
       return;
     }
     setError(null);
     setSubmitting(true);
     try {
-      const projectName =
-        selectedResult.label.length > 80
-          ? selectedResult.label.slice(0, 80)
-          : selectedResult.label;
+      const projectName = selectedResult
+        ? (selectedResult.label.length > 80 ? selectedResult.label.slice(0, 80) : selectedResult.label)
+        : `Projet ${selectedParcels.length} parcelles`;
 
       const project = await apiFetch<CreateProjectResponse>("/projects", {
         method: "POST",
@@ -135,7 +153,7 @@ export default function NewProjectPage() {
         </div>
         <h1 className="font-display text-3xl font-bold text-slate-900">Nouveau projet</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Localisez la parcelle et renseignez votre programme
+          Localisez et sélectionnez les parcelles du projet, puis renseignez votre programme
         </p>
       </div>
 
@@ -171,11 +189,57 @@ export default function NewProjectPage() {
             {!selectedResult && (
               <div className="absolute bottom-3 left-3 right-3 pointer-events-none">
                 <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 text-xs text-slate-500 shadow text-center">
-                  Recherchez une adresse ci-dessus, puis cliquez sur la carte pour sélectionner une parcelle
+                  Recherchez une adresse ci-dessus, puis cliquez sur la carte pour sélectionner les parcelles
+                </div>
+              </div>
+            )}
+            {selectedResult && selectedParcels.length === 0 && (
+              <div className="absolute bottom-3 left-3 right-3 pointer-events-none">
+                <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 text-xs text-slate-500 shadow text-center">
+                  Cliquez sur les parcelles à inclure dans le projet — cliquez à nouveau pour désélectionner
                 </div>
               </div>
             )}
           </div>
+
+          {/* Selected parcels list */}
+          {selectedParcels.length > 0 && (
+            <div className="bg-white rounded-lg border border-slate-200 px-4 py-3">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-slate-700">
+                  {selectedParcels.length} parcelle{selectedParcels.length > 1 ? "s" : ""} sélectionnée{selectedParcels.length > 1 ? "s" : ""}
+                </h3>
+                <button
+                  onClick={() => setSelectedParcels([])}
+                  className="text-xs text-slate-400 hover:text-red-500 transition-colors"
+                >
+                  Tout désélectionner
+                </button>
+              </div>
+              <div className="space-y-1">
+                {selectedParcels.map((p, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs text-slate-600 bg-slate-50 rounded px-2 py-1.5">
+                    <span>
+                      <span className="font-medium">{p.section} {p.numero}</span>
+                      <span className="text-slate-400 ml-2">{p.commune}</span>
+                      {p.contenance_m2 && (
+                        <span className="text-slate-400 ml-2">({p.contenance_m2} m²)</span>
+                      )}
+                    </span>
+                    <button
+                      onClick={() => handleRemoveParcel(i)}
+                      className="text-slate-300 hover:text-red-500 transition-colors ml-2"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 pt-2 border-t border-slate-100 text-xs text-slate-500">
+                Surface totale : {selectedParcels.reduce((sum, p) => sum + (p.contenance_m2 ?? 0), 0).toLocaleString("fr-FR")} m²
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right — Brief form (40%) */}
