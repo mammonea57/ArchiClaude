@@ -158,7 +158,9 @@
       "Bash(python -m pytest tests/ -x -q)",
       "Bash(python -m ruff check .)",
       "Bash(python -m ruff check . --fix)",
-      "Bash(python -m pytest tests/ -q --tb=no)"
+      "Bash(python -m pytest tests/ -q --tb=no)",
+      "Bash(bash scripts/start-server.sh --project-dir /Users/anthonymammone/Desktop/ArchiClaude)",
+      "Bash(bash /Users/anthonymammone/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/skills/brainstorming/scripts/start-server.sh --project-dir /Users/anthonymammone/Desktop/ArchiClaude)"
     ],
     "additionalDirectories": [
       "/Users/anthonymammone/Desktop/ArchiClaude/docs/superpowers",

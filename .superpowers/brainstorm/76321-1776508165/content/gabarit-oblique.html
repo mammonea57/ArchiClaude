@@ -1,0 +1,99 @@
+<h2>Gabarit-enveloppe oblique — méthode de calcul SDP</h2>
+<p class="subtitle">Quand le recul est paramétrique (ex: L = H/2 min 4m), le volume constructible est un trapèze, pas un rectangle. Comment calculer la SDP ?</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Mode simplifié actuel (v1)</div>
+    <div class="mockup-body" style="padding:20px; text-align:center;">
+      <svg viewBox="0 0 300 250" style="max-width:280px;">
+        <!-- Sol -->
+        <line x1="20" y1="200" x2="280" y2="200" stroke="#333" stroke-width="2"/>
+        <text x="150" y="220" text-anchor="middle" font-size="11" fill="#666">Terrain (limite séparative)</text>
+
+        <!-- Bâtiment rectangle -->
+        <rect x="80" y="50" width="120" height="150" fill="#0d948833" stroke="#0d9488" stroke-width="2"/>
+        <text x="140" y="130" text-anchor="middle" font-size="12" fill="#0d9488" font-weight="bold">SDP constante par niveau</text>
+
+        <!-- Recul -->
+        <line x1="80" y1="200" x2="80" y2="50" stroke="#dc2626" stroke-width="1" stroke-dasharray="5,5"/>
+        <text x="50" y="130" text-anchor="middle" font-size="10" fill="#dc2626" transform="rotate(-90,50,130)">Recul = H/2</text>
+
+        <!-- Hauteur -->
+        <text x="215" y="130" text-anchor="middle" font-size="10" fill="#333" transform="rotate(-90,215,130)">15m (R+4)</text>
+        <line x1="200" y1="50" x2="210" y2="50" stroke="#333" stroke-width="1"/>
+        <line x1="200" y1="200" x2="210" y2="200" stroke="#333" stroke-width="1"/>
+        <line x1="205" y1="50" x2="205" y2="200" stroke="#333" stroke-width="1" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+      </svg>
+      <p style="color:#dc2626; font-size:13px; margin-top:10px;">⚠️ Sous-estime la SDP de 5-15%</p>
+      <p style="font-size:12px; color:#666;">Recul calculé avec H max → footprint rectangulaire réduit</p>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Mode par tranches horizontales (proposé)</div>
+    <div class="mockup-body" style="padding:20px; text-align:center;">
+      <svg viewBox="0 0 300 250" style="max-width:280px;">
+        <!-- Sol -->
+        <line x1="20" y1="200" x2="280" y2="200" stroke="#333" stroke-width="2"/>
+        <text x="150" y="220" text-anchor="middle" font-size="11" fill="#666">Terrain (limite séparative)</text>
+
+        <!-- Bâtiment trapèze par niveaux -->
+        <rect x="50" y="170" width="150" height="30" fill="#0d948822" stroke="#0d9488" stroke-width="1"/>
+        <text x="125" y="190" text-anchor="middle" font-size="9" fill="#0d9488">RDC — 150m² (recul=1.5m)</text>
+
+        <rect x="58" y="140" width="135" height="30" fill="#0d948833" stroke="#0d9488" stroke-width="1"/>
+        <text x="125" y="160" text-anchor="middle" font-size="9" fill="#0d9488">R+1 — 135m² (recul=3m)</text>
+
+        <rect x="66" y="110" width="120" height="30" fill="#0d948844" stroke="#0d9488" stroke-width="1"/>
+        <text x="126" y="130" text-anchor="middle" font-size="9" fill="#0d9488">R+2 — 120m² (recul=4.5m)</text>
+
+        <rect x="74" y="80" width="105" height="30" fill="#0d948855" stroke="#0d9488" stroke-width="1"/>
+        <text x="126" y="100" text-anchor="middle" font-size="9" fill="#0d9488">R+3 — 105m² (recul=6m)</text>
+
+        <rect x="82" y="50" width="90" height="30" fill="#0d948866" stroke="#0d9488" stroke-width="1"/>
+        <text x="127" y="70" text-anchor="middle" font-size="9" fill="#0d9488">R+4 — 90m² (recul=7.5m)</text>
+
+        <!-- Ligne oblique -->
+        <line x1="50" y1="200" x2="82" y2="50" stroke="#16a34a" stroke-width="2" stroke-dasharray="4,4"/>
+        <text x="35" y="130" text-anchor="middle" font-size="10" fill="#16a34a" transform="rotate(-75,35,130)">Enveloppe</text>
+      </svg>
+      <p style="color:#16a34a; font-size:13px; margin-top:10px;">✓ SDP totale = somme des tranches = 600m²</p>
+      <p style="font-size:12px; color:#666;">Chaque niveau a son propre recul → SDP décroissante vers le haut</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:24px;">
+  <h3>Résumé de l'impact</h3>
+  <table style="width:100%; border-collapse:collapse; margin-top:8px;">
+    <thead>
+      <tr style="background:#f8f9fa;">
+        <th style="border:1px solid #e0e0e0; padding:8px; text-align:left;">Méthode</th>
+        <th style="border:1px solid #e0e0e0; padding:8px; text-align:left;">SDP calculée</th>
+        <th style="border:1px solid #e0e0e0; padding:8px; text-align:left;">Précision</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="border:1px solid #e0e0e0; padding:8px;">Simplifié (rectangle)</td>
+        <td style="border:1px solid #e0e0e0; padding:8px;">450 m² (90m² × 5)</td>
+        <td style="border:1px solid #e0e0e0; padding:8px; color:#dc2626;">Sous-estimé 25%</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid #e0e0e0; padding:8px; font-weight:bold;">Tranches horizontales</td>
+        <td style="border:1px solid #e0e0e0; padding:8px; font-weight:bold;">600 m²</td>
+        <td style="border:1px solid #e0e0e0; padding:8px; color:#16a34a; font-weight:bold;">Exact ✓</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="options" style="margin-top:24px;">
+  <div class="option" data-choice="tranches" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>Implémenter le calcul par tranches horizontales</h3>
+      <p>Chaque niveau a son footprint propre calculé avec le recul correspondant à sa hauteur cumulée. SDP totale = somme des surfaces de chaque niveau. Gain de 5-25% de SDP par rapport au mode simplifié.</p>
+    </div>
+  </div>
+</div>

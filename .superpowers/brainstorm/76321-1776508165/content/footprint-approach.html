@@ -1,0 +1,60 @@
+<h2>Optimisation du footprint — identification des segments</h2>
+<p class="subtitle">Comment identifier voirie / séparatives / fond de parcelle pour appliquer les reculs différenciés ?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Détection par données externes (BAN + BDTopo routes)</h3>
+      <p>On interroge la BD TOPO pour trouver les routes à proximité. Les segments de la parcelle qui bordent une route = <strong>voirie</strong>. Les autres segments adjacents à d'autres parcelles = <strong>séparatives latérales</strong>. Le segment le plus éloigné de la voirie principale = <strong>fond</strong>.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Avantages</h4><ul>
+          <li>Précis — utilise les données réelles du réseau routier</li>
+          <li>Gère les parcelles d'angle (2 côtés voirie)</li>
+          <li>Distingue voie publique vs chemin privé</li>
+        </ul></div>
+        <div class="cons"><h4>Inconvénients</h4><ul>
+          <li>Requête BDTopo supplémentaire (déjà disponible Phase 1)</li>
+          <li>Routes pas toujours parfaitement alignées avec les limites cadastrales</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Détection géométrique pure (heuristique)</h3>
+      <p>Sans données externes : le segment le plus long face à un espace ouvert = <strong>voirie</strong> (hypothèse). Les segments courts adjacents = <strong>séparatives</strong>. Le segment opposé au plus long = <strong>fond</strong>.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Avantages</h4><ul>
+          <li>Aucune requête externe nécessaire</li>
+          <li>Rapide, pas de dépendance réseau</li>
+        </ul></div>
+        <div class="cons"><h4>Inconvénients</h4><ul>
+          <li>Faux positifs sur parcelles irrégulières</li>
+          <li>Ne distingue pas voie publique vs chemin privé</li>
+          <li>Échoue sur parcelles en drapeau ou enclavées</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Hybride : BDTopo routes + heuristique fallback</h3>
+      <p>On utilise les routes BDTopo quand disponibles (option A). Si pas de route trouvée à proximité (parcelle enclavée, données manquantes), on bascule sur l'heuristique géométrique (option B) avec un warning "classification segments approximative".</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Avantages</h4><ul>
+          <li>Meilleure précision possible (données réelles quand dispo)</li>
+          <li>Jamais bloqué (fallback heuristique)</li>
+          <li>Warning explicite quand approximation</li>
+        </ul></div>
+        <div class="cons"><h4>Inconvénients</h4><ul>
+          <li>Plus de code à maintenir (2 stratégies)</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
