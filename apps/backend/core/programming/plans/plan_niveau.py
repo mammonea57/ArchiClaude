@@ -8,13 +8,10 @@ Three detail levels:
 
 from __future__ import annotations
 
-from shapely.geometry import Polygon
-
 from core.drawing.conventions import TRAIT_EPAISSEURS
-from core.programming.schemas import NiveauDistribution
-from core.programming.plans.renderer_svg import SvgCanvas
 from core.programming.plans.renderer_dxf import DxfCanvas
-
+from core.programming.plans.renderer_svg import SvgCanvas
+from core.programming.schemas import NiveauDistribution
 
 # Scale: 1m in world = _SCALE mm on drawing (1:50)
 _SCALE = 20.0

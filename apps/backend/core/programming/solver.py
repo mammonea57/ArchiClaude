@@ -10,15 +10,13 @@ All surfaces in m². All inputs must be in Lambert-93 (EPSG:2154, metric CRS).
 
 from __future__ import annotations
 
-import math
-
 from core.feasibility.capacity import compute_logements, compute_stationnement
 from core.feasibility.smart_margin import compute_smart_margin
 from core.programming.schemas import (
+    SURFACE_NOYAU_M2,
     NiveauFootprint,
     Scenario,
     SolverResult,
-    SURFACE_NOYAU_M2,
 )
 
 # ---------------------------------------------------------------------------

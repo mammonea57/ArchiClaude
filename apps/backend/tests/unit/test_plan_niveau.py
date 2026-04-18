@@ -5,17 +5,15 @@ TDD: tests written before implementation.
 
 from __future__ import annotations
 
-import pytest
 from shapely.geometry import Point, Polygon
 
+from core.programming.plans.plan_niveau import generate_plan_niveau
 from core.programming.schemas import (
     Logement,
     NiveauDistribution,
     Noyau,
     Piece,
 )
-from core.programming.plans.plan_niveau import generate_plan_niveau
-
 
 # ---------------------------------------------------------------------------
 # Helpers

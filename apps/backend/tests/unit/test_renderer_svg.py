@@ -5,10 +5,7 @@ TDD: tests written before implementation.
 
 from __future__ import annotations
 
-import pytest
-
 from core.programming.plans.renderer_svg import SvgCanvas
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -5,11 +5,9 @@ TDD: tests written before implementation.
 
 from __future__ import annotations
 
-import pytest
 from shapely.geometry import Polygon
 
 from core.programming.plans.plan_masse import generate_plan_masse
-
 
 # ---------------------------------------------------------------------------
 # Helpers

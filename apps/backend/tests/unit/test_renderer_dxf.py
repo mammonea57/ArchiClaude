@@ -5,10 +5,7 @@ TDD: tests written before implementation.
 
 from __future__ import annotations
 
-import pytest
-
 from core.programming.plans.renderer_dxf import DxfCanvas
-
 
 # ---------------------------------------------------------------------------
 # test_creates_valid_dxf

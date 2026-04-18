@@ -8,7 +8,6 @@ from shapely.geometry import Polygon
 from core.programming.schemas import ClassifiedSegment
 from core.programming.setback_engine import compute_footprint_by_segments
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

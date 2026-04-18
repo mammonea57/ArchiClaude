@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import pytest
-from shapely.geometry import LineString, MultiLineString, Point, Polygon
+from shapely.geometry import LineString, Polygon
 
 from core.programming.schemas import ClassifiedSegment
 from core.programming.segment_classifier import classify_segments
-
 
 # ---------------------------------------------------------------------------
 # Helpers

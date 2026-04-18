@@ -5,12 +5,10 @@ TDD: tests written before implementation.
 
 from __future__ import annotations
 
-import pytest
 from shapely.geometry import Polygon
 
-from core.programming.schemas import NiveauFootprint
 from core.programming.plans.coupe import generate_coupe
-
+from core.programming.schemas import NiveauFootprint
 
 # ---------------------------------------------------------------------------
 # Helpers

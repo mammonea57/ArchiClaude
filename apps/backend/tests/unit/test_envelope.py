@@ -5,9 +5,8 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import Polygon
 
-from core.programming.schemas import ClassifiedSegment, NiveauFootprint
 from core.programming.envelope import compute_envelope
-
+from core.programming.schemas import ClassifiedSegment, NiveauFootprint
 
 # ---------------------------------------------------------------------------
 # Helpers

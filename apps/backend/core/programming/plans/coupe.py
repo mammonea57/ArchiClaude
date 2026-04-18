@@ -5,10 +5,9 @@ Shows height dimensions, NGF cotes, foundation schematic, acroterè.
 
 from __future__ import annotations
 
-from core.programming.schemas import NiveauFootprint
-from core.programming.plans.renderer_svg import SvgCanvas
 from core.programming.plans.renderer_dxf import DxfCanvas
-
+from core.programming.plans.renderer_svg import SvgCanvas
+from core.programming.schemas import NiveauFootprint
 
 # Scale: 1m = _SCALE mm on drawing (1:100)
 _SCALE = 10.0

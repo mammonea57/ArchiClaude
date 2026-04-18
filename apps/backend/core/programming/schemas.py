@@ -5,7 +5,7 @@ All geometries must be in Lambert-93 (EPSG:2154, metric CRS).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 from shapely.geometry import Point, Polygon

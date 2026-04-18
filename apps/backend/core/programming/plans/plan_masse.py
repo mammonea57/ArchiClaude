@@ -8,8 +8,8 @@ from __future__ import annotations
 from shapely.geometry import Polygon
 
 from core.drawing.conventions import TRAIT_EPAISSEURS
-from core.programming.plans.renderer_svg import SvgCanvas
 from core.programming.plans.renderer_dxf import DxfCanvas
+from core.programming.plans.renderer_svg import SvgCanvas
 
 
 def generate_plan_masse(
@@ -164,7 +164,6 @@ def _add_setback_dimensions(
     to_svg: object,
 ) -> None:
     """Add dimension lines for setbacks between parcelle and footprint."""
-    import math
 
     # Get exterior coords
     p_coords = list(parcelle.exterior.coords)[:-1]  # drop repeated last

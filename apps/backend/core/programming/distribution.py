@@ -7,21 +7,20 @@ All geometries must be in Lambert-93 (EPSG:2154, metric CRS).
 from __future__ import annotations
 
 import math
-from typing import Optional
 
 from shapely.geometry import Point, Polygon, box
 
 from core.programming.schemas import (
+    SURFACE_CENTRE,
+    SURFACE_NOYAU_M2,
+    TRAME_BA_M,
+    TRAMES_PAR_TYPO,
     DistributionResult,
     Logement,
     NiveauDistribution,
     NiveauFootprint,
     Noyau,
     Piece,
-    SURFACE_CENTRE,
-    SURFACE_NOYAU_M2,
-    TRAME_BA_M,
-    TRAMES_PAR_TYPO,
 )
 
 # ---------------------------------------------------------------------------
@@ -119,17 +118,16 @@ def place_noyaux(
                 )
             )
         return noyaux
-    else:
-        # Single core at centroid
-        return [
-            Noyau(
-                id="N01",
-                type="escalier+ascenseur",
-                position=Point(cx, cy),
-                surface_m2=SURFACE_NOYAU_M2,
-                dessert=[],
-            )
-        ]
+    # Single core at centroid
+    return [
+        Noyau(
+            id="N01",
+            type="escalier+ascenseur",
+            position=Point(cx, cy),
+            surface_m2=SURFACE_NOYAU_M2,
+            dessert=[],
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +178,7 @@ def _layout_pieces(
             _piece("SDB/WC", 4.0, width_m * 0.4, depth_m * 0.25),
             _piece("Dégagement", 2.0, width_m * 0.4, depth_m * 0.15),
         ]
-    elif typologie == "T2":
+    if typologie == "T2":
         return [
             _piece("Séjour/cuisine", 20.0, width_m * 0.65, depth_m * 0.5),
             _piece("Chambre 1", 11.0, width_m * 0.55, depth_m * 0.35),
@@ -188,7 +186,7 @@ def _layout_pieces(
             _piece("WC", 2.0, width_m * 0.2, depth_m * 0.15),
             _piece("Dégagement", 4.0, width_m * 0.35, depth_m * 0.2),
         ]
-    elif typologie == "T3":
+    if typologie == "T3":
         return [
             _piece("Séjour/cuisine", 27.0, width_m * 0.65, depth_m * 0.5),
             _piece("Chambre 1", 12.0, width_m * 0.55, depth_m * 0.35),
@@ -197,7 +195,7 @@ def _layout_pieces(
             _piece("WC", 2.0, width_m * 0.2, depth_m * 0.15),
             _piece("Dégagement", 4.5, width_m * 0.4, depth_m * 0.2),
         ]
-    elif typologie == "T4":
+    if typologie == "T4":
         return [
             _piece("Séjour/cuisine", 34.0, width_m * 0.65, depth_m * 0.5),
             _piece("Chambre 1", 14.0, width_m * 0.55, depth_m * 0.35),
@@ -208,18 +206,18 @@ def _layout_pieces(
             _piece("WC", 2.0, width_m * 0.2, depth_m * 0.15),
             _piece("Dégagement", 6.0, width_m * 0.45, depth_m * 0.2),
         ]
-    else:  # T5
-        return [
-            _piece("Séjour/cuisine", 40.0, width_m * 0.65, depth_m * 0.5),
-            _piece("Chambre 1", 15.0, width_m * 0.55, depth_m * 0.35),
-            _piece("Chambre 2", 13.0, width_m * 0.5, depth_m * 0.35),
-            _piece("Chambre 3", 11.0, width_m * 0.5, depth_m * 0.3),
-            _piece("Chambre 4", 10.0, width_m * 0.45, depth_m * 0.3),
-            _piece("SDB", 7.0, width_m * 0.4, depth_m * 0.25),
-            _piece("SDE", 5.0, width_m * 0.35, depth_m * 0.2),
-            _piece("WC", 2.0, width_m * 0.2, depth_m * 0.15),
-            _piece("Dégagement", 7.0, width_m * 0.5, depth_m * 0.2),
-        ]
+    # T5
+    return [
+        _piece("Séjour/cuisine", 40.0, width_m * 0.65, depth_m * 0.5),
+        _piece("Chambre 1", 15.0, width_m * 0.55, depth_m * 0.35),
+        _piece("Chambre 2", 13.0, width_m * 0.5, depth_m * 0.35),
+        _piece("Chambre 3", 11.0, width_m * 0.5, depth_m * 0.3),
+        _piece("Chambre 4", 10.0, width_m * 0.45, depth_m * 0.3),
+        _piece("SDB", 7.0, width_m * 0.4, depth_m * 0.25),
+        _piece("SDE", 5.0, width_m * 0.35, depth_m * 0.2),
+        _piece("WC", 2.0, width_m * 0.2, depth_m * 0.15),
+        _piece("Dégagement", 7.0, width_m * 0.5, depth_m * 0.2),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +406,7 @@ def distribute_logements(
     nb_lls = math.ceil(nb_logements_total * lls_pct / 100.0) if lls_pct > 0 else 0
     lls_flags = [i < nb_lls for i in range(nb_logements_total)]
 
-    assignments: list[tuple[str, bool]] = list(zip(typologies_ordered, lls_flags))
+    assignments: list[tuple[str, bool]] = list(zip(typologies_ordered, lls_flags, strict=False))
 
     # --- Distribute logements evenly across levels ---
     nb_levels = len(niveaux)

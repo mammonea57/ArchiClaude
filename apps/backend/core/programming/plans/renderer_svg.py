@@ -7,7 +7,6 @@ All coordinates are in millimetres (SVG user units = mm at 1:1 scale).
 from __future__ import annotations
 
 import math
-from typing import Any
 
 
 class SvgCanvas:

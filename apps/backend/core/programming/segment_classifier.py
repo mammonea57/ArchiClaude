@@ -19,7 +19,7 @@ import logging
 import math
 from typing import Any
 
-from shapely.geometry import LineString, MultiPolygon, Polygon
+from shapely.geometry import LineString, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from core.programming.schemas import ClassifiedSegment

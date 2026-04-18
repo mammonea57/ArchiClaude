@@ -9,9 +9,8 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import Polygon
 
-from core.programming.schemas import NiveauFootprint, SolverResult, Scenario
+from core.programming.schemas import NiveauFootprint, SolverResult
 from core.programming.solver import solve_scenarios
-
 
 # ---------------------------------------------------------------------------
 # Helpers

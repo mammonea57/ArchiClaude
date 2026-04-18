@@ -9,18 +9,16 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import Polygon
 
-from core.programming.schemas import (
-    DistributionResult,
-    NiveauDistribution,
-    NiveauFootprint,
-    SURFACE_CENTRE,
-)
 from core.programming.distribution import (
     distribute_logements,
     place_noyaux,
     select_template,
 )
-
+from core.programming.schemas import (
+    SURFACE_CENTRE,
+    DistributionResult,
+    NiveauFootprint,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
