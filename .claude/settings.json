@@ -209,7 +209,8 @@
       "Bash(kill 3354)",
       "Bash(xargs kill *)",
       "Bash(open -a \"Google Chrome\" http://localhost:3010)",
-      "Bash(open -a \"Google Chrome\" http://localhost:8000/docs)"
+      "Bash(open -a \"Google Chrome\" http://localhost:8000/docs)",
+      "Bash(open -a \"Google Chrome\" http://localhost:3010/projects/new)"
     ],
     "additionalDirectories": [
       "/Users/anthonymammone/Desktop/ArchiClaude/docs/superpowers",
