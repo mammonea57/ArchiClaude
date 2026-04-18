@@ -96,6 +96,7 @@ ignore = ["E501"]  # line length géré par formatter
 "api/**" = ["TCH"]  # runtime imports in FastAPI routes
 "workers/**" = ["TCH"]  # runtime imports in workers
 "schemas/**" = ["TCH"]  # runtime imports in Pydantic schemas
+"scripts/smoke_test.py" = ["T201"]  # print intentionnel dans ce script CLI
 
 [tool.ruff.format]
 quote-style = "double"

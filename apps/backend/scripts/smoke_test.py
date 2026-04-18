@@ -11,8 +11,8 @@ Exits 0 if all tests pass, 1 if any fail.
 from __future__ import annotations
 
 import sys
-import urllib.request
 import urllib.error
+import urllib.request
 from typing import NamedTuple
 
 
