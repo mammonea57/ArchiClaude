@@ -40,6 +40,7 @@ def run_feasibility(
     altitude_sol_m: float | None = None,
     commune_sru_statut: str = "non_soumise",
     annee_cible_pc: int = 2025,
+    batiments_voisins: list | None = None,
 ) -> FeasibilityResult:
     """Run the full feasibility pipeline and return a FeasibilityResult.
 
@@ -53,6 +54,10 @@ def run_feasibility(
         altitude_sol_m: Ground altitude (NGF) in metres.
         commune_sru_statut: SRU status of the commune.
         annee_cible_pc: Target year for building permit submission.
+        batiments_voisins: Optional list of neighbouring building dicts for shadow
+            and refusal pattern analysis. Each dict should contain at minimum
+            ``niveaux`` and/or ``hauteur_m`` fields; for shadow mode B also
+            ``geometry`` (GeoJSON dict) and ``hauteur_m``.
 
     Returns:
         FeasibilityResult with all computed values.
@@ -193,6 +198,105 @@ def run_feasibility(
         footprint_geojson = dict(mapping(footprint_wgs84))
 
     # ------------------------------------------------------------------
+    # Step 8: SP1 improvements — shadow, refusal patterns, risk score, margin
+    # ------------------------------------------------------------------
+
+    # Shadow simulation (uses footprint geometry + hauteur)
+    from core.analysis.shadow import compute_shadow_mode_a, compute_shadow_mode_b
+    shadow_a = compute_shadow_mode_a(footprint_result.footprint_geom, capacity_result.hauteur_retenue_m)
+    shadow_b = None
+    if batiments_voisins:  # if neighbor data available
+        shadow_b = compute_shadow_mode_b(footprint_result.footprint_geom, capacity_result.hauteur_retenue_m, batiments_voisins)
+
+    # Refusal patterns (uses BDTopo neighbors + comparable PCs)
+    from core.analysis.refusal_patterns import analyze_local_context
+    local_ctx = analyze_local_context(
+        batiments_200m=batiments_voisins or [],
+        pc_500m=[],  # from comparable_projects — wired when DB lookup available
+        projet_niveaux=capacity_result.nb_niveaux,
+    )
+
+    # Risk score (calculated component)
+    from core.analysis.risk_score import compute_risk_score_calcule
+    risk_calc, risk_detail = compute_risk_score_calcule(
+        nb_recours_commune=0, nb_recours_500m=0, associations_actives=0,
+        projet_depasse_gabarit=local_ctx.get("projet_depasse_gabarit", False),
+        depassement_niveaux=local_ctx.get("depassement_niveaux", 0),
+        abf_obligatoire=any(a.type == "abf" for a in alertes_dures),
+        nb_conflits_vue=0,  # wired when vue_analysis runs
+    )
+
+    # Smart margin
+    from core.feasibility.smart_margin import compute_smart_margin
+    margin = compute_smart_margin(risk_score=risk_calc, sdp_max=capacity_result.sdp_max_m2)
+
+    # Pre-instruction checklist
+    from core.analysis.pre_instruction import generate_checklist
+    checklist = generate_checklist(
+        alerts=[{"type": a.type} for a in alertes_dures],
+        risk_score=risk_calc,
+        nb_niveaux=capacity_result.nb_niveaux,
+    )
+
+    # Build structured result objects for new fields
+    from core.feasibility.schemas import (
+        LocalContext, PreInstructionItem, RecommendedProgramme, RefusalPattern,
+        RiskScore, ShadowResult,
+    )
+    from core.analysis.risk_score import compute_risk_score_final
+
+    risk_score_obj = RiskScore(
+        score_calcule=risk_calc,
+        score_opus=None,
+        score_final=compute_risk_score_final(score_calcule=risk_calc, score_opus=None),
+        justification_opus=None,
+        detail_calcul=risk_detail,
+    )
+
+    refusal_patterns_obj = LocalContext(
+        gabarit_dominant_niveaux=local_ctx.get("gabarit_dominant_niveaux"),
+        gabarit_dominant_m=local_ctx.get("gabarit_dominant_m"),
+        projet_depasse_gabarit=local_ctx.get("projet_depasse_gabarit", False),
+        depassement_niveaux=local_ctx.get("depassement_niveaux", 0),
+        pc_acceptes_500m=local_ctx.get("pc_acceptes_500m", []),
+        pc_refuses_500m=local_ctx.get("pc_refuses_500m", []),
+        patterns=[RefusalPattern(**p) for p in local_ctx.get("patterns", [])],
+    )
+
+    # Build shadow analysis result
+    critical_shadows = []
+    for s in shadow_a.shadows:
+        shadow_geom = s["shadow"]
+        shadow_area = shadow_geom.area if shadow_geom and not shadow_geom.is_empty else 0.0
+        if shadow_a.max_shadow_length_m > 0 and s["sun_altitude"] > 0:
+            import math
+            sh_len = capacity_result.hauteur_retenue_m / math.tan(math.radians(s["sun_altitude"]))
+        else:
+            sh_len = 0.0
+        critical_shadows.append({
+            "time": f"Dec21-{s['hour']}h",
+            "shadow_length_m": round(sh_len, 2),
+            "shadow_area_m2": round(shadow_area, 2),
+        })
+
+    shadow_result = ShadowResult(
+        critical_shadows=critical_shadows,
+        max_shadow_length_m=round(shadow_a.max_shadow_length_m, 2),
+        ombre_existante_m2=round(shadow_b.ombre_existante_m2, 2) if shadow_b else None,
+        ombre_future_m2=round(shadow_b.ombre_future_m2, 2) if shadow_b else None,
+        ombre_ajoutee_m2=round(shadow_b.ombre_ajoutee_m2, 2) if shadow_b else None,
+        pct_aggravation=round(shadow_b.pct_aggravation, 2) if shadow_b else None,
+    )
+
+    recommended_programme = RecommendedProgramme(
+        marge_pct=margin.marge_pct,
+        sdp_recommandee_m2=round(margin.sdp_recommandee, 2),
+        sdp_max_m2=margin.sdp_max,
+        raison_marge=margin.raison,
+        ajustement_comparables=margin.ajustement_comparables,
+    )
+
+    # ------------------------------------------------------------------
     # Confidence score: average of extraction_confidence, penalise critical alerts
     # ------------------------------------------------------------------
     base_confidence = numeric_rules.extraction_confidence or 0.0
@@ -223,5 +327,10 @@ def run_feasibility(
         points_vigilance=[],
         confidence_score=confidence_score,
         warnings=all_warnings,
+        risk_score=risk_score_obj,
+        refusal_patterns=refusal_patterns_obj,
+        pre_instruction_checklist=checklist,
+        shadow_analysis=shadow_result,
+        recommended_programme=recommended_programme,
         computed_at=datetime.utcnow(),
     )

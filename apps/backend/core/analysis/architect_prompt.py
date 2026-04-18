@@ -48,6 +48,21 @@ terre pour bénéficier du bonus bioclim, adapter le faîtage au gabarit voisin,
 Longueur attendue : 600 à 1200 mots.
 Réponds en français. Sois précis, factuel et opérationnel — des décisions à 5-50 M€ \
 s'appuient sur ton analyse.
+
+EN PLUS de la note d'opportunité, tu dois fournir dans ta réponse :
+
+## Score de risque recours
+Un score de 0 à 100 évaluant la probabilité de recours sur ce projet.
+Justifie en 2-3 lignes. Format: "SCORE_RISQUE_OPUS: XX" suivi de la justification.
+
+## Recommandations pré-instruction contextuelles
+3-5 démarches prioritaires contextuelles avant dépôt, au-delà de la checklist standard.
+
+## Commentaire vues
+Si des données de conflits de vue sont fournies, commente les risques et recommande des ajustements.
+
+## Commentaire ombres
+Si des données d'ombre portée sont fournies, commente l'impact et l'argument juridique.
 """
 
 # ---------------------------------------------------------------------------
@@ -66,6 +81,10 @@ def build_architect_prompt(
     alerts: list[str] | None = None,
     jurisprudences_context: str | None = None,
     recours_context: str | None = None,
+    vue_analysis_context: dict | None = None,
+    shadow_context: dict | None = None,
+    risk_score_calcule: int | None = None,
+    local_context: dict | None = None,
 ) -> str:
     """Assemble the user prompt for the architect analysis.
 
@@ -82,6 +101,10 @@ def build_architect_prompt(
             Will be tagged with [jurisprudence].
         recours_context: Optional pre-formatted recours text.
             Will be tagged with [recours_local].
+        vue_analysis_context: Optional vue droite/oblique conflict analysis dict.
+        shadow_context: Optional shadow simulation results dict.
+        risk_score_calcule: Optional calculated risk score (0-100).
+        local_context: Optional local context dict (gabarit, PC historiques).
 
     Returns:
         Assembled user prompt string ready to send to the LLM.
@@ -140,6 +163,31 @@ def build_architect_prompt(
         parts.append("[recours_local]")
         parts.append(recours_context)
         parts.append("[/recours_local]\n")
+
+    # --- Risk score calculé ---
+    if risk_score_calcule is not None:
+        parts.append(f"### Score de risque calculé: {risk_score_calcule}/100\n")
+
+    # --- Local context (gabarit, PC historiques) ---
+    if local_context:
+        parts.append("### Contexte local (gabarit, PC historiques)\n")
+        parts.append("```json")
+        parts.append(json.dumps(local_context, ensure_ascii=False, indent=2))
+        parts.append("```\n")
+
+    # --- Vue analysis ---
+    if vue_analysis_context:
+        parts.append("### Analyse vues droite/oblique\n")
+        parts.append("```json")
+        parts.append(json.dumps(vue_analysis_context, ensure_ascii=False, indent=2))
+        parts.append("```\n")
+
+    # --- Shadow analysis ---
+    if shadow_context:
+        parts.append("### Analyse ombre portée\n")
+        parts.append("```json")
+        parts.append(json.dumps(shadow_context, ensure_ascii=False, indent=2))
+        parts.append("```\n")
 
     # --- Final instruction with required section names ---
     parts.append(
