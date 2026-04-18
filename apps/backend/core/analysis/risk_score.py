@@ -50,8 +50,5 @@ def compute_risk_score_final(
     If score_opus is available: 0.4 * score_calcule + 0.6 * score_opus, capped at 100.
     Otherwise: score_calcule as-is (still capped at 100).
     """
-    if score_opus is not None:
-        blended = 0.4 * score_calcule + 0.6 * score_opus
-    else:
-        blended = float(score_calcule)
+    blended = 0.4 * score_calcule + 0.6 * score_opus if score_opus is not None else float(score_calcule)
     return min(100, round(blended))

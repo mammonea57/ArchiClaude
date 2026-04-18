@@ -1,6 +1,5 @@
 """Tests for core.analysis.pre_instruction — deterministic checklist generator."""
 
-import pytest
 
 from core.analysis.pre_instruction import generate_checklist
 from core.feasibility.schemas import PreInstructionItem

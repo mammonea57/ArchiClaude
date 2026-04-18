@@ -239,11 +239,14 @@ def run_feasibility(
     )
 
     # Build structured result objects for new fields
-    from core.feasibility.schemas import (
-        LocalContext, PreInstructionItem, RecommendedProgramme, RefusalPattern,
-        RiskScore, ShadowResult,
-    )
     from core.analysis.risk_score import compute_risk_score_final
+    from core.feasibility.schemas import (
+        LocalContext,
+        RecommendedProgramme,
+        RefusalPattern,
+        RiskScore,
+        ShadowResult,
+    )
 
     risk_score_obj = RiskScore(
         score_calcule=risk_calc,

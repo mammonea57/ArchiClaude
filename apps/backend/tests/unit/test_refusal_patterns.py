@@ -1,13 +1,11 @@
 """Unit tests for core.analysis.refusal_patterns."""
 
-import pytest
 
 from core.analysis.refusal_patterns import (
     GabaritInfo,
     analyze_local_context,
     deduplicate_pc,
 )
-
 
 # ---------------------------------------------------------------------------
 # deduplicate_pc tests

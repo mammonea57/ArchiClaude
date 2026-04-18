@@ -1,10 +1,8 @@
 """Tests for core.analysis.vue_analysis — vue droite/oblique detection."""
 
-import pytest
 
 from core.analysis.vue_analysis import classify_vue_type, detect_vue_conflicts
 from core.feasibility.schemas import VueAnalysisResult
-
 
 # ── classify_vue_type ─────────────────────────────────────────────────────────
 

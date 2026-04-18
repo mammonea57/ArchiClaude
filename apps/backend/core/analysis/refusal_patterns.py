@@ -6,7 +6,6 @@ import statistics
 from datetime import datetime, timedelta
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -27,7 +26,7 @@ class GabaritInfo:
         self.median_m = median_m
 
     @classmethod
-    def from_batiments(cls, batiments: list[dict]) -> "GabaritInfo":
+    def from_batiments(cls, batiments: list[dict]) -> GabaritInfo:
         """Compute median storey count and height from a list of building dicts.
 
         Each dict should contain at least one of:

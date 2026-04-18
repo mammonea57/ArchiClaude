@@ -13,7 +13,6 @@ from typing import Literal
 
 from core.feasibility.schemas import Ouverture, VueAnalysisResult, VueConflict
 
-
 _DISTANCE_MIN_DROITE_M = 19.0
 _DISTANCE_MIN_OBLIQUE_M = 6.0
 _EARTH_RADIUS_M = 6_371_000.0

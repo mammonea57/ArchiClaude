@@ -1,23 +1,21 @@
 """Unit tests for core.analysis.risk_score."""
 
-import pytest
 
 from core.analysis.risk_score import compute_risk_score_calcule, compute_risk_score_final
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_ZERO_KWARGS = dict(
-    nb_recours_commune=0,
-    nb_recours_500m=0,
-    associations_actives=0,
-    projet_depasse_gabarit=False,
-    depassement_niveaux=0,
-    abf_obligatoire=False,
-    nb_conflits_vue=0,
-)
+_ZERO_KWARGS = {
+    "nb_recours_commune": 0,
+    "nb_recours_500m": 0,
+    "associations_actives": 0,
+    "projet_depasse_gabarit": False,
+    "depassement_niveaux": 0,
+    "abf_obligatoire": False,
+    "nb_conflits_vue": 0,
+}
 
 
 def _calc(**overrides):

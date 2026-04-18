@@ -1,18 +1,16 @@
 """Tests for core.analysis.shadow — solar position + shadow projection."""
 
-import math
 import pytest
-from shapely.geometry import Polygon, box
+from shapely.geometry import box
 
 from core.analysis.shadow import (
-    compute_sun_position,
-    compute_shadow_polygon,
-    compute_shadow_mode_a,
-    compute_shadow_mode_b,
     ShadowModeAResult,
     ShadowModeBResult,
+    compute_shadow_mode_a,
+    compute_shadow_mode_b,
+    compute_shadow_polygon,
+    compute_sun_position,
 )
-
 
 # ── solar position ────────────────────────────────────────────────────────────
 

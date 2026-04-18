@@ -16,7 +16,6 @@ from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-
 # ── Dataclasses (NOT Pydantic — internal computation results) ─────────────────
 
 @dataclass
@@ -230,10 +229,7 @@ def compute_shadow_mode_b(
     ombre_ajoutee_m2 = ombre_ajoutee.area
 
     # Aggravation percentage
-    if ombre_future_m2 > 0:
-        pct_aggravation = (ombre_ajoutee_m2 / ombre_future_m2) * 100.0
-    else:
-        pct_aggravation = 0.0
+    pct_aggravation = ombre_ajoutee_m2 / ombre_future_m2 * 100.0 if ombre_future_m2 > 0 else 0.0
 
     return ShadowModeBResult(
         ombre_existante_m2=ombre_existante_m2,

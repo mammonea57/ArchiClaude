@@ -2,7 +2,7 @@
 
 import pytest
 
-from core.feasibility.smart_margin import compute_smart_margin, SmartMarginResult
+from core.feasibility.smart_margin import SmartMarginResult, compute_smart_margin
 
 
 def test_very_safe_100pct():

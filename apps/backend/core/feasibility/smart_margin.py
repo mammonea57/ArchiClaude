@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 # ── Margin lookup table ───────────────────────────────────────────────────────
 # Format: (max_risk_inclusive, margin_pct)
 # Risk 0–20 → 100%, 21–40 → 98%, 41–60 → 97%, 61–80 → 96%, 81+ → 96%
