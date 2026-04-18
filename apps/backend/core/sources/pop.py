@@ -64,7 +64,10 @@ async def fetch_monuments_around(
         },
     }
 
-    data = await post_json(_POP_URL, json_body=body)
+    try:
+        data = await post_json(_POP_URL, json_body=body)
+    except Exception:
+        return []  # mode dégradé — POP API indisponible
 
     results: list[MonumentResult] = []
     hits = data.get("hits", {}).get("hits", [])
