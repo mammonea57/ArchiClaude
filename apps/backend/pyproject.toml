@@ -71,6 +71,9 @@ dependencies = [
     "reportlab>=4.0",
     "svglib>=1.5",
     "Pillow>=10.0",
+
+    # PCMI6 quality control
+    "scikit-image>=0.21",
 ]
 
 [project.optional-dependencies]
