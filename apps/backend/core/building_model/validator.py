@@ -189,3 +189,66 @@ def validate_incendie_niveau(niveau: Niveau) -> list[ConformiteAlert]:
                 affected_element_id=cell.id,
             ))
     return alerts
+
+
+from core.plu.schemas import NumericRules
+from core.building_model.schemas import ConformiteCheck
+
+
+def validate_plu(bm: BuildingModel, rules: NumericRules) -> list[ConformiteAlert]:
+    """Validate PLU constraints against computed building."""
+    alerts: list[ConformiteAlert] = []
+
+    # Emprise
+    if rules.emprise_max_pct is not None:
+        emprise_max = bm.site.parcelle_surface_m2 * (rules.emprise_max_pct / 100.0)
+        if bm.envelope.emprise_m2 > emprise_max:
+            alerts.append(ConformiteAlert(
+                level="error", category="plu",
+                message=f"PLU emprise {bm.envelope.emprise_m2:.1f}m² > max {emprise_max:.1f}m² "
+                        f"({rules.emprise_max_pct}% parcelle)",
+            ))
+
+    # Hauteur
+    if rules.hauteur_max_m is not None:
+        if bm.envelope.hauteur_totale_m > rules.hauteur_max_m:
+            alerts.append(ConformiteAlert(
+                level="error", category="plu",
+                message=f"PLU hauteur {bm.envelope.hauteur_totale_m}m > max {rules.hauteur_max_m}m",
+            ))
+    if rules.hauteur_max_niveaux is not None:
+        # niveaux=4 means R+3
+        r_plus = bm.envelope.niveaux - 1
+        if r_plus > rules.hauteur_max_niveaux:
+            alerts.append(ConformiteAlert(
+                level="error", category="plu",
+                message=f"PLU niveaux R+{r_plus} > max R+{rules.hauteur_max_niveaux}",
+            ))
+
+    return alerts
+
+
+def validate_all(bm: BuildingModel, rules: NumericRules) -> ConformiteCheck:
+    """Run all validators and aggregate into ConformiteCheck."""
+    alerts: list[ConformiteAlert] = []
+    for niv in bm.niveaux:
+        alerts.extend(validate_incendie_niveau(niv))
+        for cell in niv.cellules:
+            if cell.type == CelluleType.LOGEMENT:
+                alerts.extend(validate_pmr(cell))
+                alerts.extend(validate_ventilation(cell))
+                alerts.extend(validate_lumiere_naturelle(cell))
+    alerts.extend(validate_pmr_building(bm))
+    alerts.extend(validate_plu(bm, rules))
+
+    return ConformiteCheck(
+        pmr_ascenseur_ok=not any(a.category == "pmr" and "ascenseur" in a.message.lower() and a.level == "error" for a in alerts),
+        pmr_rotation_cercles_ok=not any(a.category == "pmr" and "rotation" in a.message.lower() and a.level == "error" for a in alerts),
+        incendie_distance_sorties_ok=not any(a.category == "incendie" and a.level == "error" for a in alerts),
+        plu_emprise_ok=not any(a.category == "plu" and "emprise" in a.message.lower() and a.level == "error" for a in alerts),
+        plu_hauteur_ok=not any(a.category == "plu" and "hauteur" in a.message.lower() and a.level == "error" for a in alerts),
+        plu_retraits_ok=True,  # v1 retraits pas implémenté
+        ventilation_ok=not any(a.category == "ventilation" and a.level == "error" for a in alerts),
+        lumiere_ok=not any(a.category == "lumiere" and a.level == "error" for a in alerts),
+        alerts=alerts,
+    )
