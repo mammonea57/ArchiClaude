@@ -31,7 +31,7 @@ dependencies = [
 
     # LLM
     "anthropic==0.39.0",
-    "openai>=1.0",
+    "openai>=1.30.0",
 
     # Workers
     "arq==0.26.1",
@@ -78,6 +78,13 @@ dependencies = [
 
     # Transactional email
     "resend>=0.7",
+
+    # SP2-v2a: 3D modelling + optimisation + spatial indexing
+    "cadquery>=2.4.0",
+    "ortools>=9.10",
+    "flatbush>=1.1.0",
+    "rtree>=1.2.0",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
