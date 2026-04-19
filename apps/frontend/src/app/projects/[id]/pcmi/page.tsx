@@ -104,6 +104,22 @@ export default function PcmiPage({ params }: { params: Promise<{ id: string }> }
           </h2>
           <RevisionHistory revisions={[]} />
         </Card>
+
+        {/* Card: PCMI6 insertion paysagère */}
+        <div className="bg-white border border-slate-200 rounded-xl p-6">
+          <h2 className="font-display text-lg font-semibold text-slate-900 mb-4">
+            PCMI6 — Insertion paysagère
+          </h2>
+          <p className="text-sm text-slate-500 mb-3">
+            Photomontage du projet intégré dans son environnement.
+          </p>
+          <Link
+            href={`/projects/${id}/pcmi6`}
+            className="inline-flex items-center gap-2 text-sm text-teal-600 hover:underline"
+          >
+            Créer / modifier le PCMI6 →
+          </Link>
+        </div>
       </div>
     </main>
   );
