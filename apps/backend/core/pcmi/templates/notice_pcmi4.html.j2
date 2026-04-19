@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <title>PCMI4 — Notice architecturale — {{ cartouche.nom_projet }}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Playfair+Display:wght@600;700&display=swap');
+
+    /* ── Page layout ── */
+    @page {
+      size: A4 portrait;
+      margin: 20mm 15mm 50mm 15mm;
+
+      @bottom-center {
+        content: element(cartouche-footer);
+      }
+    }
+
+    /* ── Running cartouche element ── */
+    #cartouche-footer {
+      position: running(cartouche-footer);
+      width: 100%;
+      height: 40mm;
+      border-top: 0.5pt solid #222222;
+      background: white;
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 7pt;
+      color: #111111;
+    }
+
+    .cartouche-grid {
+      display: table;
+      width: 100%;
+      height: 100%;
+      border-collapse: collapse;
+    }
+
+    .cartouche-row {
+      display: table-row;
+    }
+
+    .cartouche-cell {
+      display: table-cell;
+      padding: 2mm;
+      vertical-align: top;
+      border-right: 0.3pt solid #222;
+    }
+
+    .cartouche-cell:last-child {
+      border-right: none;
+    }
+
+    .cartouche-label {
+      font-size: 6pt;
+      color: #666;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .cartouche-value {
+      font-size: 8pt;
+      color: #111;
+      margin-top: 1mm;
+    }
+
+    .cartouche-signature {
+      font-size: 5.5pt;
+      color: #999;
+      text-align: right;
+      padding: 1mm 2mm;
+    }
+
+    /* ── Body typography ── */
+    body {
+      font-family: 'Inter', Helvetica, Arial, sans-serif;
+      font-size: 11pt;
+      line-height: 1.55;
+      color: #1a1a1a;
+    }
+
+    /* ── Project header ── */
+    .project-header {
+      margin-bottom: 8mm;
+      padding-bottom: 4mm;
+      border-bottom: 2pt solid #1a7a7a;
+    }
+
+    .project-header h1 {
+      font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+      font-size: 20pt;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin: 0 0 2mm 0;
+      border-left: 4pt solid #1a7a7a;
+      padding-left: 4mm;
+    }
+
+    .project-meta {
+      font-size: 9pt;
+      color: #555;
+      margin-top: 2mm;
+    }
+
+    .project-meta span {
+      margin-right: 6mm;
+    }
+
+    .project-meta .label {
+      font-weight: 600;
+      color: #333;
+      text-transform: uppercase;
+      font-size: 7.5pt;
+    }
+
+    /* ── Piece identifier ── */
+    .piece-badge {
+      display: inline-block;
+      background: #1a7a7a;
+      color: white;
+      font-size: 8pt;
+      font-weight: 700;
+      padding: 1mm 3mm;
+      border-radius: 1mm;
+      margin-bottom: 4mm;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    /* ── Notice headings ── */
+    h1 {
+      font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+      font-size: 16pt;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin: 8mm 0 4mm 0;
+      padding-bottom: 2mm;
+      border-bottom: 1.5pt solid #1a7a7a;
+    }
+
+    h2 {
+      font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+      font-size: 13pt;
+      font-weight: 600;
+      color: #1a7a7a;
+      margin: 6mm 0 3mm 0;
+    }
+
+    h3 {
+      font-size: 11pt;
+      font-weight: 600;
+      color: #333;
+      margin: 4mm 0 2mm 0;
+    }
+
+    /* ── Body content ── */
+    p {
+      margin: 0 0 3mm 0;
+      text-align: justify;
+    }
+
+    ul, ol {
+      margin: 2mm 0 3mm 0;
+      padding-left: 6mm;
+    }
+
+    li {
+      margin-bottom: 1.5mm;
+    }
+
+    strong {
+      font-weight: 700;
+      color: #111;
+    }
+
+    /* ── Notice content area ── */
+    .notice-content {
+      margin-top: 4mm;
+    }
+
+    /* ── Page number ── */
+    @page {
+      @bottom-right {
+        content: "Page " counter(page) " / " counter(pages);
+        font-family: Helvetica, Arial, sans-serif;
+        font-size: 7pt;
+        color: #999;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Project header ─────────────────────────────────────────── -->
+  <div class="project-header">
+    <div class="piece-badge">PCMI4 — Notice architecturale</div>
+    <h1>{{ cartouche.nom_projet }}</h1>
+    <div class="project-meta">
+      <span><span class="label">Adresse</span> {{ cartouche.adresse }}</span>
+      <span><span class="label">Parcelles</span> {{ parcelles }}</span>
+      {% if cartouche.date %}
+      <span><span class="label">Date</span> {{ cartouche.date }}</span>
+      {% endif %}
+      {% if cartouche.indice %}
+      <span><span class="label">Indice</span> {{ cartouche.indice }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ── Notice content ─────────────────────────────────────────── -->
+  <div class="notice-content">
+    {{ notice_html | safe }}
+  </div>
+
+  <!-- ── Cartouche footer (running element) ─────────────────────── -->
+  <div id="cartouche-footer">
+    <div class="cartouche-grid">
+      <div class="cartouche-row">
+        <!-- Col 1: Projet / Adresse -->
+        <div class="cartouche-cell" style="width: 40%">
+          <div class="cartouche-label">Projet</div>
+          <div class="cartouche-value">{{ cartouche.nom_projet }}</div>
+          <div class="cartouche-label" style="margin-top:1mm">Adresse</div>
+          <div class="cartouche-value" style="font-size:7pt">{{ cartouche.adresse }}</div>
+        </div>
+        <!-- Col 2: Pétitionnaire -->
+        <div class="cartouche-cell" style="width: 25%">
+          <div class="cartouche-label">Pétitionnaire</div>
+          <div class="cartouche-value">{{ cartouche.petitionnaire_nom }}</div>
+          <div class="cartouche-value" style="font-size:7pt;color:#555">{{ cartouche.petitionnaire_contact }}</div>
+        </div>
+        <!-- Col 3: Architecte (if any) -->
+        <div class="cartouche-cell" style="width: 20%">
+          {% if cartouche.architecte_nom %}
+          <div class="cartouche-label">Architecte</div>
+          <div class="cartouche-value">{{ cartouche.architecte_nom }}</div>
+          {% if cartouche.architecte_ordre %}
+          <div class="cartouche-value" style="font-size:7pt;color:#555">{{ cartouche.architecte_ordre }}</div>
+          {% endif %}
+          {% endif %}
+        </div>
+        <!-- Col 4: Pièce / Date / Indice -->
+        <div class="cartouche-cell" style="width: 15%; border-right: none">
+          <div class="cartouche-label">Pièce</div>
+          <div class="cartouche-value" style="font-weight:700">PCMI4</div>
+          <div class="cartouche-value" style="font-size:7pt">Notice architecturale</div>
+          {% if cartouche.date %}
+          <div class="cartouche-value" style="font-size:7pt;color:#555">{{ cartouche.date }} — Ind. {{ cartouche.indice }}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="cartouche-signature">Généré par ArchiClaude — archiclaude.app</div>
+  </div>
+
+</body>
+</html>

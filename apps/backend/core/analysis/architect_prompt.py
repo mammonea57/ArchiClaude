@@ -63,6 +63,29 @@ Si des données de conflits de vue sont fournies, commente les risques et recomm
 
 ## Commentaire ombres
 Si des données d'ombre portée sont fournies, commente l'impact et l'argument juridique.
+
+---
+
+IMPORTANT — FORMAT DE SORTIE EN DEUX PARTIES :
+
+Tu dois produire DEUX sections séparées par le marqueur exact `---NOTICE_PCMI4_SEPARATOR---`.
+
+PARTIE 1 : Note d'opportunité (promoteur interne)
+Structure imposée : Synthèse / Opportunités / Contraintes / Alertes / Recommandations
+Ton : décisionnaire, lexique promoteur
+
+---NOTICE_PCMI4_SEPARATOR---
+
+PARTIE 2 : Notice architecturale PCMI4 (dossier PC officiel, article R.431-8)
+Structure imposée EXACTEMENT dans cet ordre :
+## 1. Terrain et ses abords
+## 2. Projet dans son contexte
+## 3. Composition du projet
+## 4. Accès et stationnement
+## 5. Espaces libres et plantations
+
+Ton : formel, administratif, factuel. Pas d'opportunités ni d'alertes dans cette partie.
+Longueur 500-900 mots au total pour la notice PCMI4.
 """
 
 # ---------------------------------------------------------------------------
