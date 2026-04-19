@@ -1,7 +1,11 @@
 import pytest
+from pydantic import ValidationError
+
 from core.templates_library.schemas import (
-    Template, TemplateSource, AbstractRoom, AbstractWall, AbstractOpening,
-    DimensionsGrille, ReglementaireOk,
+    DimensionsGrille,
+    ReglementaireOk,
+    Template,
+    TemplateSource,
 )
 
 
@@ -46,7 +50,7 @@ def test_template_validates():
 
 
 def test_template_rejects_unknown_source():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Template(
             id="X", source="random_source",  # invalid
             typologie="T2", surface_shab_range=[45, 55],

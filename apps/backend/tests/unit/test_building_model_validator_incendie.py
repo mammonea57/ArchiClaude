@@ -1,14 +1,21 @@
-import pytest
 from core.building_model.schemas import (
-    BuildingModel, Cellule, CelluleType, Typologie, Niveau, Room, RoomType,
-    Wall, WallType, Opening, OpeningType, Metadata, Site, Envelope, Core, Escalier,
-    Facade, ToitureConfig, ToitureType, Circulation,
+    Cellule,
+    CelluleType,
+    Circulation,
+    Niveau,
+    Opening,
+    OpeningType,
+    Room,
+    RoomType,
+    Typologie,
+    Wall,
+    WallType,
 )
 from core.building_model.validator import (
-    validate_incendie_niveau, validate_ventilation, validate_lumiere_naturelle,
+    validate_incendie_niveau,
+    validate_lumiere_naturelle,
+    validate_ventilation,
 )
-from uuid import uuid4
-from datetime import datetime, UTC
 
 
 def _appt(orientation_with_fenetre: bool) -> Cellule:

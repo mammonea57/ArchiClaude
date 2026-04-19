@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 
 from shapely.geometry import Polygon as ShapelyPolygon
 
+from core.building_model.schemas import Typologie
+
 
 @dataclass
 class GridCell:
@@ -61,19 +63,11 @@ def classify_cells(grid: ModularGrid, voirie_side: str) -> ModularGrid:
 
     for cell in grid.cells:
         ccx, ccy = cell.polygon.centroid.x, cell.polygon.centroid.y
-        if voirie_side == "nord" and ccy >= maxy - threshold_m:
-            cell.on_voirie = True
-        elif voirie_side == "sud" and ccy <= miny + threshold_m:
-            cell.on_voirie = True
-        elif voirie_side == "est" and ccx >= maxx - threshold_m:
-            cell.on_voirie = True
-        elif voirie_side == "ouest" and ccx <= minx + threshold_m:
+        if voirie_side == "nord" and ccy >= maxy - threshold_m or voirie_side == "sud" and ccy <= miny + threshold_m or voirie_side == "est" and ccx >= maxx - threshold_m or voirie_side == "ouest" and ccx <= minx + threshold_m:
             cell.on_voirie = True
 
     return grid
 
-
-from dataclasses import dataclass
 
 
 @dataclass
@@ -117,9 +111,6 @@ def place_core(grid: ModularGrid, core_surface_m2: float) -> CorePlacement:
         polygon=core_poly,
         surface_m2=core_surface_m2,
     )
-
-
-from core.building_model.schemas import Typologie
 
 
 _TYPO_TARGET_SURFACE_M2 = {
@@ -228,10 +219,14 @@ def _infer_orientations(slot_poly: ShapelyPolygon, footprint: ShapelyPolygon, vo
     s_minx, s_miny, s_maxx, s_maxy = slot_poly.bounds
     threshold = 0.5  # 50cm tolerance
     orientations = []
-    if abs(s_miny - miny) < threshold: orientations.append("sud")
-    if abs(s_maxy - maxy) < threshold: orientations.append("nord")
-    if abs(s_minx - minx) < threshold: orientations.append("ouest")
-    if abs(s_maxx - maxx) < threshold: orientations.append("est")
+    if abs(s_miny - miny) < threshold:
+        orientations.append("sud")
+    if abs(s_maxy - maxy) < threshold:
+        orientations.append("nord")
+    if abs(s_minx - minx) < threshold:
+        orientations.append("ouest")
+    if abs(s_maxx - maxx) < threshold:
+        orientations.append("est")
     return orientations
 
 

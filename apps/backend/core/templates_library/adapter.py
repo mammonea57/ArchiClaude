@@ -7,12 +7,18 @@ from dataclasses import dataclass
 from shapely.geometry import Polygon as ShapelyPolygon
 
 from core.building_model.schemas import (
-    Cellule, CelluleType, Furniture, Opening, OpeningType, Room, RoomType,
-    Typologie, Wall, WallType,
+    Cellule,
+    CelluleType,
+    Furniture,
+    Opening,
+    OpeningType,
+    Room,
+    RoomType,
+    Wall,
+    WallType,
 )
 from core.building_model.solver import ApartmentSlot
 from core.templates_library.schemas import Template
-
 
 _STRETCH_MIN = 0.85
 _STRETCH_MAX = 1.15
@@ -83,7 +89,7 @@ class TemplateAdapter:
                 return FitResult(success=False, rejection_reason=f"unknown room type {abs_room['type']}")
             rooms.append(Room(
                 id=abs_room["id"], type=room_type,
-                surface_m2=surface, polygon_xy=[(x, y) for x, y in coords],
+                surface_m2=surface, polygon_xy=list(coords),
                 orientation=None, label_fr=self._label_fr(room_type),
                 furniture=self._place_furniture(abs_room["id"], room_type, merged, template),
             ))
@@ -134,7 +140,7 @@ class TemplateAdapter:
             type=CelluleType.LOGEMENT,
             typologie=slot.target_typologie,
             surface_m2=sum(r.surface_m2 for r in rooms),
-            polygon_xy=[(x, y) for x, y in list(slot.polygon.exterior.coords)[:-1]],
+            polygon_xy=list(slot.polygon.exterior.coords)[:-1],
             orientation=slot.orientations,
             template_id=template.id,
             rooms=rooms, walls=walls, openings=openings,

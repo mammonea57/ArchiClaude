@@ -1,11 +1,19 @@
-import pytest
-from core.building_model.schemas import (
-    BuildingModel, Metadata, Site, Envelope, Core, Escalier, Facade,
-    ToitureConfig, ToitureType, ConformiteCheck,
-)
-from core.building_model.validator import validate_plu, validate_all
+from datetime import UTC, datetime
 from uuid import uuid4
-from datetime import datetime, UTC
+
+from core.building_model.schemas import (
+    BuildingModel,
+    ConformiteCheck,
+    Core,
+    Envelope,
+    Escalier,
+    Facade,
+    Metadata,
+    Site,
+    ToitureConfig,
+    ToitureType,
+)
+from core.building_model.validator import validate_all, validate_plu
 from core.plu.schemas import NumericRules
 
 

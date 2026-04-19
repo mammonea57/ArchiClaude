@@ -1,6 +1,7 @@
-from core.building_model.solver import build_modular_grid, place_core, compute_apartment_slots
-from core.building_model.schemas import Typologie
 from shapely.geometry import Polygon
+
+from core.building_model.schemas import Typologie
+from core.building_model.solver import build_modular_grid, compute_apartment_slots, place_core
 
 
 def test_compute_slots_for_simple_mix():

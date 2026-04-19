@@ -1,5 +1,6 @@
-from core.building_model.solver import build_modular_grid, classify_cells
 from shapely.geometry import Polygon
+
+from core.building_model.solver import build_modular_grid, classify_cells
 
 
 def test_build_modular_grid_rectangular_footprint():

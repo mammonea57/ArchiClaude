@@ -1,11 +1,12 @@
 # apps/backend/tests/unit/test_template_adapter.py
 import json
-import pytest
-from core.templates_library.adapter import TemplateAdapter, FitResult
-from core.templates_library.schemas import Template
-from core.building_model.solver import ApartmentSlot
-from core.building_model.schemas import Typologie
+
 from shapely.geometry import Polygon
+
+from core.building_model.schemas import Typologie
+from core.building_model.solver import ApartmentSlot
+from core.templates_library.adapter import TemplateAdapter
+from core.templates_library.schemas import Template
 
 
 def _load(name: str) -> Template:

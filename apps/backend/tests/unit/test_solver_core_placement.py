@@ -1,5 +1,6 @@
-from core.building_model.solver import build_modular_grid, place_core
 from shapely.geometry import Polygon
+
+from core.building_model.solver import build_modular_grid, place_core
 
 
 def test_place_core_central_for_rectangular_footprint():

@@ -12,7 +12,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-
 # ---------- Enums ----------
 
 class RoomType(str, Enum):

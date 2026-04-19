@@ -1,11 +1,23 @@
-import pytest
-from uuid import uuid4
 from datetime import UTC, datetime
+from uuid import uuid4
+
+import pytest
+from pydantic import ValidationError
 
 from core.building_model.schemas import (
-    BuildingModel, Metadata, Site, Envelope, Core, Niveau, Cellule, Room, Wall,
-    Opening, Facade, ToitureConfig, Escalier, Ascenseur, RoomType, WallType,
-    CelluleType, Typologie, OpeningType,
+    BuildingModel,
+    Core,
+    Envelope,
+    Escalier,
+    Facade,
+    Metadata,
+    Opening,
+    OpeningType,
+    Room,
+    RoomType,
+    Site,
+    ToitureConfig,
+    Wall,
 )
 
 
@@ -69,7 +81,7 @@ def test_room_type_enum_accepts_known_values():
 
 
 def test_wall_type_enum_rejects_unknown():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Wall(
             id="w1",
             type="wall_de_bouilli",  # not a valid WallType

@@ -7,7 +7,8 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID  # noqa: N811
+from sqlalchemy.dialects.postgresql import JSONB  # noqa: N811
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base

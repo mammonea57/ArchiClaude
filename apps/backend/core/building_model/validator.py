@@ -5,10 +5,20 @@ aggregates all of them into ConformiteCheck.
 """
 from __future__ import annotations
 
+from shapely.geometry import LineString, Point
+from shapely.geometry import Polygon as ShapelyPolygon
+
 from core.building_model.schemas import (
-    BuildingModel, Cellule, CelluleType, ConformiteAlert, Niveau, OpeningType,
-    Room, RoomType,
+    BuildingModel,
+    Cellule,
+    CelluleType,
+    ConformiteAlert,
+    ConformiteCheck,
+    Niveau,
+    OpeningType,
+    RoomType,
 )
+from core.plu.schemas import NumericRules
 
 _PMR_PASSAGE_MIN_CM = 80
 _PMR_ROTATION_DIAMETER_CM = 150  # cercle de rotation fauteuil
@@ -21,25 +31,24 @@ def validate_pmr(cellule: Cellule) -> list[ConformiteAlert]:
 
     # 1. Passage min 80cm for all doors
     for op in cellule.openings:
-        if op.type in (OpeningType.PORTE_ENTREE, OpeningType.PORTE_INTERIEURE):
-            if op.width_cm < _PMR_PASSAGE_MIN_CM:
-                alerts.append(ConformiteAlert(
-                    level="error", category="pmr",
-                    message=f"Passage {op.width_cm}cm < 80cm (norme PMR)",
-                    affected_element_id=op.id,
-                ))
+        if op.type in (OpeningType.PORTE_ENTREE, OpeningType.PORTE_INTERIEURE) and op.width_cm < _PMR_PASSAGE_MIN_CM:
+            alerts.append(ConformiteAlert(
+                level="error", category="pmr",
+                message=f"Passage {op.width_cm}cm < 80cm (norme PMR)",
+                affected_element_id=op.id,
+            ))
 
     # 2. Rotation cercle 150cm dans chaque pièce de vie
+    _piece_vie = {RoomType.SEJOUR, RoomType.SEJOUR_CUISINE,
+                  RoomType.CHAMBRE_PARENTS, RoomType.CHAMBRE_ENFANT,
+                  RoomType.SDB, RoomType.CUISINE}
     for room in cellule.rooms:
-        if room.type in {RoomType.SEJOUR, RoomType.SEJOUR_CUISINE,
-                         RoomType.CHAMBRE_PARENTS, RoomType.CHAMBRE_ENFANT,
-                         RoomType.SDB, RoomType.CUISINE}:
-            if not _can_inscribe_circle(room.polygon_xy, _PMR_ROTATION_DIAMETER_CM / 100.0):
-                alerts.append(ConformiteAlert(
-                    level="warning", category="pmr",
-                    message=f"Rotation cercle 150cm non inscriptible dans {room.label_fr}",
-                    affected_element_id=room.id,
-                ))
+        if room.type in _piece_vie and not _can_inscribe_circle(room.polygon_xy, _PMR_ROTATION_DIAMETER_CM / 100.0):
+            alerts.append(ConformiteAlert(
+                level="warning", category="pmr",
+                message=f"Rotation cercle 150cm non inscriptible dans {room.label_fr}",
+                affected_element_id=room.id,
+            ))
 
     return alerts
 
@@ -60,17 +69,13 @@ def _can_inscribe_circle(polygon: list[tuple[float, float]], diameter_m: float) 
 def validate_pmr_building(bm: BuildingModel) -> list[ConformiteAlert]:
     """Validate PMR rules that require the whole building (e.g. ascenseur)."""
     alerts: list[ConformiteAlert] = []
-    if bm.envelope.niveaux - 1 >= _PMR_ASCENSEUR_REQUIRED_FROM_NIVEAU:
-        if bm.core.ascenseur is None:
-            alerts.append(ConformiteAlert(
-                level="error", category="pmr",
-                message=f"Ascenseur requis pour R+{bm.envelope.niveaux - 1} (obligation PMR ≥R+2)",
-            ))
+    if bm.envelope.niveaux - 1 >= _PMR_ASCENSEUR_REQUIRED_FROM_NIVEAU and bm.core.ascenseur is None:
+        alerts.append(ConformiteAlert(
+            level="error", category="pmr",
+            message=f"Ascenseur requis pour R+{bm.envelope.niveaux - 1} (obligation PMR ≥R+2)",
+        ))
     return alerts
 
-
-from shapely.geometry import Point, Polygon as ShapelyPolygon, LineString
-from core.building_model.schemas import Niveau, OpeningType
 
 _INCENDIE_DISTANCE_MAX_M = 25.0
 _CIRCULATION_LARGEUR_MIN_CM = 140  # PMR
@@ -191,10 +196,6 @@ def validate_incendie_niveau(niveau: Niveau) -> list[ConformiteAlert]:
     return alerts
 
 
-from core.plu.schemas import NumericRules
-from core.building_model.schemas import ConformiteCheck
-
-
 def validate_plu(bm: BuildingModel, rules: NumericRules) -> list[ConformiteAlert]:
     """Validate PLU constraints against computed building."""
     alerts: list[ConformiteAlert] = []
@@ -210,12 +211,11 @@ def validate_plu(bm: BuildingModel, rules: NumericRules) -> list[ConformiteAlert
             ))
 
     # Hauteur
-    if rules.hauteur_max_m is not None:
-        if bm.envelope.hauteur_totale_m > rules.hauteur_max_m:
-            alerts.append(ConformiteAlert(
-                level="error", category="plu",
-                message=f"PLU hauteur {bm.envelope.hauteur_totale_m}m > max {rules.hauteur_max_m}m",
-            ))
+    if rules.hauteur_max_m is not None and bm.envelope.hauteur_totale_m > rules.hauteur_max_m:
+        alerts.append(ConformiteAlert(
+            level="error", category="plu",
+            message=f"PLU hauteur {bm.envelope.hauteur_totale_m}m > max {rules.hauteur_max_m}m",
+        ))
     if rules.hauteur_max_niveaux is not None:
         # niveaux=4 means R+3
         r_plus = bm.envelope.niveaux - 1

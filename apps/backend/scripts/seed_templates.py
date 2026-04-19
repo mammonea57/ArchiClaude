@@ -50,7 +50,7 @@ async def seed() -> None:
     openai_client = None
 
     if use_mock:
-        print("WARNING: OPENAI_API_KEY not set, using zero-mock embeddings")
+        print("WARNING: OPENAI_API_KEY not set, using zero-mock embeddings")  # noqa: T201
     else:
         from openai import OpenAI  # imported lazily so the module loads without the key
         openai_client = OpenAI(api_key=api_key)
@@ -65,11 +65,11 @@ async def seed() -> None:
 
     seed_files = sorted(SEED_DIR.glob("*.json"))
     if not seed_files:
-        print(f"No seed files found in {SEED_DIR}")
+        print(f"No seed files found in {SEED_DIR}")  # noqa: T201
         await engine.dispose()
         return
 
-    print(f"Found {len(seed_files)} seed file(s): {[f.name for f in seed_files]}")
+    print(f"Found {len(seed_files)} seed file(s): {[f.name for f in seed_files]}")  # noqa: T201
 
     async with session_factory() as session:
         for path in seed_files:
@@ -110,12 +110,12 @@ async def seed() -> None:
                 )
             )
             await session.execute(stmt)
-            print(f"  Upserted template '{template_id}' ({typologie})")
+            print(f"  Upserted template '{template_id}' ({typologie})")  # noqa: T201
 
         await session.commit()
 
     await engine.dispose()
-    print("Done.")
+    print("Done.")  # noqa: T201
 
 
 if __name__ == "__main__":

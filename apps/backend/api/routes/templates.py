@@ -6,7 +6,6 @@ from db.models.templates import TemplateRow
 from db.session import SessionDep
 from schemas.template_api import TemplateOut, TemplatesListOut
 
-
 router = APIRouter(prefix="/templates", tags=["templates"])
 
 

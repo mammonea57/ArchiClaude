@@ -1,14 +1,14 @@
 # apps/backend/tests/integration/test_pipeline_e2e.py
 import os
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from uuid import uuid4
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from core.building_model.pipeline import generate_building_model, GenerationInputs
+from core.building_model.pipeline import GenerationInputs, generate_building_model
 from core.feasibility.schemas import Brief
 from core.plu.schemas import NumericRules
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY") or not os.environ.get("RUN_INTEGRATION_TESTS"),

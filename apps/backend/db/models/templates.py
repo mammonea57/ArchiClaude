@@ -8,7 +8,8 @@ from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID  # noqa: N811
+from sqlalchemy.dialects.postgresql import JSONB  # noqa: N811
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base

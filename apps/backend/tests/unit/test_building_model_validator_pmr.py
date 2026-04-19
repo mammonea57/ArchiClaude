@@ -1,12 +1,29 @@
+from datetime import UTC, datetime
+from uuid import uuid4
+
 import pytest
+
 from core.building_model.schemas import (
-    BuildingModel, Opening, OpeningType, Room, RoomType, Wall, WallType, Cellule,
-    CelluleType, Typologie, Niveau, Metadata, Site, Envelope, Core, Escalier,
-    Facade, ToitureConfig, ToitureType, Ascenseur,
+    BuildingModel,
+    Cellule,
+    CelluleType,
+    Core,
+    Envelope,
+    Escalier,
+    Facade,
+    Metadata,
+    Opening,
+    OpeningType,
+    Room,
+    RoomType,
+    Site,
+    ToitureConfig,
+    ToitureType,
+    Typologie,
+    Wall,
+    WallType,
 )
 from core.building_model.validator import validate_pmr
-from uuid import uuid4
-from datetime import datetime, UTC
 
 
 def _sample_appt_with_passage(passage_cm: int) -> Cellule:

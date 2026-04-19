@@ -16,7 +16,6 @@ from db.models.projects import ProjectRow
 from db.session import SessionDep
 from schemas.building_model_api import BuildingModelCreate, BuildingModelOut, BuildingModelVersionsOut
 
-
 router = APIRouter(prefix="/projects/{project_id}/building_model", tags=["building_model"])
 
 

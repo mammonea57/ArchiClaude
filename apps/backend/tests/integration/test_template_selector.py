@@ -3,12 +3,12 @@ import os
 
 import pytest
 import pytest_asyncio
+from shapely.geometry import Polygon
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.building_model.schemas import Typologie
 from core.building_model.solver import ApartmentSlot
 from core.templates_library.selector import TemplateSelector
-from shapely.geometry import Polygon
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY") or not os.environ.get("RUN_INTEGRATION_TESTS"),
@@ -28,7 +28,7 @@ async def test_selector_returns_compatible_template_for_t3(session: AsyncSession
     result = await selector.select_for_slot(slot)
     assert result is not None
     assert result.template.typologie == "T3"
-    assert 60 <= result.template.surface_shab_range[0]
+    assert result.template.surface_shab_range[0] >= 60
 
 
 @pytest.mark.asyncio
@@ -47,7 +47,7 @@ async def test_selector_returns_none_for_impossible_typo(session: AsyncSession):
 
 @pytest_asyncio.fixture
 async def session():
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     engine = create_async_engine(
         "postgresql+asyncpg://archiclaude:archiclaude@localhost:5432/archiclaude"
     )

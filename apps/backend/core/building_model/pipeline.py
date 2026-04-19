@@ -6,16 +6,31 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from shapely.geometry import Polygon as ShapelyPolygon, shape
+from shapely.geometry import shape
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.building_model.schemas import (
-    BuildingModel, Cellule, CelluleType, Core, Envelope, Escalier, Facade,
-    Metadata, Niveau, Site, ToitureConfig, ToitureType, Typologie,
-    Circulation, Ascenseur,
+    Ascenseur,
+    BuildingModel,
+    Cellule,
+    CelluleType,
+    Circulation,
+    Core,
+    Envelope,
+    Escalier,
+    Facade,
+    Metadata,
+    Niveau,
+    Site,
+    ToitureConfig,
+    ToitureType,
+    Typologie,
 )
 from core.building_model.solver import (
-    build_modular_grid, classify_cells, compute_apartment_slots, place_core,
+    build_modular_grid,
+    classify_cells,
+    compute_apartment_slots,
+    place_core,
 )
 from core.building_model.validator import validate_all
 from core.feasibility.schemas import Brief
@@ -87,7 +102,7 @@ async def generate_building_model(
                 type=CelluleType.COMMERCE,
                 typologie=None,
                 surface_m2=usable.area,
-                polygon_xy=[(x, y) for x, y in list(usable.exterior.coords)[:-1]] if hasattr(usable, 'exterior') else [],
+                polygon_xy=list(usable.exterior.coords)[:-1] if hasattr(usable, 'exterior') else [],
                 orientation=inputs.voirie_orientations,
             ))
         else:
@@ -102,7 +117,7 @@ async def generate_building_model(
 
         circ = Circulation(
             id=f"palier_R{idx}",
-            polygon_xy=[(x, y) for x, y in list(core.polygon.exterior.coords)[:-1]],
+            polygon_xy=list(core.polygon.exterior.coords)[:-1],
             surface_m2=core.polygon.area * 0.3,
             largeur_min_cm=140,
         )
