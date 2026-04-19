@@ -124,3 +124,24 @@ export function roomLabelShort(type: string): string {
   };
   return SHORT[type] ?? roomLabelFr(type);
 }
+
+/** Tiny-room abbreviation for labels that must fit in ~1m widths. */
+export function roomLabelTiny(type: string): string {
+  const TINY: Record<string, string> = {
+    entree: "Entr.",
+    sejour: "Séj.",
+    sejour_cuisine: "Séj.",
+    cuisine: "Cuis.",
+    sdb: "SdB",
+    salle_de_douche: "SdD",
+    wc: "WC",
+    wc_sdb: "WC",
+    chambre_parents: "Ch.P",
+    chambre_enfant: "Ch.E",
+    chambre_supp: "Ch.",
+    cellier: "Cel.",
+    placard_technique: "Plac.",
+    loggia: "Log.",
+  };
+  return TINY[type] ?? type.slice(0, 4);
+}

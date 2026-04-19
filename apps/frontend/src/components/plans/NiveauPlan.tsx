@@ -10,14 +10,14 @@ import type {
 } from "@/lib/types";
 import {
   bboxOf, makeProjector, polygonCentroid, ringToPath,
-  roomLabelFr, roomLabelShort,
+  roomLabelFr, roomLabelShort, roomLabelTiny,
   type Coord,
 } from "./plan-utils";
 import { PlanPatterns, NorthArrow, ScaleBar, TitleBlock } from "./plan-patterns";
 import {
-  Sofa3p, Armchair, CoffeeTable, DiningTable, TvUnit,
+  Sofa3p, DiningTable,
   Bed, Wardrobe, Desk,
-  KitchenLinear, KitchenIsland,
+  KitchenLinear,
   Bathtub, ShowerStall, Washbasin, Toilet,
   StorageUnit,
   PatioTable, PottedPlant,
@@ -365,23 +365,66 @@ function OpeningMark({
 }
 
 function RoomLabel({ room, scale, project }: { room: BuildingModelRoom; scale: number; project: (c: Coord) => Coord }) {
+  const bbox = bboxOf(room.polygon_xy);
+  if (!bbox) return null;
   const [cxw, cyw] = polygonCentroid(room.polygon_xy);
   const [cx, cy] = project([cxw, cyw]);
-  const bbox = bboxOf(room.polygon_xy);
-  const projectedW = bbox ? (bbox.maxx - bbox.minx) * scale : 80;
-  const useShort = projectedW < 110;
-  const label = useShort ? roomLabelShort(room.type) : roomLabelFr(room.type, room.label_fr);
-  const surface = room.surface_m2.toFixed(2).replace(".", ",");
+  const widthPx = (bbox.maxx - bbox.minx) * scale;
+  const depthPx = (bbox.maxy - bbox.miny) * scale;
 
-  // Label anchored near room centroid, offset down away from furniture
+  // Decide labeling strategy based on room pixel dimensions
+  const rotate = widthPx < 60 && depthPx > widthPx * 1.4;
+  const longDim = rotate ? depthPx : widthPx;
+
+  let label: string;
+  let fontSize: number;
+  let showSurface: boolean;
+
+  if (longDim < 55) {
+    label = roomLabelTiny(room.type);
+    fontSize = 7.5;
+    showSurface = false;
+  } else if (longDim < 100) {
+    label = roomLabelTiny(room.type);
+    fontSize = 9;
+    showSurface = room.surface_m2 > 6;
+  } else if (longDim < 150) {
+    label = roomLabelShort(room.type);
+    fontSize = 10;
+    showSurface = true;
+  } else {
+    label = roomLabelFr(room.type, room.label_fr);
+    fontSize = 11;
+    showSurface = true;
+  }
+
+  const surface = room.surface_m2.toFixed(1).replace(".", ",");
+  const transform = rotate ? `rotate(-90 ${cx} ${cy})` : undefined;
+  const dy = fontSize <= 8 ? 0 : 2;
+
   return (
-    <g style={{ pointerEvents: "none" }}>
-      <text x={cx} y={cy + (scale > 35 ? 22 : 14)} textAnchor="middle" fontSize={11} fontWeight={600} fill="#0f172a">
+    <g style={{ pointerEvents: "none" }} transform={transform}>
+      <text
+        x={cx}
+        y={cy + dy}
+        textAnchor="middle"
+        fontSize={fontSize}
+        fontWeight={600}
+        fill="#0f172a"
+      >
         {label}
       </text>
-      <text x={cx} y={cy + (scale > 35 ? 36 : 26)} textAnchor="middle" fontSize={9.5} fill="#475569">
-        {surface} m²
-      </text>
+      {showSurface && (
+        <text
+          x={cx}
+          y={cy + dy + fontSize + 1}
+          textAnchor="middle"
+          fontSize={Math.max(7, fontSize - 1.5)}
+          fill="#475569"
+        >
+          {surface} m²
+        </text>
+      )}
     </g>
   );
 }
@@ -410,76 +453,71 @@ function FurnitureInRoom({
   const widthM = bbox.maxx - bbox.minx;
   const depthM = bbox.maxy - bbox.miny;
   if (widthM < 1.2 || depthM < 1.2) return null;
+  // Skip furniture entirely if the rendered room is less than ~40px — labels
+  // take priority in tiny cells.
+  if (widthM * scale < 40 || depthM * scale < 40) return null;
 
   const [cxw, cyw] = [(bbox.minx + bbox.maxx) / 2, (bbox.miny + bbox.maxy) / 2];
   const [cx, cy] = project([cxw, cyw]);
+  // Projected room half-dimensions (used to offset furniture without spilling)
+  const halfW = (widthM * scale) / 2;
+  const halfH = (depthM * scale) / 2;
 
   // Choose best-fitting furniture based on room size + type
   switch (room.type) {
     case "sejour":
     case "sejour_cuisine": {
-      // For sejour_cuisine, split layout: kitchen + living + dining
-      const showIsland = widthM >= 5.5 && depthM >= 4;
-      const showDining = widthM >= 3.5 && depthM >= 3.5;
+      // Layout planned top-to-bottom without overlap.
+      // Slots are pinned to room edges (1/6, 3/6, 5/6 of depth) so each piece
+      // has its own band whatever the room size.
+      const hasKitchen = room.type === "sejour_cuisine" && widthM >= 3.2 && depthM >= 3;
+      const hasDining = widthM >= 3.2 && depthM >= 3.5;
+      const hasSofaSet = widthM >= 2.5 && depthM >= 2.8;
+      // Bands: kitchen (top), sofa (upper-middle), dining (lower)
+      const topY = cy - halfH + 0.18 * halfH * 2;
+      const midY = cy - halfH + 0.50 * halfH * 2;
+      const bottomY = cy - halfH + 0.82 * halfH * 2;
       return (
         <g style={{ pointerEvents: "none" }}>
-          {/* TV unit at top */}
-          {depthM >= 4 && (
-            <g transform={`translate(${cx}, ${cy - (depthM * scale) * 0.36})`}>
-              <TvUnit scale={scale} />
+          {hasKitchen && (
+            <g transform={`translate(${cx}, ${topY})`}>
+              <KitchenLinear scale={scale} lengthCm={Math.min(widthM * 80, 300)} />
             </g>
           )}
-          {/* Sofa below TV */}
-          <g transform={`translate(${cx}, ${cy - (depthM * scale) * 0.18})`}>
-            <Sofa3p scale={scale} />
-          </g>
-          {/* Coffee table */}
-          <g transform={`translate(${cx}, ${cy + (depthM * scale) * 0.02})`}>
-            <CoffeeTable scale={scale} />
-          </g>
-          {/* Armchair */}
-          {widthM > 4.5 && (
-            <g transform={`translate(${cx + (widthM * scale) * 0.3}, ${cy - (depthM * scale) * 0.02})`}>
-              <Armchair scale={scale} />
+          {hasSofaSet && (
+            <g transform={`translate(${cx}, ${midY})`}>
+              <Sofa3p scale={scale} />
             </g>
           )}
-          {/* Dining / kitchen side */}
-          {showDining && (
-            <g transform={`translate(${cx}, ${cy + (depthM * scale) * 0.22})`}>
-              <DiningTable scale={scale} seats={widthM >= 5 ? 6 : 4} />
-            </g>
-          )}
-          {showIsland && (
-            <g transform={`translate(${cx}, ${cy + (depthM * scale) * 0.4})`}>
-              <KitchenIsland scale={scale} />
+          {hasDining && (
+            <g transform={`translate(${cx}, ${bottomY})`}>
+              <DiningTable scale={scale} seats={widthM >= 4.5 ? 6 : 4} />
             </g>
           )}
         </g>
       );
     }
     case "cuisine": {
-      // Linear kitchen against top wall
-      const lenCm = Math.min(widthM * 100 * 0.88, 360);
+      // Linear kitchen against one wall, scaled to room width
+      const lenCm = Math.min(widthM * 85, 300);
       return (
-        <g style={{ pointerEvents: "none" }} transform={`translate(${cx}, ${cy - (depthM * scale) * 0.35})`}>
+        <g style={{ pointerEvents: "none" }} transform={`translate(${cx}, ${cy - halfH * 0.6})`}>
           <KitchenLinear scale={scale} lengthCm={lenCm} />
         </g>
       );
     }
     case "chambre_parents": {
+      // Bed at the façade end (top), wardrobe against the back wall (bottom)
+      const bedY = cy - halfH + 0.35 * 2 * halfH;
+      const wardY = cy - halfH + 0.85 * 2 * halfH;
       return (
         <g style={{ pointerEvents: "none" }}>
-          <g transform={`translate(${cx}, ${cy - (depthM * scale) * 0.15})`}>
-            <Bed scale={scale} size="queen" />
+          <g transform={`translate(${cx}, ${bedY})`}>
+            <Bed scale={scale} size={widthM >= 3 ? "queen" : "double"} />
           </g>
-          {widthM > 3.5 && (
-            <g transform={`translate(${cx - (widthM * scale) * 0.35}, ${cy + (depthM * scale) * 0.3})`}>
-              <Wardrobe scale={scale} widthCm={220} />
-            </g>
-          )}
-          {widthM > 4 && (
-            <g transform={`translate(${cx + (widthM * scale) * 0.3}, ${cy + (depthM * scale) * 0.3})`}>
-              <Desk scale={scale} />
+          {widthM >= 2.5 && depthM >= 3.5 && (
+            <g transform={`translate(${cx}, ${wardY})`}>
+              <Wardrobe scale={scale} widthCm={Math.min(widthM * 80, 220)} />
             </g>
           )}
         </g>
@@ -487,32 +525,52 @@ function FurnitureInRoom({
     }
     case "chambre_enfant":
     case "chambre_supp": {
+      const bedY = cy - halfH + 0.38 * 2 * halfH;
+      const deskY = cy - halfH + 0.85 * 2 * halfH;
       return (
         <g style={{ pointerEvents: "none" }}>
-          <g transform={`translate(${cx - (widthM * scale) * 0.15}, ${cy - (depthM * scale) * 0.15})`}>
-            <Bed scale={scale} size={widthM > 3 ? "double" : "single"} />
+          <g transform={`translate(${cx}, ${bedY})`}>
+            <Bed scale={scale} size={widthM >= 2.8 ? "double" : "single"} />
           </g>
-          <g transform={`translate(${cx + (widthM * scale) * 0.3}, ${cy + (depthM * scale) * 0.25})`}>
-            <Desk scale={scale} />
-          </g>
-          <g transform={`translate(${cx + (widthM * scale) * 0.3}, ${cy - (depthM * scale) * 0.3})`}>
-            <Wardrobe scale={scale} widthCm={120} />
-          </g>
+          {depthM >= 3.2 && (
+            <g transform={`translate(${cx}, ${deskY})`}>
+              <Desk scale={scale} />
+            </g>
+          )}
         </g>
       );
     }
     case "sdb":
     case "wc_sdb": {
+      // Bathtub on the long wall, washbasin + toilet on opposite side
+      const isPortrait = depthM >= widthM;
+      if (isPortrait) {
+        return (
+          <g style={{ pointerEvents: "none" }}>
+            <g transform={`translate(${cx}, ${cy - halfH * 0.55}) rotate(90)`}>
+              <Bathtub scale={scale} />
+            </g>
+            <g transform={`translate(${cx}, ${cy + halfH * 0.2})`}>
+              <Washbasin scale={scale} />
+            </g>
+            {room.type === "wc_sdb" && (
+              <g transform={`translate(${cx}, ${cy + halfH * 0.75})`}>
+                <Toilet scale={scale} />
+              </g>
+            )}
+          </g>
+        );
+      }
       return (
         <g style={{ pointerEvents: "none" }}>
-          <g transform={`translate(${cx - (widthM * scale) * 0.15}, ${cy - (depthM * scale) * 0.15})`}>
+          <g transform={`translate(${cx - halfW * 0.55}, ${cy})`}>
             <Bathtub scale={scale} />
           </g>
-          <g transform={`translate(${cx + (widthM * scale) * 0.3}, ${cy - (depthM * scale) * 0.25})`}>
+          <g transform={`translate(${cx + halfW * 0.45}, ${cy - halfH * 0.35})`}>
             <Washbasin scale={scale} />
           </g>
           {room.type === "wc_sdb" && (
-            <g transform={`translate(${cx + (widthM * scale) * 0.3}, ${cy + (depthM * scale) * 0.25})`}>
+            <g transform={`translate(${cx + halfW * 0.45}, ${cy + halfH * 0.45})`}>
               <Toilet scale={scale} />
             </g>
           )}
@@ -520,12 +578,25 @@ function FurnitureInRoom({
       );
     }
     case "salle_de_douche": {
+      const isPortrait = depthM >= widthM;
+      if (isPortrait) {
+        return (
+          <g style={{ pointerEvents: "none" }}>
+            <g transform={`translate(${cx}, ${cy - halfH * 0.45})`}>
+              <ShowerStall scale={scale} />
+            </g>
+            <g transform={`translate(${cx}, ${cy + halfH * 0.5})`}>
+              <Washbasin scale={scale} />
+            </g>
+          </g>
+        );
+      }
       return (
         <g style={{ pointerEvents: "none" }}>
-          <g transform={`translate(${cx - (widthM * scale) * 0.2}, ${cy})`}>
+          <g transform={`translate(${cx - halfW * 0.45}, ${cy})`}>
             <ShowerStall scale={scale} />
           </g>
-          <g transform={`translate(${cx + (widthM * scale) * 0.25}, ${cy - (depthM * scale) * 0.2})`}>
+          <g transform={`translate(${cx + halfW * 0.45}, ${cy})`}>
             <Washbasin scale={scale} />
           </g>
         </g>
@@ -541,7 +612,7 @@ function FurnitureInRoom({
     case "cellier":
     case "placard_technique": {
       return (
-        <g style={{ pointerEvents: "none" }} transform={`translate(${cx}, ${cy - (depthM * scale) * 0.3})`}>
+        <g style={{ pointerEvents: "none" }} transform={`translate(${cx}, ${cy - halfH * 0.5})`}>
           <StorageUnit scale={scale} widthCm={widthM * 80} depthCm={40} />
         </g>
       );
