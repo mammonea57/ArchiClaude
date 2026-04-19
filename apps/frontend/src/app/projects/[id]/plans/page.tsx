@@ -4,6 +4,7 @@ import { use } from "react";
 import Link from "next/link";
 import { ArrowLeft, Download } from "lucide-react";
 import { useBuildingModel } from "@/lib/hooks/useBuildingModel";
+import { useFeasibility } from "@/lib/hooks/useFeasibility";
 import { NiveauPlan } from "@/components/plans/NiveauPlan";
 import { PlanMasse } from "@/components/plans/PlanMasse";
 import { CoupeElevation } from "@/components/plans/CoupeElevation";
@@ -11,9 +12,23 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+/** Extract "80" from "80 Rue des Héros Nogentais 94130 Nogent-sur-Marne". */
+function deriveNumber(address: string): string {
+  const m = address.match(/^\s*(\d+[a-zA-Z]?(?:\s?bis|\s?ter)?)\s/);
+  return m?.[1] ?? "—";
+}
+
+/** Extract "Rue des Héros Nogentais" from the full address. */
+function deriveStreetName(address: string): string {
+  const m = address.match(/^\s*\d+[a-zA-Z]?(?:\s?bis|\s?ter)?\s+(.+?)(?:\s+\d{5}|\s*,|$)/);
+  return m?.[1] ?? address;
+}
+
 export default function PlansPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { buildingModel, loading, error, notFound } = useBuildingModel(id);
+  const { project } = useFeasibility(id);
+  const addressForPlan = project?.name ?? buildingModel?.model_json?.metadata?.address ?? "";
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -99,7 +114,13 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
                     </a>
                   </div>
                   <div className="p-4 flex justify-center bg-slate-50">
-                    <PlanMasse bm={buildingModel.model_json} width={760} height={480} />
+                    <PlanMasse
+                      bm={buildingModel.model_json}
+                      width={820}
+                      height={540}
+                      streetName={deriveStreetName(addressForPlan)}
+                      buildingNumber={deriveNumber(addressForPlan)}
+                    />
                   </div>
                 </div>
               </TabsContent>
@@ -128,7 +149,17 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
                           </a>
                         </div>
                         <div className="p-3 flex justify-center bg-slate-50">
-                          <NiveauPlan niveau={niv} width={580} height={360} />
+                          <NiveauPlan
+                            niveau={niv}
+                            corePosition={buildingModel.model_json.core.position_xy}
+                            coreSurfaceM2={buildingModel.model_json.core.surface_m2}
+                            hasAscenseur={!!buildingModel.model_json.core.ascenseur}
+                            voirieSide={buildingModel.model_json.site.voirie_orientations?.[0] ?? "sud"}
+                            isRdc={niv.index === 0}
+                            width={620}
+                            height={400}
+                            northAngleDeg={buildingModel.model_json.site.north_angle_deg ?? 0}
+                          />
                         </div>
                       </div>
                     );

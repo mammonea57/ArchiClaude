@@ -9,6 +9,8 @@ interface PlanMasseProps {
   width?: number;
   height?: number;
   projectName?: string;
+  streetName?: string;
+  buildingNumber?: string;
 }
 
 /**
@@ -23,7 +25,11 @@ interface PlanMasseProps {
  *  7. Trees along perimeter
  *  8. Compass, scale bar, cartouche, labels
  */
-export function PlanMasse({ bm, width = 880, height = 620, projectName }: PlanMasseProps) {
+export function PlanMasse({
+  bm, width = 880, height = 620, projectName,
+  streetName = "Rue des Héros Nogentais",
+  buildingNumber = "80",
+}: PlanMasseProps) {
   const parcelle = coordsFromGeoJSON(bm.site?.parcelle_geojson);
   const footprint = coordsFromGeoJSON(bm.envelope?.footprint_geojson);
 
@@ -75,6 +81,7 @@ export function PlanMasse({ bm, width = 880, height = 620, projectName }: PlanMa
         expanded={expanded}
         project={project}
         thicknessM={6}
+        streetName={streetName}
       />
 
       {/* Neighbor plots hint (soft rectangles) */}
@@ -114,16 +121,19 @@ export function PlanMasse({ bm, width = 880, height = 620, projectName }: PlanMa
         </g>
       )}
 
-      {/* Building footprint with shadow + roof */}
+      {/* Building footprint with shadow + roof + level count + number */}
       {footprint.length >= 3 && (
         <g>
-          {/* Shadow */}
-          <path
-            d={ringToPath(footprint, project)}
-            fill="#0f172a"
-            opacity={0.2}
-            transform="translate(3, 5)"
-          />
+          {/* Shadow — projected per floor to show volume */}
+          {Array.from({ length: Math.min(bm.envelope.niveaux, 6) }).map((_, i) => (
+            <path
+              key={i}
+              d={ringToPath(footprint, project)}
+              fill="#0f172a"
+              opacity={0.055}
+              transform={`translate(${1.3 * (i + 1)}, ${2.2 * (i + 1)})`}
+            />
+          ))}
           {/* Footprint base */}
           <path
             d={ringToPath(footprint, project)}
@@ -131,11 +141,22 @@ export function PlanMasse({ bm, width = 880, height = 620, projectName }: PlanMa
             stroke="#1c1917"
             strokeWidth={2.2}
             strokeLinejoin="miter"
+            filter="url(#fx-shadow)"
           />
-          {/* Roof indication — diagonal lines */}
+          {/* Roof indication — cross pattern */}
           <RoofDiagonals footprint={footprint} project={project} />
           {/* Core marker */}
           <CoreMarker core={bm.core} project={project} scale={scale} />
+          {/* Level count badge */}
+          <LevelBadge footprint={footprint} project={project} niveaux={bm.envelope.niveaux} />
+          {/* Building entrance number on street side */}
+          <EntranceNumber
+            footprint={footprint}
+            voirieSide={voirieSide}
+            project={project}
+            number={buildingNumber}
+            corePosition={bm.core.position_xy}
+          />
         </g>
       )}
 
@@ -184,6 +205,54 @@ export function PlanMasse({ bm, width = 880, height = 620, projectName }: PlanMa
 }
 
 function VoirieStrip({
+  voirieSide, expanded, project, thicknessM, streetName,
+}: {
+  voirieSide: string;
+  expanded: { minx: number; miny: number; maxx: number; maxy: number };
+  project: (c: Coord) => Coord;
+  thicknessM: number;
+  streetName: string;
+}) {
+  const e = expanded;
+  let band: Coord[];
+  let labelPos: Coord;
+  let labelRotation = 0;
+  if (voirieSide === "sud") {
+    band = [[e.minx, e.miny], [e.maxx, e.miny], [e.maxx, e.miny + thicknessM], [e.minx, e.miny + thicknessM]];
+    labelPos = [(e.minx + e.maxx) / 2, e.miny + thicknessM / 2];
+  } else if (voirieSide === "nord") {
+    band = [[e.minx, e.maxy - thicknessM], [e.maxx, e.maxy - thicknessM], [e.maxx, e.maxy], [e.minx, e.maxy]];
+    labelPos = [(e.minx + e.maxx) / 2, e.maxy - thicknessM / 2];
+  } else if (voirieSide === "est") {
+    band = [[e.maxx - thicknessM, e.miny], [e.maxx, e.miny], [e.maxx, e.maxy], [e.maxx - thicknessM, e.maxy]];
+    labelPos = [e.maxx - thicknessM / 2, (e.miny + e.maxy) / 2];
+    labelRotation = -90;
+  } else {
+    band = [[e.minx, e.miny], [e.minx + thicknessM, e.miny], [e.minx + thicknessM, e.maxy], [e.minx, e.maxy]];
+    labelPos = [e.minx + thicknessM / 2, (e.miny + e.maxy) / 2];
+    labelRotation = -90;
+  }
+  const d = ringToPath(band, project);
+  const [lx, ly] = project(labelPos);
+  return (
+    <g>
+      <path d={d} fill="url(#pat-road)" />
+      {/* Center line stripes */}
+      <path d={d} fill="none" stroke="white" strokeWidth={1.2} strokeDasharray="14 10" strokeOpacity={0.75} />
+      {/* Sidewalk line on building side */}
+      <SidewalkLine voirieSide={voirieSide} expanded={expanded} project={project} thicknessM={thicknessM} />
+      {/* Street name label in CAPS */}
+      <g transform={`translate(${lx}, ${ly}) rotate(${labelRotation})`}>
+        <rect x={-70} y={-8} width={140} height={14} fill="#1c1917" opacity={0.6} rx={2} />
+        <text y={3} textAnchor="middle" fontSize={10} fontWeight={700} fill="white" letterSpacing="1.2">
+          {streetName.toUpperCase()}
+        </text>
+      </g>
+    </g>
+  );
+}
+
+function SidewalkLine({
   voirieSide, expanded, project, thicknessM,
 }: {
   voirieSide: string;
@@ -191,26 +260,20 @@ function VoirieStrip({
   project: (c: Coord) => Coord;
   thicknessM: number;
 }) {
-  // Build a thick band on the voirie side
   const e = expanded;
-  let band: Coord[];
+  let p0: Coord, p1: Coord;
   if (voirieSide === "sud") {
-    band = [[e.minx, e.miny], [e.maxx, e.miny], [e.maxx, e.miny + thicknessM], [e.minx, e.miny + thicknessM]];
+    p0 = [e.minx, e.miny + thicknessM]; p1 = [e.maxx, e.miny + thicknessM];
   } else if (voirieSide === "nord") {
-    band = [[e.minx, e.maxy - thicknessM], [e.maxx, e.maxy - thicknessM], [e.maxx, e.maxy], [e.minx, e.maxy]];
+    p0 = [e.minx, e.maxy - thicknessM]; p1 = [e.maxx, e.maxy - thicknessM];
   } else if (voirieSide === "est") {
-    band = [[e.maxx - thicknessM, e.miny], [e.maxx, e.miny], [e.maxx, e.maxy], [e.maxx - thicknessM, e.maxy]];
+    p0 = [e.maxx - thicknessM, e.miny]; p1 = [e.maxx - thicknessM, e.maxy];
   } else {
-    band = [[e.minx, e.miny], [e.minx + thicknessM, e.miny], [e.minx + thicknessM, e.maxy], [e.minx, e.maxy]];
+    p0 = [e.minx + thicknessM, e.miny]; p1 = [e.minx + thicknessM, e.maxy];
   }
-  const d = ringToPath(band, project);
-  return (
-    <g>
-      <path d={d} fill="url(#pat-road)" />
-      {/* white center stripe */}
-      <path d={d} fill="none" stroke="white" strokeWidth={1.2} strokeDasharray="14 10" strokeOpacity={0.75} />
-    </g>
-  );
+  const [x0, y0] = project(p0);
+  const [x1, y1] = project(p1);
+  return <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="#1c1917" strokeWidth={1.2} />;
 }
 
 function RoofDiagonals({ footprint, project }: { footprint: Coord[]; project: (c: Coord) => Coord }) {
@@ -250,6 +313,61 @@ function CoreMarker({ core, project, scale }: { core: BuildingModelPayload["core
       <rect x={cx - r * 0.7} y={cy - r * 0.7} width={r * 1.4} height={r * 1.4} fill="#1e293b" opacity={0.7} stroke="#0f172a" strokeWidth={0.7} />
       <text x={cx} y={cy + 3} textAnchor="middle" fontSize={9} fontWeight={700} fill="white">
         N
+      </text>
+    </g>
+  );
+}
+
+function LevelBadge({
+  footprint, project, niveaux,
+}: { footprint: Coord[]; project: (c: Coord) => Coord; niveaux: number }) {
+  const bb = bboxOf(footprint);
+  if (!bb) return null;
+  const [tx, ty] = project([bb.maxx, bb.maxy]);
+  return (
+    <g transform={`translate(${tx - 8}, ${ty + 8})`}>
+      <rect x={-28} y={-10} width={28} height={18} rx={2} fill="#dc2626" stroke="#7f1d1d" strokeWidth={0.6} />
+      <text x={-14} y={3} textAnchor="middle" fontSize={10} fontWeight={700} fill="white">
+        R+{niveaux - 1}
+      </text>
+    </g>
+  );
+}
+
+function EntranceNumber({
+  footprint, voirieSide, project, number, corePosition,
+}: {
+  footprint: Coord[];
+  voirieSide: string;
+  project: (c: Coord) => Coord;
+  number: string;
+  corePosition: [number, number];
+}) {
+  const bb = bboxOf(footprint);
+  if (!bb) return null;
+  // Place entrance symbol on the voirie facade, aligned with the core's x
+  const [cxM] = corePosition;
+  let entryM: Coord;
+  if (voirieSide === "sud") entryM = [cxM, bb.miny];
+  else if (voirieSide === "nord") entryM = [cxM, bb.maxy];
+  else if (voirieSide === "est") entryM = [bb.maxx, corePosition[1]];
+  else entryM = [bb.minx, corePosition[1]];
+  const [ex, ey] = project(entryM);
+  return (
+    <g>
+      {/* Entrance gap */}
+      <rect x={ex - 6} y={ey - 3} width={12} height={6} fill="white" stroke="#b45309" strokeWidth={1} />
+      {/* Number plate */}
+      <circle cx={ex} cy={ey + (voirieSide === "sud" ? 14 : -14)} r={8} fill="white" stroke="#0f172a" strokeWidth={1} />
+      <text
+        x={ex}
+        y={ey + (voirieSide === "sud" ? 17 : -11)}
+        textAnchor="middle"
+        fontSize={10}
+        fontWeight={700}
+        fill="#0f172a"
+      >
+        {number}
       </text>
     </g>
   );

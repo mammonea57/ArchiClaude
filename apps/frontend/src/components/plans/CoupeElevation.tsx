@@ -311,63 +311,117 @@ function FacadeBody({
   parapetPx: number;
   env: BuildingModelPayload["envelope"];
 }) {
-  // Enduit background
   const topStory = stories[stories.length - 1];
   const [xL, yTop] = worldToPx(0, topStory.yBase + topStory.height);
   const [, yBase] = worldToPx(0, 0);
+
   return (
     <g>
-      {/* Enduit wall */}
-      <rect x={xL} y={yTop} width={spanPx} height={yBase - yTop} fill="#eeece1" stroke="#1c1917" strokeWidth={1.4} />
-      {/* enduit horizontal joints */}
-      {Array.from({ length: Math.floor((yBase - yTop) / 26) }).map((_, i) => (
-        <line key={i} x1={xL} y1={yTop + (i + 1) * 26} x2={xL + spanPx} y2={yTop + (i + 1) * 26} stroke="#d6d3d1" strokeWidth={0.3} />
+      {/* Enduit wall base colour */}
+      <rect x={xL} y={yTop} width={spanPx} height={yBase - yTop} fill="#f0eadc" />
+      {/* Plinthe — darker stone band at ground */}
+      <rect x={xL} y={yBase - 0.8 * scale} width={spanPx} height={0.8 * scale} fill="#a8a29e" />
+      {/* Light vertical shadow on right to suggest volume */}
+      <rect x={xL + spanPx - 6} y={yTop} width={6} height={yBase - yTop} fill="#0f172a" opacity={0.08} />
+
+      {/* Enduit horizontal rule lines */}
+      {Array.from({ length: Math.floor((yBase - yTop) / 30) }).map((_, i) => (
+        <line key={i} x1={xL} y1={yTop + (i + 1) * 30} x2={xL + spanPx} y2={yTop + (i + 1) * 30} stroke="#d6d3d1" strokeWidth={0.25} />
       ))}
 
       {/* Windows grid per story */}
       {stories.map((s, i) => {
+        const isRdc = i === 0;
         const nOp = Math.max(3, openingsByStory[i] || 3);
         const cols = Math.min(nOp, Math.max(3, Math.floor(spanPx / 80)));
         const [, yT] = worldToPx(0, s.yBase + s.height);
         const [, yB] = worldToPx(0, s.yBase);
         const storyH = yB - yT;
         const winH = Math.min(storyH * 0.55, env.hauteur_etage_courant_m * 0.55 * scale);
-        const winW = Math.min((spanPx * 0.7) / cols, 90);
+        const winW = Math.min((spanPx * 0.7) / cols, 100);
         const winY = yT + (storyH - winH) / 2;
         const gap = (spanPx - cols * winW) / (cols + 1);
+        const entryCol = Math.floor(cols / 2);
         return (
           <g key={`fa-${i}`}>
             {Array.from({ length: cols }).map((_, c) => {
               const wx = xL + gap + c * (winW + gap);
+              // RDC center = main entrance (glass door instead of window)
+              if (isRdc && c === entryCol) {
+                const doorH = storyH * 0.78;
+                const doorW = winW * 1.1;
+                const doorX = wx - (doorW - winW) / 2;
+                const doorY = yB - doorH;
+                return (
+                  <g key={c}>
+                    {/* canopy */}
+                    <rect x={doorX - 8} y={doorY - 10} width={doorW + 16} height={8} fill="#78716c" stroke="#44403c" strokeWidth={0.5} />
+                    {/* glass door frame */}
+                    <rect x={doorX} y={doorY} width={doorW} height={doorH} fill="#7dd3fc" stroke="#0c4a6e" strokeWidth={1.3} />
+                    {/* vertical mullion */}
+                    <line x1={doorX + doorW / 2} y1={doorY} x2={doorX + doorW / 2} y2={doorY + doorH} stroke="#0c4a6e" strokeWidth={1.1} />
+                    {/* handle */}
+                    <rect x={doorX + doorW * 0.5 - 1} y={doorY + doorH * 0.45} width={2} height={10} fill="#78716c" />
+                    {/* transom */}
+                    <line x1={doorX} y1={doorY + doorH * 0.78} x2={doorX + doorW} y2={doorY + doorH * 0.78} stroke="#0c4a6e" strokeWidth={0.6} />
+                    {/* threshold */}
+                    <rect x={doorX - 4} y={doorY + doorH} width={doorW + 8} height={3} fill="#44403c" />
+                    {/* entry label */}
+                    <text x={doorX + doorW / 2} y={doorY - 14} textAnchor="middle" fontSize={8.5} fontWeight={600} fill="#0c4a6e">
+                      Entrée
+                    </text>
+                  </g>
+                );
+              }
               return (
                 <g key={c}>
-                  {/* Sill */}
-                  <rect x={wx - 2} y={winY + winH} width={winW + 4} height={2} fill="#78716c" />
+                  {/* Allège (sill band) */}
+                  <rect x={wx - 3} y={winY + winH} width={winW + 6} height={3} fill="#a8a29e" stroke="#78716c" strokeWidth={0.4} />
                   {/* Frame */}
-                  <rect x={wx} y={winY} width={winW} height={winH} fill="#bae6fd" stroke="#0c4a6e" strokeWidth={1} />
-                  {/* Glass mullions — 2x2 */}
-                  <line x1={wx + winW / 2} y1={winY} x2={wx + winW / 2} y2={winY + winH} stroke="#0c4a6e" strokeWidth={0.7} />
-                  <line x1={wx} y1={winY + winH / 2} x2={wx + winW} y2={winY + winH / 2} stroke="#0c4a6e" strokeWidth={0.7} />
-                  {/* Shadow on inside */}
-                  <rect x={wx + 2} y={winY + 2} width={winW / 2 - 2} height={winH / 2 - 2} fill="#7dd3fc" opacity={0.6} />
-                  <rect x={wx + winW / 2 + 2} y={winY + winH / 2 + 2} width={winW / 2 - 4} height={winH / 2 - 4} fill="#7dd3fc" opacity={0.6} />
+                  <rect x={wx} y={winY} width={winW} height={winH} fill="#cbe9f5" stroke="#0c4a6e" strokeWidth={1.1} />
+                  {/* Mullions */}
+                  <line x1={wx + winW / 2} y1={winY} x2={wx + winW / 2} y2={winY + winH} stroke="#0c4a6e" strokeWidth={0.8} />
+                  <line x1={wx} y1={winY + winH / 2} x2={wx + winW} y2={winY + winH / 2} stroke="#0c4a6e" strokeWidth={0.8} />
+                  {/* Reflections */}
+                  <rect x={wx + 2} y={winY + 2} width={winW / 2 - 3} height={winH / 2 - 3} fill="#7dd3fc" opacity={0.55} />
+                  <rect x={wx + winW / 2 + 1} y={winY + winH / 2 + 1} width={winW / 2 - 3} height={winH / 2 - 3} fill="#e0f2fe" opacity={0.55} />
                   {/* Lintel */}
-                  <rect x={wx - 2} y={winY - 2} width={winW + 4} height={2} fill="#a8a29e" />
+                  <rect x={wx - 3} y={winY - 3} width={winW + 6} height={3} fill="#78716c" />
+                  {/* Balcony railing on upper floors (R+1 and above), center windows only */}
+                  {!isRdc && i > 0 && c !== 0 && c !== cols - 1 && (
+                    <g>
+                      <rect x={wx - 4} y={winY + winH + 4} width={winW + 8} height={10} fill="none" stroke="#44403c" strokeWidth={0.8} />
+                      {Array.from({ length: 8 }).map((_, br) => (
+                        <line
+                          key={br}
+                          x1={wx - 4 + br * (winW + 8) / 7}
+                          y1={winY + winH + 4}
+                          x2={wx - 4 + br * (winW + 8) / 7}
+                          y2={winY + winH + 14}
+                          stroke="#44403c"
+                          strokeWidth={0.5}
+                        />
+                      ))}
+                    </g>
+                  )}
                 </g>
               );
             })}
-            {/* Story band horizontal line */}
-            <line x1={xL} y1={yB - 0.25 * scale} x2={xL + spanPx} y2={yB - 0.25 * scale} stroke="#a8a29e" strokeWidth={0.5} strokeDasharray="2 2" />
+            {/* Story band horizontal line (nez de dalle) */}
+            <line x1={xL} y1={yB - 0.25 * scale} x2={xL + spanPx} y2={yB - 0.25 * scale} stroke="#78716c" strokeWidth={0.7} />
           </g>
         );
       })}
 
       {/* Parapet */}
-      <rect x={xL} y={yTop - parapetPx} width={spanPx} height={parapetPx} fill="#d6d3d1" stroke="#0f172a" strokeWidth={0.6} />
-      <line x1={xL} y1={yTop - parapetPx + 3} x2={xL + spanPx} y2={yTop - parapetPx + 3} stroke="#0f172a" strokeWidth={0.5} />
+      <rect x={xL} y={yTop - parapetPx} width={spanPx} height={parapetPx} fill="#d6d3d1" stroke="#0f172a" strokeWidth={0.8} />
+      <rect x={xL} y={yTop - parapetPx} width={spanPx} height={3} fill="#57534e" />
+
+      {/* Building outline */}
+      <rect x={xL} y={yTop} width={spanPx} height={yBase - yTop} fill="none" stroke="#1c1917" strokeWidth={1.6} />
 
       {/* Ground line continuation */}
-      <line x1={xL - 20} y1={yBase} x2={xL + spanPx + 20} y2={yBase} stroke="#0f172a" strokeWidth={1.4} />
+      <line x1={xL - 30} y1={yBase} x2={xL + spanPx + 30} y2={yBase} stroke="#0f172a" strokeWidth={1.4} />
     </g>
   );
 }

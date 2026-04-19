@@ -97,6 +97,13 @@ export interface BuildingModelCellule {
   openings: BuildingModelOpening[];
 }
 
+export interface BuildingModelCirculation {
+  id: string;
+  polygon_xy: Array<[number, number]>;
+  surface_m2: number;
+  largeur_min_cm: number;
+}
+
 export interface BuildingModelNiveau {
   index: number;
   code: string;
@@ -104,6 +111,7 @@ export interface BuildingModelNiveau {
   hauteur_sous_plafond_m: number;
   surface_plancher_m2: number;
   cellules: BuildingModelCellule[];
+  circulations_communes?: BuildingModelCirculation[];
 }
 
 export interface BuildingModelConformiteAlert {

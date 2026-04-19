@@ -13,9 +13,10 @@ def test_compute_slots_for_simple_mix():
     # Expect some slots; each slot has a target_typo + surface + position
     assert len(slots) >= 3
     assert all(s.target_typologie in mix for s in slots)
-    # Total slot surface approximately equals footprint - core - circulations
+    # Slots are clean rectangles tiling the footprint. Core + circulation
+    # are niveau elements, not subtracted from slots. Total ≈ footprint area.
     total = sum(s.surface_m2 for s in slots)
-    assert 150 < total < 200  # roughly (216 - 20 - circulations)
+    assert 200 < total < 230  # footprint 18×12 = 216 m²
 
 
 def test_slots_have_orientation():

@@ -3,6 +3,7 @@
 import type {
   BuildingModelNiveau,
   BuildingModelCellule,
+  BuildingModelCirculation,
   BuildingModelOpening,
   BuildingModelWall,
   BuildingModelRoom,
@@ -24,6 +25,11 @@ import {
 
 interface NiveauPlanProps {
   niveau: BuildingModelNiveau;
+  corePosition?: [number, number];
+  coreSurfaceM2?: number;
+  hasAscenseur?: boolean;
+  voirieSide?: string;
+  isRdc?: boolean;
   width?: number;
   height?: number;
   northAngleDeg?: number;
@@ -32,12 +38,20 @@ interface NiveauPlanProps {
 
 export function NiveauPlan({
   niveau,
+  corePosition,
+  coreSurfaceM2 = 22,
+  hasAscenseur = true,
+  voirieSide = "sud",
+  isRdc = false,
   width = 900,
   height = 620,
   northAngleDeg = 0,
   projectName,
 }: NiveauPlanProps) {
   const allPts: Coord[] = niveau.cellules.flatMap((c) => c.polygon_xy);
+  const circulations = niveau.circulations_communes ?? [];
+  for (const c of circulations) allPts.push(...c.polygon_xy);
+  if (corePosition) allPts.push(corePosition);
   const box = bboxOf(allPts);
 
   if (!box || niveau.cellules.length === 0) {
@@ -70,6 +84,33 @@ export function NiveauPlan({
       {niveau.cellules.map((c) => (
         <CelluleLayer key={c.id} cellule={c} scale={scale} project={project} />
       ))}
+
+      {/* Palier (circulation commune) */}
+      {circulations.map((circ) => (
+        <PalierLayer key={circ.id} circulation={circ} scale={scale} project={project} />
+      ))}
+
+      {/* Core (escalier + ascenseur) */}
+      {corePosition && (
+        <CoreLayer
+          position={corePosition}
+          surfaceM2={coreSurfaceM2}
+          hasAscenseur={hasAscenseur}
+          scale={scale}
+          project={project}
+        />
+      )}
+
+      {/* RDC main entrance from voirie */}
+      {isRdc && corePosition && (
+        <MainEntrance
+          corePosition={corePosition}
+          voirieSide={voirieSide}
+          box={box}
+          scale={scale}
+          project={project}
+        />
+      )}
 
       {/* Sheet header */}
       <g>
@@ -512,4 +553,179 @@ function FurnitureInRoom({
     default:
       return null;
   }
+}
+
+/* ═══════════════════════════ CORE + PALIER ═══════════════════════════ */
+
+function PalierLayer({ circulation, scale, project }: {
+  circulation: BuildingModelCirculation;
+  scale: number;
+  project: (c: Coord) => Coord;
+}) {
+  const centroid = polygonCentroid(circulation.polygon_xy);
+  const [lx, ly] = project(centroid);
+  return (
+    <g style={{ pointerEvents: "none" }}>
+      <path
+        d={ringToPath(circulation.polygon_xy, project)}
+        fill="url(#pat-tiles)"
+        stroke="#0f172a"
+        strokeWidth={Math.max(3, 0.15 * scale)}
+      />
+      <text x={lx} y={ly + 3} textAnchor="middle" fontSize={10} fontWeight={600} fill="#475569">
+        palier
+      </text>
+      <text x={lx} y={ly + 15} textAnchor="middle" fontSize={8.5} fill="#64748b">
+        {circulation.largeur_min_cm} cm
+      </text>
+    </g>
+  );
+}
+
+function CoreLayer({
+  position, surfaceM2, hasAscenseur, scale, project,
+}: {
+  position: [number, number];
+  surfaceM2: number;
+  hasAscenseur: boolean;
+  scale: number;
+  project: (c: Coord) => Coord;
+}) {
+  const side = Math.sqrt(surfaceM2);
+  const [cxM, cyM] = position;
+  // Decompose core: half = stairs, half = elevator shaft
+  const halfW = side / 2;
+  const stairsX0 = cxM - side / 2;
+  const stairsY0 = cyM - side / 2;
+  const [sx, sy] = project([stairsX0, stairsY0]);
+  const [sx2, sy2] = project([cxM, cyM + side / 2]);
+  const stairW = Math.abs(sx2 - sx);
+  const stairH = Math.abs(sy2 - sy);
+  const [lx, ly] = project([cxM + halfW / 2, cyM]);
+  const [elx, ely] = project([cxM + halfW - 0.5, cyM]);
+
+  return (
+    <g style={{ pointerEvents: "none" }}>
+      {/* Stairs rectangle */}
+      <rect
+        x={sx}
+        y={sy}
+        width={stairW}
+        height={stairH}
+        fill="#e2e8f0"
+        stroke="#0f172a"
+        strokeWidth={1.4}
+      />
+      {/* Stair tread lines */}
+      {Array.from({ length: 11 }).map((_, i) => {
+        const fraction = (i + 0.5) / 11;
+        return (
+          <line
+            key={i}
+            x1={sx + stairW * 0.45 * fraction}
+            y1={sy + 4}
+            x2={sx + stairW * 0.45 * fraction}
+            y2={sy + stairH - 4}
+            stroke="#475569"
+            strokeWidth={0.5}
+          />
+        );
+      })}
+      {/* Diagonal arrow up */}
+      <path
+        d={`M ${sx + 6} ${sy + stairH - 6} L ${sx + stairW * 0.45 - 2} ${sy + 10}`}
+        stroke="#0f172a"
+        strokeWidth={0.8}
+        markerEnd="url(#arrow-n)"
+      />
+      <text x={sx + 4} y={sy + stairH - 10} fontSize={8} fill="#475569">UP</text>
+
+      {/* Elevator (right half) */}
+      {hasAscenseur && (
+        <g>
+          <rect
+            x={sx + stairW * 0.5}
+            y={sy + stairH * 0.25}
+            width={stairW * 0.45}
+            height={stairH * 0.5}
+            fill="#f8fafc"
+            stroke="#0f172a"
+            strokeWidth={1.2}
+          />
+          <line
+            x1={sx + stairW * 0.5 + 2}
+            y1={sy + stairH * 0.5}
+            x2={sx + stairW * 0.5 + stairW * 0.45 - 2}
+            y2={sy + stairH * 0.5}
+            stroke="#475569"
+            strokeWidth={0.5}
+            strokeDasharray="2 2"
+          />
+          <text x={elx} y={ely + 3} textAnchor="middle" fontSize={8} fontWeight={700} fill="#334155">
+            ASC
+          </text>
+        </g>
+      )}
+
+      {/* "Escalier" label */}
+      <text x={sx + stairW * 0.22} y={sy + stairH + 12} textAnchor="middle" fontSize={8.5} fill="#475569">
+        escalier
+      </text>
+    </g>
+  );
+}
+
+function MainEntrance({
+  corePosition, voirieSide, box, scale, project,
+}: {
+  corePosition: [number, number];
+  voirieSide: string;
+  box: { minx: number; miny: number; maxx: number; maxy: number };
+  scale: number;
+  project: (c: Coord) => Coord;
+}) {
+  const [cxM, cyM] = corePosition;
+  let doorMx = cxM;
+  let doorMy = cyM;
+  let arrowDx = 0, arrowDy = -1;
+  if (voirieSide === "sud") { doorMy = box.miny; arrowDy = -1; }
+  else if (voirieSide === "nord") { doorMy = box.maxy; arrowDy = 1; }
+  else if (voirieSide === "est") { doorMx = box.maxx; arrowDx = 1; arrowDy = 0; }
+  else { doorMx = box.minx; arrowDx = -1; arrowDy = 0; }
+
+  const [dx, dy] = project([doorMx, doorMy]);
+  const [coreX, coreY] = project(corePosition);
+
+  return (
+    <g style={{ pointerEvents: "none" }}>
+      {/* Path from street to core */}
+      <line
+        x1={dx}
+        y1={dy}
+        x2={coreX}
+        y2={coreY}
+        stroke="#b45309"
+        strokeWidth={1.5}
+        strokeDasharray="4 3"
+      />
+      {/* Door symbol at entrance */}
+      <circle cx={dx} cy={dy} r={6} fill="white" stroke="#b45309" strokeWidth={2} />
+      <text x={dx} y={dy + 2} textAnchor="middle" fontSize={7} fontWeight={700} fill="#b45309">E</text>
+      {/* Arrow to core */}
+      <polygon
+        points={`${dx - arrowDx * 10 + arrowDy * 5},${dy - arrowDy * 10 + arrowDx * 5} ${dx - arrowDx * 10 - arrowDy * 5},${dy - arrowDy * 10 - arrowDx * 5} ${dx - arrowDx * 16},${dy - arrowDy * 16}`}
+        fill="#b45309"
+      />
+      <text
+        x={dx + arrowDy * 18}
+        y={dy + arrowDx * 18 + 4}
+        textAnchor="middle"
+        fontSize={9}
+        fontWeight={600}
+        fill="#b45309"
+      >
+        Entrée
+      </text>
+    </g>
+  );
 }
