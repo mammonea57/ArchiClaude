@@ -6,10 +6,12 @@ from api.routes.admin import flags as admin_flags
 from api.routes.agency import router as agency_router
 from api.routes.parcels import router as parcels_router
 from api.routes.pcmi import router as pcmi_router
+from api.routes.pcmi6 import router as pcmi6_router
 from api.routes.plu import router as plu_router
 from api.routes.programming import router as programming_router
 from api.routes.projects import router as projects_router
 from api.routes.rag import router as rag_router
+from api.routes.rendering import router as rendering_router
 from api.routes.reports import router as reports_router
 from api.routes.site import router as site_router
 from api.routes.versions import router as versions_router
@@ -42,6 +44,8 @@ def create_app() -> FastAPI:
     app.include_router(reports_router, prefix="/api/v1")
     app.include_router(site_router, prefix="/api/v1")
     app.include_router(versions_router, prefix="/api/v1")
+    app.include_router(pcmi6_router, prefix="/api/v1")
+    app.include_router(rendering_router, prefix="/api/v1")
     return app
 
 
