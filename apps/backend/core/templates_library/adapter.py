@@ -42,7 +42,8 @@ class TemplateAdapter:
         slot_width = maxx - minx
         slot_depth = maxy - miny
 
-        # Use template declared dimensions (max) as reference for stretch ratio
+        # Cell sizing uses max_m (keeps rooms inside the slot); range check
+        # uses min_m too so slots near the template's lower bound still fit.
         dim = template.dimensions_grille
         template_width_ref = dim.largeur_max_m
         template_depth_ref = dim.profondeur_max_m
@@ -50,11 +51,16 @@ class TemplateAdapter:
         stretch_x = slot_width / template_width_ref
         stretch_y = slot_depth / template_depth_ref
 
-        if not (_STRETCH_MIN <= stretch_x <= _STRETCH_MAX and _STRETCH_MIN <= stretch_y <= _STRETCH_MAX):
+        width_ok = dim.largeur_min_m * 0.85 <= slot_width <= dim.largeur_max_m * 1.15
+        depth_ok = dim.profondeur_min_m * 0.85 <= slot_depth <= dim.profondeur_max_m * 1.15
+        if not (width_ok and depth_ok):
             return FitResult(
                 success=False,
-                rejection_reason=f"slot dimensions {slot_width:.1f}×{slot_depth:.1f}m too small or too large "
-                                 f"for template (stretch x={stretch_x:.2f} y={stretch_y:.2f} outside [0.85,1.15])",
+                rejection_reason=(
+                    f"slot dimensions {slot_width:.1f}×{slot_depth:.1f}m outside template range "
+                    f"[{dim.largeur_min_m:.1f}–{dim.largeur_max_m:.1f}]×"
+                    f"[{dim.profondeur_min_m:.1f}–{dim.profondeur_max_m:.1f}]m"
+                ),
                 stretch_x=stretch_x, stretch_y=stretch_y,
             )
 

@@ -28,20 +28,27 @@ class SelectionResult:
 class TemplateSelector:
     def __init__(self, session: AsyncSession, openai_client: OpenAI | None = None):
         self.session = session
-        self.openai = openai_client or OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+        api_key = os.environ.get("OPENAI_API_KEY")
+        self._use_mock = not api_key and openai_client is None
+        self.openai = openai_client or (OpenAI(api_key=api_key) if api_key else None)
 
     async def select_for_slot(self, slot: ApartmentSlot) -> SelectionResult | None:
         # 1. Describe slot → embedding
-        orient = " ".join(slot.orientations) if slot.orientations else "non défini"
-        description = (
-            f"Appartement {slot.target_typologie.value}, {slot.surface_m2:.1f}m², "
-            f"orientation {orient}, position {slot.position_in_floor} dans l'étage."
-        )
-        emb = self.openai.embeddings.create(
-            model="text-embedding-3-small",
-            input=description,
-            dimensions=1536,
-        ).data[0].embedding
+        if self._use_mock:
+            # Mock query embedding — matches seed_templates.py zero-mock fallback
+            emb = [0.0] * 1536
+        else:
+            orient = " ".join(slot.orientations) if slot.orientations else "non défini"
+            description = (
+                f"Appartement {slot.target_typologie.value}, {slot.surface_m2:.1f}m², "
+                f"orientation {orient}, position {slot.position_in_floor} dans l'étage."
+            )
+            assert self.openai is not None
+            emb = self.openai.embeddings.create(
+                model="text-embedding-3-small",
+                input=description,
+                dimensions=1536,
+            ).data[0].embedding
 
         # 2. Vector search
         candidates = await search_compatible_templates(
@@ -56,16 +63,21 @@ class TemplateSelector:
         slot_width = maxx - minx
         slot_depth = maxy - miny
 
+        # Dimension tolerance mirrors TemplateAdapter._STRETCH bounds (0.85–1.15)
+        # so the selector does not reject slots the adapter can still fit.
         filtered: list[TemplateCandidate] = []
         for c in candidates:
             dim = c.template.dimensions_grille
-            if not (dim.largeur_min_m <= slot_width <= dim.largeur_max_m):
+            if not (dim.largeur_min_m * 0.85 <= slot_width <= dim.largeur_max_m * 1.15):
                 continue
-            if not (dim.profondeur_min_m <= slot_depth <= dim.profondeur_max_m):
+            if not (dim.profondeur_min_m * 0.85 <= slot_depth <= dim.profondeur_max_m * 1.15):
                 continue
+            # Surface filter is loose: core/buffer may clip slot area below the
+            # template's shab range, but the adapter still produces a valid
+            # apartment. Accept if any overlap with a ±30% window.
             lo, hi = c.template.surface_shab_range
-            if not (lo * 0.9 <= slot.surface_m2 <= hi * 1.1):
-                continue
+            if slot.surface_m2 > hi * 1.3:
+                continue  # oversized slot — template really can't cover it
             filtered.append(c)
 
         if not filtered:

@@ -147,9 +147,15 @@ def compute_apartment_slots(
     usable = grid.footprint.difference(core.polygon.buffer(1.4))  # +1.4m circulation
     usable_area = usable.area
 
+    # Drop typologies with ratio <= 0 — they don't belong in the programme and
+    # would otherwise inflate min_slots and produce unplaceable narrow strips.
+    active_mix = {k: v for k, v in mix_typologique.items() if v > 0}
+    if not active_mix:
+        return []
+
     # Normalise mix (should sum to ~1.0)
-    total_ratio = sum(mix_typologique.values())
-    mix_norm = {k: v / total_ratio for k, v in mix_typologique.items()}
+    total_ratio = sum(active_mix.values())
+    mix_norm = {k: v / total_ratio for k, v in active_mix.items()}
 
     # Compute target surfaces per typo
     typo_surface_targets = {t: _TYPO_TARGET_SURFACE_M2[t] for t in mix_norm}
@@ -163,8 +169,8 @@ def compute_apartment_slots(
     for typo, ratio in mix_norm.items():
         n = max(1, round(nb_apartments * ratio))
         typos_expanded.extend([typo] * n)
-    # Keep at least one slot per distinct typo in the mix
-    min_slots = len(mix_typologique)
+    # Keep at least one slot per distinct active typo
+    min_slots = len(active_mix)
     typos_expanded = typos_expanded[:max(nb_apartments, min_slots)]
 
     # Strip-divide usable area along longest axis, assign a typo to each strip
