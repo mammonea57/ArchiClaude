@@ -108,6 +108,11 @@ async def generate_building_model(
         else:
             usage = "logements"
             for slot in slots_per_floor:
+                # Drop landlocked slots (no exterior façade) — real-estate
+                # logic: an apt without any exterior wall can't have windows
+                # and is not a legitimate logement.
+                if not slot.orientations:
+                    continue
                 sel = await selector.select_for_slot(slot)
                 if sel is None:
                     continue  # Fallback solver would go here (Sprint 2 task)

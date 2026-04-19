@@ -165,20 +165,24 @@ class TemplateAdapter:
                 hauteur_cm=260, materiau="beton_banche" if w_type == WallType.PORTEUR else "placo",
             ))
 
-        # 4. Build openings
+        # 4. Build openings (skipping the template's porte_entree — it's re-
+        #    placed below on the palier-facing wall). Windows on the template's
+        #    exterior walls are kept in case they match this slot's façade.
         openings: list[Opening] = []
         for i, ao in enumerate(template.topologie.get("openings_abstract", [])):
+            try:
+                op_type = OpeningType(ao["type"])
+            except ValueError:
+                return FitResult(success=False, rejection_reason=f"unknown opening type {ao['type']}")
+            if op_type == OpeningType.PORTE_ENTREE:
+                continue  # added later on palier-facing wall
             wall = walls[ao["wall_idx"]]
             coords = wall.geometry["coords"]
             wall_length_cm = int(
                 ((coords[1][0] - coords[0][0])**2 + (coords[1][1] - coords[0][1])**2) ** 0.5 * 100
             )
             pos_cm = int(wall_length_cm * ao["position_ratio"])
-            try:
-                op_type = OpeningType(ao["type"])
-            except ValueError:
-                return FitResult(success=False, rejection_reason=f"unknown opening type {ao['type']}")
-            width_cm = ao.get("largeur_min_cm", 93 if op_type == OpeningType.PORTE_ENTREE else 120)
+            width_cm = ao.get("largeur_min_cm", 120)
             openings.append(Opening(
                 id=f"op_{i}", type=op_type, wall_id=wall.id,
                 position_along_wall_cm=pos_cm, width_cm=width_cm,
@@ -187,13 +191,15 @@ class TemplateAdapter:
                 swing=ao.get("swing"),
             ))
 
-        # 5. Add exterior-wall windows for living rooms that don't yet have one.
-        #    Slot.orientations carries the cardinal sides that face the outside
-        #    (voirie or cœur d'îlot). Each séjour + chambre on the apartment's
-        #    perimeter receives a standard window on its nearest exterior side.
+        # 5. Add entry door on the palier-facing wall (interior side of the
+        #    apartment, opposite to the primary façade). Every apt must be
+        #    accessible from the couloir/palier — not from a side or façade.
+        self._add_palier_entry(rooms, walls, openings, slot)
+
+        # 6. Add exterior-wall windows for living rooms that don't yet have one.
         self._add_exterior_openings(rooms, walls, openings, slot)
 
-        # 6. Build Cellule
+        # 7. Build Cellule
         apartment = Cellule(
             id=slot.id,
             type=CelluleType.LOGEMENT,
@@ -206,6 +212,88 @@ class TemplateAdapter:
         )
 
         return FitResult(success=True, apartment=apartment, stretch_x=stretch_x, stretch_y=stretch_y)
+
+    @staticmethod
+    def _add_palier_entry(
+        rooms: list[Room], walls: list[Wall], openings: list[Opening], slot: ApartmentSlot
+    ) -> None:
+        """Place a single porte_entree on the wall of the apartment that faces
+        the palier (i.e. the side OPPOSITE to its primary façade).
+
+        Real-estate logic: apartments are entered from the common corridor,
+        not from a balcony or a side wall. The palier is always on the interior
+        side of the building, across the couloir. For a south-facing apt the
+        palier is on its north wall; for a west-facing apt, on its east wall.
+        """
+        from core.building_model.schemas import OpeningType  # local
+
+        if not slot.polygon or slot.polygon.is_empty:
+            return
+        sminx, sminy, smaxx, smaxy = slot.polygon.bounds
+        exterior = set(slot.orientations or [])
+
+        # Palier side = opposite of the primary exterior direction
+        OPPOSITE = {"sud": "nord", "nord": "sud", "ouest": "est", "est": "ouest"}
+        # Prefer the dominant façade direction (south is most common), then
+        # take its opposite as the palier-facing side.
+        primary_facade = None
+        for cand in ("sud", "ouest", "est", "nord"):
+            if cand in exterior:
+                primary_facade = cand
+                break
+        if primary_facade is None:
+            return
+        palier_side = OPPOSITE[primary_facade]
+
+        # Build the wall along the palier side of the apartment
+        if palier_side == "sud":
+            x0, y0, x1, y1 = sminx, sminy, smaxx, sminy
+        elif palier_side == "nord":
+            x0, y0, x1, y1 = sminx, smaxy, smaxx, smaxy
+        elif palier_side == "est":
+            x0, y0, x1, y1 = smaxx, sminy, smaxx, smaxy
+        else:  # ouest
+            x0, y0, x1, y1 = sminx, sminy, sminx, smaxy
+
+        palier_wall_id = f"w_palier_{len(walls)}"
+        walls.append(Wall(
+            id=palier_wall_id,
+            type=WallType.PORTEUR,
+            thickness_cm=20,
+            geometry={"type": "LineString", "coords": [[x0, y0], [x1, y1]]},
+            hauteur_cm=260,
+            materiau="beton_banche",
+        ))
+
+        wall_len_cm = int(((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 * 100)
+        if wall_len_cm < 100:
+            return
+
+        # Position the door near the closest "entrée" room's edge on this side
+        entry_room = next((r for r in rooms if r.type == RoomType.ENTREE), None)
+        door_pos_cm = wall_len_cm // 2
+        if entry_room and entry_room.polygon_xy:
+            exs = [p[0] for p in entry_room.polygon_xy]
+            eys = [p[1] for p in entry_room.polygon_xy]
+            # Compute the midpoint of the entrée's edge closest to the palier side
+            if palier_side in ("sud", "nord"):
+                door_world_x = (min(exs) + max(exs)) / 2
+                door_pos_cm = int(abs(door_world_x - x0) * 100)
+            else:
+                door_world_y = (min(eys) + max(eys)) / 2
+                door_pos_cm = int(abs(door_world_y - y0) * 100)
+            door_pos_cm = max(50, min(wall_len_cm - 50, door_pos_cm))
+
+        openings.append(Opening(
+            id=f"op_entree_{len(openings)}",
+            type=OpeningType.PORTE_ENTREE,
+            wall_id=palier_wall_id,
+            position_along_wall_cm=door_pos_cm,
+            width_cm=93,
+            height_cm=220,
+            allege_cm=None,
+            swing="interior_right",
+        ))
 
     @staticmethod
     def _add_exterior_openings(

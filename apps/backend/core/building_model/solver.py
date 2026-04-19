@@ -459,19 +459,37 @@ def _reclassify_by_surface(surface_m2: float, hint: Typologie) -> Typologie:
 
 
 def _infer_orientations(slot_poly: ShapelyPolygon, footprint: ShapelyPolygon, voirie_side: str) -> list[str]:
-    """Infer which cardinal sides the slot faces."""
-    minx, miny, maxx, maxy = footprint.bounds
+    """Infer which cardinal sides of the slot face the EXTERIOR.
+
+    Tests each of the slot's four sides against the footprint's polygon
+    boundary (not just the bbox). Handles non-convex footprints (L, T, U):
+    interior strips in dual-loaded corridors pick up the cœur-d'îlot side
+    correctly.
+    """
+    from shapely.geometry import Point
+
     s_minx, s_miny, s_maxx, s_maxy = slot_poly.bounds
-    threshold = 0.5  # 50cm tolerance
-    orientations = []
-    if abs(s_miny - miny) < threshold:
-        orientations.append("sud")
-    if abs(s_maxy - maxy) < threshold:
-        orientations.append("nord")
-    if abs(s_minx - minx) < threshold:
-        orientations.append("ouest")
-    if abs(s_maxx - maxx) < threshold:
-        orientations.append("est")
+    boundary = footprint.boundary
+    threshold = 0.3
+    sides = {
+        "sud":   [((s_minx + s_maxx) / 2, s_miny),
+                  (s_minx + 0.25 * (s_maxx - s_minx), s_miny),
+                  (s_minx + 0.75 * (s_maxx - s_minx), s_miny)],
+        "nord":  [((s_minx + s_maxx) / 2, s_maxy),
+                  (s_minx + 0.25 * (s_maxx - s_minx), s_maxy),
+                  (s_minx + 0.75 * (s_maxx - s_minx), s_maxy)],
+        "ouest": [(s_minx, (s_miny + s_maxy) / 2),
+                  (s_minx, s_miny + 0.25 * (s_maxy - s_miny)),
+                  (s_minx, s_miny + 0.75 * (s_maxy - s_miny))],
+        "est":   [(s_maxx, (s_miny + s_maxy) / 2),
+                  (s_maxx, s_miny + 0.25 * (s_maxy - s_miny)),
+                  (s_maxx, s_miny + 0.75 * (s_maxy - s_miny))],
+    }
+    orientations: list[str] = []
+    for name, pts in sides.items():
+        if any(Point(px, py).distance(boundary) < threshold for (px, py) in pts):
+            orientations.append(name)
+    _ = voirie_side
     return orientations
 
 
