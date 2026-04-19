@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Playfair_Display } from "next/font/google";
 import "./globals.css";
+import SessionProviderClient from "@/components/SessionProviderClient";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -22,7 +23,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="fr" className={`${inter.variable} ${playfairDisplay.variable}`}>
-      <body className="font-sans">{children}</body>
+      <body className="font-sans">
+        <SessionProviderClient>{children}</SessionProviderClient>
+      </body>
     </html>
   );
 }
