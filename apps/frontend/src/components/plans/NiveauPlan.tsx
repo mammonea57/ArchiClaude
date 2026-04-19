@@ -178,10 +178,23 @@ function CelluleLayer({ cellule, scale, project }: LayerProps) {
         />
       ))}
 
-      {/* Furniture per room */}
-      {cellule.rooms.map((r) => (
-        <FurnitureInRoom key={`furn-${r.id}`} room={r} scale={scale} project={project} />
-      ))}
+      {/* Furniture per room — each wrapped in a clipPath so pieces never
+          spill outside their room even if sized bigger than the room. */}
+      {cellule.rooms.map((r) => {
+        const clipId = `clip-${cellule.id}-${r.id}`;
+        return (
+          <g key={`furn-${r.id}`}>
+            <defs>
+              <clipPath id={clipId}>
+                <path d={ringToPath(r.polygon_xy, project)} />
+              </clipPath>
+            </defs>
+            <g clipPath={`url(#${clipId})`}>
+              <FurnitureInRoom room={r} scale={scale} project={project} />
+            </g>
+          </g>
+        );
+      })}
 
       {/* Labels on top */}
       {cellule.rooms.map((r) => (

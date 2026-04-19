@@ -59,27 +59,69 @@ class TemplateAdapter:
         # Determine the template grid shape from bounds_cells, then size cells so
         # rooms tile the slot exactly (no gap, no overflow).
         topo = template.topologie
-        max_col = max(max(c[0] for c in room["bounds_cells"]) for room in topo["rooms"])
-        max_row = max(max(c[1] for c in room["bounds_cells"]) for room in topo["rooms"])
-        n_cols = max_col + 1
-        n_rows = max_row + 1
+        orig_max_col = max(max(c[0] for c in room["bounds_cells"]) for room in topo["rooms"])
+        orig_max_row = max(max(c[1] for c in room["bounds_cells"]) for room in topo["rooms"])
+
+        # Orient the template so that the "entrée" row ends up facing the
+        # palier (= non-exterior side) and the "séjour" side faces the voirie /
+        # cœur d'îlot. By default templates are built with entrée at row 0
+        # (bottom) and séjour/chambres at higher rows (top), i.e. the façade
+        # is at the TOP of the grid. If the slot's façade is SOUTH (miny),
+        # we flip vertically; if WEST/EAST, we rotate 90°.
+        transform = self._choose_grid_transform(slot.orientations or [])
+        n_cols_t, n_rows_t = self._transformed_grid_shape(orig_max_col, orig_max_row, transform)
+
+        max_col = n_cols_t - 1
+        max_row = n_rows_t - 1
+        n_cols = n_cols_t
+        n_rows = n_rows_t
         cell_w = slot_width / n_cols
         cell_h = slot_depth / n_rows
         stretch_x = cell_w / 3.0
         stretch_y = cell_h / 3.0
 
-        # 2. Build rooms with scaled polygons
+        def _xform_cell(col: int, row: int) -> tuple[int, int]:
+            return self._apply_grid_transform(col, row, orig_max_col, orig_max_row, transform)
+
+        # Detect cells shared by multiple rooms (seed templates like T3 use
+        # the same bounds_cells for sdb + wc, or entrée + cellier, assuming
+        # the cell gets sub-divided between them). Build an occupancy map.
+        from collections import defaultdict
+        cell_occupants: dict[tuple[int, int], list[int]] = defaultdict(list)
+        for idx, abs_room in enumerate(topo["rooms"]):
+            for (orig_col, orig_row) in abs_room["bounds_cells"]:
+                cell_occupants[(orig_col, orig_row)].append(idx)
+
+        # 2. Build rooms. For a room occupying a shared cell, give it only its
+        #    slice (cell divided horizontally into N strips of equal width,
+        #    one per co-occupant, ordered by index). This prevents overlap.
         rooms: list[Room] = []
-        for abs_room in template.topologie["rooms"]:
+        for idx, abs_room in enumerate(template.topologie["rooms"]):
             cell_polys = []
-            for col, row in abs_room["bounds_cells"]:
+            for orig_col, orig_row in abs_room["bounds_cells"]:
+                occupants = cell_occupants[(orig_col, orig_row)]
+                n_occ = len(occupants)
+                my_pos = occupants.index(idx)
+                col, row = _xform_cell(orig_col, orig_row)
                 x0 = minx + col * cell_w
                 y0 = miny + row * cell_h
-                cell_polys.append(ShapelyPolygon([
-                    (x0, y0), (x0 + cell_w, y0),
-                    (x0 + cell_w, y0 + cell_h),
-                    (x0, y0 + cell_h),
-                ]))
+                if n_occ == 1:
+                    cell_polys.append(ShapelyPolygon([
+                        (x0, y0), (x0 + cell_w, y0),
+                        (x0 + cell_w, y0 + cell_h),
+                        (x0, y0 + cell_h),
+                    ]))
+                else:
+                    # Divide the cell into N equal vertical strips
+                    strip_w = cell_w / n_occ
+                    sx0 = x0 + my_pos * strip_w
+                    cell_polys.append(ShapelyPolygon([
+                        (sx0, y0), (sx0 + strip_w, y0),
+                        (sx0 + strip_w, y0 + cell_h),
+                        (sx0, y0 + cell_h),
+                    ]))
+            if not cell_polys:
+                continue
             if len(cell_polys) == 1:
                 merged = cell_polys[0]
             else:
@@ -103,13 +145,15 @@ class TemplateAdapter:
                 furniture=self._place_furniture(abs_room["id"], room_type, merged, template),
             ))
 
-        # 3. Build walls (scaled coordinates)
+        # 3. Build walls (scaled + rotated coordinates)
         walls: list[Wall] = []
         for i, aw in enumerate(template.topologie.get("walls_abstract", [])):
-            from_x = minx + aw["from_cell"][0] * cell_w
-            from_y = miny + aw["from_cell"][1] * cell_h
-            to_x = minx + aw["to_cell"][0] * cell_w
-            to_y = miny + aw["to_cell"][1] * cell_h
+            fcol, frow = _xform_cell(aw["from_cell"][0], aw["from_cell"][1])
+            tcol, trow = _xform_cell(aw["to_cell"][0], aw["to_cell"][1])
+            from_x = minx + fcol * cell_w
+            from_y = miny + frow * cell_h
+            to_x = minx + tcol * cell_w
+            to_y = miny + trow * cell_h
             try:
                 w_type = WallType(aw["type"])
             except ValueError:
@@ -290,6 +334,68 @@ class TemplateAdapter:
                 swing=None,
             ))
             next_op_idx += 1
+
+    # ──────────────── Grid transforms (template orientation) ────────────────
+
+    @staticmethod
+    def _choose_grid_transform(orientations: list[str]) -> str:
+        """Pick a grid transform so entrée (row 0) lands on the palier side.
+
+        Templates are authored with the façade at the TOP of the grid
+        (max_row) and entrée at the BOTTOM (row 0 = palier). We rotate/mirror
+        so that orientation matches the slot's exterior sides.
+
+        Heuristic:
+        - If slot faces 'sud' (south) — façade at TOP of grid would render
+          at the top of the SVG which is the north side of the world. So we
+          flip vertically (row → max_row - row) to put the façade at the
+          south (miny) side.
+        - If slot faces 'nord' alone (rare) — no flip, default orientation.
+        - If slot faces 'ouest' only (west) — rotate 90° CCW so the original
+          top of the grid (façade) ends up at the west side.
+        - If slot faces 'est' only (east) — rotate 90° CW.
+        - If slot faces multiple sides (corner apt), prefer 'sud' > 'ouest'
+          > 'est' > 'nord' as the primary façade.
+        """
+        if not orientations:
+            return "identity"
+        s = set(orientations)
+        if "sud" in s:
+            return "flip_y"
+        if "ouest" in s:
+            return "rotate_ccw"
+        if "est" in s:
+            return "rotate_cw"
+        return "identity"
+
+    @staticmethod
+    def _transformed_grid_shape(max_col: int, max_row: int, transform: str) -> tuple[int, int]:
+        """Return (n_cols, n_rows) of the grid after transform."""
+        n_cols = max_col + 1
+        n_rows = max_row + 1
+        if transform in ("rotate_ccw", "rotate_cw"):
+            return n_rows, n_cols
+        return n_cols, n_rows
+
+    @staticmethod
+    def _apply_grid_transform(
+        col: int, row: int, max_col: int, max_row: int, transform: str,
+    ) -> tuple[int, int]:
+        """Transform (col, row) in the original grid to (col, row) in the
+        rotated/flipped grid."""
+        if transform == "identity":
+            return col, row
+        if transform == "flip_y":
+            return col, max_row - row
+        if transform == "flip_x":
+            return max_col - col, row
+        if transform == "rotate_cw":
+            # 90° clockwise: (col, row) -> (max_row - row, col)
+            return max_row - row, col
+        if transform == "rotate_ccw":
+            # 90° counter-clockwise: (col, row) -> (row, max_col - col)
+            return row, max_col - col
+        return col, row
 
     @staticmethod
     def _label_fr(room_type: RoomType) -> str:

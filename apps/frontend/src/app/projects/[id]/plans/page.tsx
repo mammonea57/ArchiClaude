@@ -1,14 +1,18 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Download } from "lucide-react";
+import { ArrowLeft, Download, Expand, X } from "lucide-react";
 import { useBuildingModel } from "@/lib/hooks/useBuildingModel";
 import { useFeasibility } from "@/lib/hooks/useFeasibility";
 import { NiveauPlan } from "@/components/plans/NiveauPlan";
 import { PlanMasse } from "@/components/plans/PlanMasse";
 import { CoupeElevation } from "@/components/plans/CoupeElevation";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Dialog, DialogContent, DialogTitle, DialogClose,
+} from "@/components/ui/dialog";
+import type { BuildingModelNiveau } from "@/lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -29,6 +33,8 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
   const { buildingModel, loading, error, notFound } = useBuildingModel(id);
   const { project } = useFeasibility(id);
   const addressForPlan = project?.name ?? buildingModel?.model_json?.metadata?.address ?? "";
+  const [openNiveau, setOpenNiveau] = useState<BuildingModelNiveau | null>(null);
+  const [openKind, setOpenKind] = useState<"niveau" | "masse" | "coupe" | "facade" | null>(null);
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -140,15 +146,30 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
                               </span>
                             </h2>
                           </div>
-                          <a
-                            href={`${API_BASE}/api/v1/projects/${id}/plans/niveau_${niv.index}/dxf`}
-                            download
-                            className="inline-flex items-center gap-1 text-xs text-teal-700 hover:text-teal-900"
-                          >
-                            <Download className="h-3.5 w-3.5" /> DXF
-                          </a>
+                          <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => { setOpenNiveau(niv); setOpenKind("niveau"); }}
+                              className="inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900"
+                              title="Ouvrir en plein écran"
+                            >
+                              <Expand className="h-3.5 w-3.5" /> Ouvrir
+                            </button>
+                            <a
+                              href={`${API_BASE}/api/v1/projects/${id}/plans/niveau_${niv.index}/dxf`}
+                              download
+                              className="inline-flex items-center gap-1 text-xs text-teal-700 hover:text-teal-900"
+                            >
+                              <Download className="h-3.5 w-3.5" /> DXF
+                            </a>
+                          </div>
                         </div>
-                        <div className="p-3 flex justify-center bg-slate-50">
+                        <button
+                          type="button"
+                          onClick={() => { setOpenNiveau(niv); setOpenKind("niveau"); }}
+                          className="w-full p-3 flex justify-center bg-slate-50 hover:bg-slate-100 transition-colors cursor-zoom-in"
+                          title="Cliquer pour agrandir"
+                        >
                           <NiveauPlan
                             niveau={niv}
                             corePosition={buildingModel.model_json.core.position_xy}
@@ -160,7 +181,7 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
                             height={400}
                             northAngleDeg={buildingModel.model_json.site.north_angle_deg ?? 0}
                           />
-                        </div>
+                        </button>
                       </div>
                     );
                   })}
@@ -206,6 +227,45 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
           </>
         )}
       </div>
+
+      {/* Fullscreen niveau modal */}
+      <Dialog
+        open={openNiveau !== null && openKind === "niveau"}
+        onOpenChange={(open) => { if (!open) { setOpenNiveau(null); setOpenKind(null); } }}
+      >
+        <DialogContent
+          className="max-w-[95vw] w-[95vw] max-h-[95vh] p-0 overflow-hidden"
+        >
+          <div className="flex items-center justify-between px-6 py-3 border-b border-slate-100 bg-white">
+            <DialogTitle className="text-base font-semibold">
+              {openNiveau ? `Plan ${openNiveau.code}` : "Plan"}
+              {openNiveau && (
+                <span className="ml-3 text-xs font-normal text-slate-500">
+                  {openNiveau.usage_principal} — {openNiveau.cellules.filter((c) => c.type === "logement").length} logements
+                </span>
+              )}
+            </DialogTitle>
+            <DialogClose className="p-1.5 rounded hover:bg-slate-100">
+              <X className="h-4 w-4" />
+            </DialogClose>
+          </div>
+          <div className="overflow-auto max-h-[calc(95vh-56px)] bg-slate-50 p-6 flex justify-center">
+            {openNiveau && buildingModel && (
+              <NiveauPlan
+                niveau={openNiveau}
+                corePosition={buildingModel.model_json.core.position_xy}
+                coreSurfaceM2={buildingModel.model_json.core.surface_m2}
+                hasAscenseur={!!buildingModel.model_json.core.ascenseur}
+                voirieSide={buildingModel.model_json.site.voirie_orientations?.[0] ?? "sud"}
+                isRdc={openNiveau.index === 0}
+                width={1400}
+                height={900}
+                northAngleDeg={buildingModel.model_json.site.north_angle_deg ?? 0}
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
