@@ -163,12 +163,12 @@ def _layout_pieces(
     # Scale factor to fit within available area (capped at 1.0 to avoid oversizing)
     scale = min(1.0, available / max(target_surface, 1.0))
 
-    def _piece(nom: str, surface_target: float, w: float, l: float) -> Piece:
+    def _piece(nom: str, surface_target: float, w: float, lg: float) -> Piece:
         return Piece(
             nom=nom,
             surface_m2=round(surface_target * scale, 1),
             largeur_m=round(w * (scale ** 0.5), 2),
-            longueur_m=round(l * (scale ** 0.5), 2),
+            longueur_m=round(lg * (scale ** 0.5), 2),
         )
 
     if typologie == "T1":
@@ -267,15 +267,14 @@ def _distribute_on_niveau(
     # Available facade length for logements
     # Subtract ~3m per noyau from facade
     noyau_frontage = nb_noyaux * (SURFACE_NOYAU_M2 / depth)
-    available_facade = long_side - noyau_frontage
+    _ = long_side - noyau_frontage  # available_facade reserved for future layout logic
 
     # Lay logements along facade
     placed_logements: list[Logement] = []
     x_cursor = bounds[0]
     y_base = bounds[1]
-    logement_counter = 0
 
-    for typo, est_lls in logements_for_level:
+    for logement_counter, (typo, est_lls) in enumerate(logements_for_level):
         trames = TRAMES_PAR_TYPO.get(typo, 2.0)
         lg_width = trames * TRAME_BA_M
         lg_depth = depth
@@ -332,7 +331,6 @@ def _distribute_on_niveau(
         )
 
         x_cursor += lg_width
-        logement_counter += 1
 
     surface_utile = sum(lg.surface_m2 for lg in placed_logements)
 

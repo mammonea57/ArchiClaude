@@ -100,13 +100,13 @@ def _half_plane(
     else:
         tx, ty = dx / length, dy / length
 
-    E = _HALF_PLANE_EXTENT
+    extent = _HALF_PLANE_EXTENT
 
     # Corners of the half-plane rectangle (extends "behind" the offset line)
-    p1 = (ox + tx * E + nx * E, oy + ty * E + ny * E)
-    p2 = (ox - tx * E + nx * E, oy - ty * E + ny * E)
-    p3 = (ox - tx * E, oy - ty * E)
-    p4 = (ox + tx * E, oy + ty * E)
+    p1 = (ox + tx * extent + nx * extent, oy + ty * extent + ny * extent)
+    p2 = (ox - tx * extent + nx * extent, oy - ty * extent + ny * extent)
+    p3 = (ox - tx * extent, oy - ty * extent)
+    p4 = (ox + tx * extent, oy + ty * extent)
 
     return Polygon([p1, p2, p3, p4])
 

@@ -20,7 +20,7 @@ def generate_facade(
     hauteur_par_niveau: float = 3.0,
     fenestration: list[dict] | None = None,
     detail: str = "pc_norme",
-    format: str = "svg",
+    format: str = "svg",  # noqa: A002
 ) -> str | bytes:
     """Generate a facade (front elevation) plan.
 

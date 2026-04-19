@@ -82,7 +82,7 @@ class TestReturnsSvg:
 
 
 class TestNorthArrow:
-    def test_north_arrow_N_in_svg(self) -> None:
+    def test_north_arrow_n_in_svg(self) -> None:
         result = generate_plan_masse(
             parcelle=_parcelle(),
             footprint=_footprint(),

@@ -29,7 +29,7 @@ def _piece(nom: str, surf: float = 15.0) -> Piece:
 
 
 def _logement(
-    id: str = "L01",
+    id: str = "L01",  # noqa: A002
     typo: str = "T2",
     surf: float = 42.0,
     niveau: int = 0,

@@ -21,7 +21,7 @@ def generate_plan_masse(
     emprise_pct: float = 0.0,
     surface_pleine_terre_m2: float = 0.0,
     detail: str = "pc_norme",
-    format: str = "svg",
+    format: str = "svg",  # noqa: A002
 ) -> str | bytes:
     """Generate a plan de masse.
 
@@ -164,10 +164,6 @@ def _add_setback_dimensions(
     to_svg: object,
 ) -> None:
     """Add dimension lines for setbacks between parcelle and footprint."""
-
-    # Get exterior coords
-    p_coords = list(parcelle.exterior.coords)[:-1]  # drop repeated last
-    f_coords = list(footprint.exterior.coords)[:-1]
 
     # For each side of the footprint, find the nearest parcelle edge and draw a setback dimension
     # Simplified: draw setback from footprint bounding box to parcelle bounding box edges

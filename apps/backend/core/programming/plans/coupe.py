@@ -20,7 +20,7 @@ def generate_coupe(
     hauteur_par_niveau: float = 3.0,
     altitude_sol_m: float = 0.0,
     detail: str = "pc_norme",
-    format: str = "svg",
+    format: str = "svg",  # noqa: A002
 ) -> str | bytes:
     """Generate a section (coupe) plan.
 

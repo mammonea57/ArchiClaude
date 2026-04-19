@@ -40,7 +40,7 @@ class DxfCanvas:
         layer: str = "MURS_PORTEURS",
     ) -> None:
         """Add a closed 2D polyline (LWPOLYLINE)."""
-        points = [(x, y) for x, y in coords]
+        points = list(coords)
         self._msp.add_lwpolyline(points, dxfattribs={"layer": layer, "closed": True})
 
     def draw_line(
@@ -88,12 +88,10 @@ class DxfCanvas:
         layer: str = "COTATIONS",
     ) -> None:
         """Add a horizontal/vertical aligned dimension entity."""
-        try:
-            dimstyle = self._doc.dimstyles.get("Standard")
-            # Use aligned dimension for arbitrary orientation
+        import contextlib
+        with contextlib.suppress(Exception):
+            # Register dim style — silently ignored if already exists or unsupported
             self._doc.add_dimstyle("ARCHICLAUDE_DIM")
-        except Exception:
-            pass
         # Fallback: represent dimension as a line + two short ticks
         self._msp.add_line(
             start=(x1, y1, 0),

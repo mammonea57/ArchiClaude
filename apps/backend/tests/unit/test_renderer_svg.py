@@ -184,7 +184,7 @@ class TestDrawRect:
 
 
 class TestDrawNorthArrow:
-    def test_draw_north_arrow_contains_N(self) -> None:
+    def test_draw_north_arrow_contains_n(self) -> None:
         c = _canvas()
         c.draw_north_arrow(250, 20, angle=0)
         assert "N" in c.to_string()

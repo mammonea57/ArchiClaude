@@ -26,7 +26,7 @@ def generate_plan_niveau(
     niveau: NiveauDistribution,
     *,
     detail: str = "pc_norme",
-    format: str = "svg",
+    format: str = "svg",  # noqa: A002
 ) -> str | bytes:
     """Generate a plan de niveau SVG or DXF.
 
@@ -162,9 +162,8 @@ def _generate_svg(niveau: NiveauDistribution, *, detail: str) -> str:
         canvas.draw_polygon(col_pts, stroke="#888", fill="#f0f0f0", stroke_width=0.18, layer="circulation")
 
         if detail in ("pc_norme", "execution"):
-            # Couloir width dimension
+            # Couloir height dimension
             cb = couloir.bounds
-            cw = cb[2] - cb[0]
             ch = cb[3] - cb[1]
             mid_x = (cb[0] + cb[2]) / 2
             bot_y = cb[1]

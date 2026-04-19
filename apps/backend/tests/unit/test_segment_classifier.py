@@ -104,7 +104,7 @@ def test_with_roads_uses_tier2() -> None:
     """When roads are provided, result differs from pure heuristic."""
     parcelle = _square(100.0)
     road = _road_along_bottom()
-    seg_heuristic = classify_segments(parcelle, recul_voirie=5.0, recul_sep=3.0, recul_fond=3.0)
+    classify_segments(parcelle, recul_voirie=5.0, recul_sep=3.0, recul_fond=3.0)  # heuristic baseline
     seg_roads = classify_segments(parcelle, roads=road, recul_voirie=5.0, recul_sep=3.0, recul_fond=3.0)
     # Both return valid segments; roads version should have voirie near y=0
     voirie_road_starts = {s.start[1] for s in seg_roads if s.segment_type == "voirie"}
