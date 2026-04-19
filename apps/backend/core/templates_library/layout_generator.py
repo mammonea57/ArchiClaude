@@ -290,7 +290,8 @@ def build_walls_and_openings(
     - Perimeter walls: 4 walls on the slot envelope (porteur 20 cm).
     - Palier wall has the porte d'entrée (centered on entrée room).
     - Façade walls have porte-fenêtre for séjour, fenêtres for chambres.
-    - Internal walls: partitions between rooms (cloison 10 cm).
+    - Internal walls: partitions between each pair of adjacent rooms
+      (cloison 10 cm).
     """
     minx, miny, maxx, maxy = slot_bounds
     walls: list[Wall] = []
@@ -312,6 +313,80 @@ def build_walls_and_openings(
     w_ouest = _wall(f"{slot_id}_w_ouest", minx, miny, minx, maxy)
     w_est = _wall(f"{slot_id}_w_est", maxx, miny, maxx, maxy)
     walls.extend([w_sud, w_nord, w_ouest, w_est])
+
+    # Internal partition walls: find every shared edge between pairs of rooms
+    # and emit a cloison_70 along it. Segments are deduplicated so that a
+    # boundary shared by three rooms only produces one wall per linear
+    # segment.
+    _TOL = 0.15  # 15 cm tolerance for matching endpoints
+    emitted: list[tuple[tuple[float, float], tuple[float, float]]] = []
+
+    def _seg_eq(a: tuple[tuple[float, float], tuple[float, float]],
+                b: tuple[tuple[float, float], tuple[float, float]]) -> bool:
+        return (abs(a[0][0] - b[0][0]) < _TOL and abs(a[0][1] - b[0][1]) < _TOL
+                and abs(a[1][0] - b[1][0]) < _TOL and abs(a[1][1] - b[1][1]) < _TOL) or (
+                abs(a[0][0] - b[1][0]) < _TOL and abs(a[0][1] - b[1][1]) < _TOL
+                and abs(a[1][0] - b[0][0]) < _TOL and abs(a[1][1] - b[0][1]) < _TOL)
+
+    def _is_on_perimeter(p0: tuple[float, float], p1: tuple[float, float]) -> bool:
+        """True if the segment runs along the outer envelope."""
+        # vertical at minx or maxx
+        if abs(p0[0] - p1[0]) < _TOL and (abs(p0[0] - minx) < _TOL or abs(p0[0] - maxx) < _TOL):
+            return True
+        # horizontal at miny or maxy
+        if abs(p0[1] - p1[1]) < _TOL and (abs(p0[1] - miny) < _TOL or abs(p0[1] - maxy) < _TOL):
+            return True
+        return False
+
+    def _room_edges(room: Room) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+        pts = room.polygon_xy
+        return [(pts[i], pts[(i + 1) % len(pts)]) for i in range(len(pts))]
+
+    def _shared_overlap(
+        e1: tuple[tuple[float, float], tuple[float, float]],
+        e2: tuple[tuple[float, float], tuple[float, float]],
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """If the two segments are collinear and overlap, return the overlap."""
+        (a0, a1), (b0, b1) = e1, e2
+        # Collinear vertical (same x)
+        if abs(a0[0] - a1[0]) < _TOL and abs(b0[0] - b1[0]) < _TOL and abs(a0[0] - b0[0]) < _TOL:
+            ys_a = sorted([a0[1], a1[1]])
+            ys_b = sorted([b0[1], b1[1]])
+            lo = max(ys_a[0], ys_b[0])
+            hi = min(ys_a[1], ys_b[1])
+            if hi - lo > _TOL:
+                return ((a0[0], lo), (a0[0], hi))
+        # Collinear horizontal (same y)
+        if abs(a0[1] - a1[1]) < _TOL and abs(b0[1] - b1[1]) < _TOL and abs(a0[1] - b0[1]) < _TOL:
+            xs_a = sorted([a0[0], a1[0]])
+            xs_b = sorted([b0[0], b1[0]])
+            lo = max(xs_a[0], xs_b[0])
+            hi = min(xs_a[1], xs_b[1])
+            if hi - lo > _TOL:
+                return ((lo, a0[1]), (hi, a0[1]))
+        return None
+
+    wi = 0
+    for i in range(len(rooms)):
+        for j in range(i + 1, len(rooms)):
+            edges_i = _room_edges(rooms[i])
+            edges_j = _room_edges(rooms[j])
+            for ei in edges_i:
+                for ej in edges_j:
+                    overlap = _shared_overlap(ei, ej)
+                    if overlap is None:
+                        continue
+                    (p0, p1) = overlap
+                    if _is_on_perimeter(p0, p1):
+                        continue  # skip — already covered by envelope wall
+                    if any(_seg_eq((p0, p1), e) for e in emitted):
+                        continue
+                    emitted.append((p0, p1))
+                    walls.append(_wall(
+                        f"{slot_id}_p_{wi}",
+                        p0[0], p0[1], p1[0], p1[1], porteur=False,
+                    ))
+                    wi += 1
 
     # Palier wall + entry door
     palier_wall_id = {"sud": w_sud.id, "nord": w_nord.id, "ouest": w_ouest.id, "est": w_est.id}[palier_side]
