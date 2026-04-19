@@ -71,3 +71,49 @@ def classify_cells(grid: ModularGrid, voirie_side: str) -> ModularGrid:
             cell.on_voirie = True
 
     return grid
+
+
+from dataclasses import dataclass
+
+
+@dataclass
+class CorePlacement:
+    position_xy: tuple[float, float]
+    polygon: ShapelyPolygon
+    surface_m2: float
+
+
+_INCENDIE_DIST_MAX_M = 25.0
+_CORE_ASPECT_MIN_LW = 0.6  # core cabine 1.1×1.4 ~ 0.7 aspect min
+
+
+def place_core(grid: ModularGrid, core_surface_m2: float) -> CorePlacement:
+    """Place core (stairs + elevator + shafts) optimally to minimise circulation waste.
+
+    Uses a simple grid search: try each grid cell as center, score = max distance
+    to all footprint corners. Pick minimum.
+    """
+    if grid.footprint is None:
+        raise ValueError("grid.footprint is None")
+    corners = list(grid.footprint.exterior.coords)[:-1]
+    best: tuple[float, GridCell | None] = (float("inf"), None)
+    for cell in grid.cells:
+        ccx, ccy = cell.polygon.centroid.x, cell.polygon.centroid.y
+        max_dist = max(((cx-ccx)**2 + (cy-ccy)**2) ** 0.5 for cx, cy in corners)
+        if max_dist < best[0]:
+            best = (max_dist, cell)
+    if best[1] is None:
+        raise ValueError("no grid cells available to place core")
+
+    ccx, ccy = best[1].polygon.centroid.x, best[1].polygon.centroid.y
+    # Core spans roughly sqrt(surface) × sqrt(surface) ~ 4.5 × 4.5 for 20m²
+    side = (core_surface_m2 ** 0.5)
+    core_poly = ShapelyPolygon([
+        (ccx - side/2, ccy - side/2), (ccx + side/2, ccy - side/2),
+        (ccx + side/2, ccy + side/2), (ccx - side/2, ccy + side/2),
+    ])
+    return CorePlacement(
+        position_xy=(ccx, ccy),
+        polygon=core_poly,
+        surface_m2=core_surface_m2,
+    )
