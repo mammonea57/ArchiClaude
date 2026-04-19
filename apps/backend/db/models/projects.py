@@ -8,6 +8,7 @@ from datetime import datetime
 from geoalchemy2 import Geometry
 from sqlalchemy import (
     ARRAY,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Numeric,
@@ -23,6 +24,7 @@ import db.models.parcels  # noqa: F401, E402
 
 # Ensure FK targets are in Base.metadata regardless of import order
 import db.models.users  # noqa: F401, E402
+import db.models.workspaces  # noqa: F401, E402
 from db.base import Base
 
 
@@ -43,12 +45,30 @@ class ProjectRow(Base):
     brief: Mapped[dict] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="draft"
-    )  # draft | analyzed | archived
+    )  # draft | analyzed | reviewed | ready_for_pc | archived
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("workspaces.id"),
+        nullable=True,
+    )
+    status_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    status_changed_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','analyzed','reviewed','ready_for_pc','archived')",
+            name="projects_status_check",
+        ),
     )
 
 
