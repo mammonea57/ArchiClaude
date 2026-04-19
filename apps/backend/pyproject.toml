@@ -66,6 +66,11 @@ dependencies = [
 
     # DXF export
     "ezdxf>=1.0",
+
+    # PC dossier generation
+    "reportlab>=4.0",
+    "svglib>=1.5",
+    "Pillow>=10.0",
 ]
 
 [project.optional-dependencies]
