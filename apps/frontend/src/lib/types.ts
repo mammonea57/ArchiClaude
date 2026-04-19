@@ -127,8 +127,14 @@ export interface BuildingModelConformiteCheck {
 
 export interface BuildingModelPayload {
   metadata: { id: string; project_id: string; address: string; zone_plu: string; version: number };
-  site: { parcelle_surface_m2: number; voirie_orientations: string[] };
+  site: {
+    parcelle_geojson?: unknown;
+    parcelle_surface_m2: number;
+    voirie_orientations: string[];
+    north_angle_deg?: number;
+  };
   envelope: {
+    footprint_geojson?: unknown;
     emprise_m2: number;
     niveaux: number;
     hauteur_totale_m: number;

@@ -3,82 +3,19 @@
 import Link from "next/link";
 import { use } from "react";
 import { useFeasibility } from "@/lib/hooks/useFeasibility";
+import { useBuildingModel } from "@/lib/hooks/useBuildingModel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FeasibilityDashboard, type KPI } from "@/components/panels/FeasibilityDashboard";
-import { RulesPanel } from "@/components/panels/RulesPanel";
 import { ComplianceSummary } from "@/components/panels/ComplianceSummary";
-import { ServitudesList } from "@/components/panels/ServitudesList";
+import { ServitudesList, type Alert } from "@/components/panels/ServitudesList";
 import { TypologyChart } from "@/components/report/TypologyChart";
 import { ArchitectureNoteRenderer } from "@/components/report/ArchitectureNoteRenderer";
 import { ReportExportButton } from "@/components/report/ReportExportButton";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft } from "lucide-react";
-import type { Project, FeasibilityResult } from "@/lib/types";
-
-// Demo/placeholder data until real backend result is wired in
-const DEMO_RESULT: FeasibilityResult = {
-  id: "demo",
-  project_id: "",
-  status: "complete",
-  sdp_m2: 2_400,
-  niveaux: 6,
-  nb_logements: 28,
-  stationnement: 28,
-  emprise_pct: 40,
-  pleine_terre_pct: 30,
-  parsed_rules: {
-    zone: "UA",
-    hauteur_max: "R+6",
-    emp_max: "40%",
-    pleine_terre: "30% min",
-    stationnement: "1 pl./logement",
-    retrait_voirie: "0 m (alignement)",
-    retrait_limite: "4 m ou H/2",
-    facades: null,
-  },
-  plu_validated: false,
-  plu_confidence: 0.82,
-  mix_typologique: { T2: 8, T3: 12, T4: 6, T5: 2 },
-  incendie: "Habitation R+5",
-  pmr_ascenseur: true,
-  re2020_seuil: "Seuil 2025",
-  lls_statut: "25% LLS",
-  rsdu_obligations: [],
-  alerts: [
-    {
-      level: "warning",
-      type: "ABF",
-      message: "Périmètre de 500 m autour d'un monument historique — avis ABF requis.",
-    },
-  ],
-  architecture_note_md: `## Synthèse architecturale
-
-Le terrain permet une opération de logements collectifs en zone UA, avec un programme de **28 logements** sur **6 niveaux** et une SDP totale de **2 400 m²**.
-
-## Implantation
-
-L'implantation à l'alignement sur voirie est imposée par le PLU. Les retraits en limite séparative seront de **4 m minimum** ou **H/2** selon la hauteur effective.
-
-## Programme logements
-
-| Typologie | Nombre | % |
-|-----------|--------|---|
-| T2 | 8 | 29% |
-| T3 | 12 | 43% |
-| T4 | 6 | 21% |
-| T5 | 2 | 7% |
-
-## Points d'attention
-
-- Présence d'un périmètre ABF à vérifier lors du dépôt PC
-- Quota LLS de 25% à négocier avec la commune
-- RE2020 seuil 2025 — conception bioclimatique recommandée dès l'esquisse
-`,
-  feasibility_summary:
-    "Programme faisable sous réserve de validation PLU et accord ABF. Mix logements équilibré T2/T3 dominant.",
-};
+import { ArrowLeft, Building2, MapPin } from "lucide-react";
+import type { Project, BuildingModelRow, BuildingModelPayload } from "@/lib/types";
 
 function statusLabel(status: Project["status"]): string {
   switch (status) {
@@ -88,23 +25,105 @@ function statusLabel(status: Project["status"]): string {
   }
 }
 
-function buildKPIs(result: FeasibilityResult): KPI[] {
+function countLogements(bm: BuildingModelPayload): number {
+  return bm.niveaux.reduce(
+    (acc, n) => acc + n.cellules.filter((c) => c.type === "logement").length,
+    0,
+  );
+}
+
+function countTypology(bm: BuildingModelPayload): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const n of bm.niveaux) {
+    for (const c of n.cellules) {
+      if (c.type === "logement" && c.typologie) {
+        out[c.typologie] = (out[c.typologie] ?? 0) + 1;
+      }
+    }
+  }
+  return out;
+}
+
+function sumSdp(bm: BuildingModelPayload): number {
+  return bm.niveaux.reduce((acc, n) => acc + n.surface_plancher_m2, 0);
+}
+
+function empriseMetric(bm: BuildingModelPayload): number | null {
+  const parcelle = bm.site.parcelle_surface_m2 ?? 0;
+  if (!parcelle) return null;
+  return Math.round((bm.envelope.emprise_m2 / parcelle) * 100);
+}
+
+function buildKPIs(project: Project, bm: BuildingModelRow | null): KPI[] {
+  const b = project.brief;
+
+  if (bm) {
+    const m = bm.model_json;
+    return [
+      { label: "SDP", value: Math.round(sumSdp(m)), unit: "m²" },
+      { label: "Niveaux", value: m.envelope.niveaux },
+      { label: "Logements", value: countLogements(m) },
+      { label: "Hauteur", value: m.envelope.hauteur_totale_m, unit: "m" },
+      { label: "Emprise", value: empriseMetric(m) != null ? `${empriseMetric(m)}%` : "—" },
+      { label: "Emprise", value: Math.round(m.envelope.emprise_m2), unit: "m²" },
+    ];
+  }
+
   return [
-    { label: "SDP", value: result.sdp_m2 ?? "—", unit: result.sdp_m2 != null ? "m²" : undefined },
-    { label: "Niveaux", value: result.niveaux ?? "—" },
-    { label: "Logements", value: result.nb_logements ?? "—" },
-    { label: "Stationnement", value: result.stationnement ?? "—", unit: result.stationnement != null ? "pl." : undefined },
-    { label: "Emprise sol", value: result.emprise_pct != null ? `${result.emprise_pct}%` : "—" },
-    { label: "Pleine terre", value: result.pleine_terre_pct != null ? `${result.pleine_terre_pct}%` : "—" },
+    { label: "SDP cible", value: b?.cible_sdp_m2 ?? "—", unit: b?.cible_sdp_m2 != null ? "m²" : undefined },
+    { label: "Niveaux cible", value: b?.hauteur_cible_niveaux ?? "—" },
+    { label: "Logements cible", value: b?.cible_nb_logements ?? "—" },
+    { label: "Emprise cible", value: b?.emprise_cible_pct != null ? `${b.emprise_cible_pct}%` : "—" },
+    { label: "Stationnement cible", value: b?.stationnement_cible_par_logement ?? "—" },
+    {
+      label: "Pleine terre cible",
+      value: b?.espaces_verts_pleine_terre_cible_pct != null
+        ? `${b.espaces_verts_pleine_terre_cible_pct}%`
+        : "—",
+    },
   ];
+}
+
+function buildAlerts(bm: BuildingModelRow | null): Alert[] {
+  if (!bm?.conformite_check?.alerts) return [];
+  const LEVEL_MAP: Record<"info" | "warning" | "error", Alert["level"]> = {
+    info: "info", warning: "warning", error: "critical",
+  };
+  return bm.conformite_check.alerts.slice(0, 20).map((a) => ({
+    level: LEVEL_MAP[a.level],
+    type: a.category,
+    message: a.message,
+  }));
+}
+
+function formatTypologyMix(mix: Record<string, number>): Record<string, number> {
+  // If input values are ratios (≤ 1), keep them; otherwise treat as counts.
+  // TypologyChart accepts either.
+  return mix;
+}
+
+function buildingSummary(bm: BuildingModelPayload, logementCount: number): string {
+  const sdp = Math.round(sumSdp(bm));
+  const emp = empriseMetric(bm);
+  const parts = [
+    `Opération ${bm.envelope.niveaux} niveau${bm.envelope.niveaux > 1 ? "x" : ""}`,
+    `${logementCount} logement${logementCount > 1 ? "s" : ""}`,
+    `SDP ${sdp} m²`,
+  ];
+  if (emp != null) parts.push(`emprise ${emp}%`);
+  return `${parts.join(" · ")} — hauteur totale ${bm.envelope.hauteur_totale_m} m.`;
 }
 
 export default function ReportPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { project, loading, error } = useFeasibility(id);
+  const { buildingModel, notFound: bmNotFound } = useBuildingModel(id);
 
-  // Use demo result until real endpoint is wired
-  const result = DEMO_RESULT;
+  const kpis = project ? buildKPIs(project, buildingModel) : [];
+  const alerts = buildAlerts(buildingModel);
+  const mix = buildingModel
+    ? countTypology(buildingModel.model_json)
+    : formatTypologyMix(project?.brief?.mix_typologique ?? {});
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -116,9 +135,7 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
             </Link>
             <Separator orientation="vertical" className="h-5" />
             {project && (
-              <span className="text-sm text-slate-500 truncate max-w-xs">
-                {project.name}
-              </span>
+              <span className="text-sm text-slate-500 truncate max-w-xs">{project.name}</span>
             )}
             {project && (
               <Badge
@@ -126,6 +143,14 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
                 style={{ backgroundColor: "#dcfce7", color: "#15803d" }}
               >
                 {statusLabel(project.status)}
+              </Badge>
+            )}
+            {buildingModel && (
+              <Badge
+                className="text-xs border-transparent shrink-0"
+                style={{ backgroundColor: "#e0f2fe", color: "#075985" }}
+              >
+                BM v{buildingModel.version}
               </Badge>
             )}
           </div>
@@ -137,184 +162,240 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
               <ArrowLeft className="h-3.5 w-3.5" />
               Tableau de bord
             </Link>
-            <ReportExportButton resultId={result.id} />
+            {buildingModel && <ReportExportButton resultId={buildingModel.id} />}
           </div>
         </div>
       </nav>
 
       <div className="max-w-6xl mx-auto px-6 py-8">
-        {loading && (
-          <div className="py-20 text-center text-sm text-slate-400">Chargement…</div>
-        )}
-        {error && (
-          <div className="py-20 text-center text-sm text-red-500">Erreur : {error}</div>
-        )}
+        {loading && <div className="py-20 text-center text-sm text-slate-400">Chargement…</div>}
+        {error && <div className="py-20 text-center text-sm text-red-500">Erreur : {error}</div>}
 
-        {/* Alerts banner */}
-        {result.alerts && result.alerts.length > 0 && (
-          <div className="mb-6">
-            <ServitudesList alerts={result.alerts} />
-          </div>
-        )}
-
-        <Tabs defaultValue="synthese" className="space-y-6">
-          <TabsList className="bg-white border border-slate-100 rounded-xl p-1 h-auto flex-wrap gap-1">
-            <TabsTrigger value="synthese" className="rounded-lg text-sm data-[state=active]:text-white" style={{ "--tw-shadow": "none" } as React.CSSProperties}>
-              Synthèse
-            </TabsTrigger>
-            <TabsTrigger value="regles" className="rounded-lg text-sm">
-              Règles
-            </TabsTrigger>
-            <TabsTrigger value="capacite" className="rounded-lg text-sm">
-              Capacité
-            </TabsTrigger>
-            <TabsTrigger value="compliance" className="rounded-lg text-sm">
-              Compliance
-            </TabsTrigger>
-            <TabsTrigger value="site" className="rounded-lg text-sm">
-              Site
-            </TabsTrigger>
-            <TabsTrigger value="analyse" className="rounded-lg text-sm">
-              Analyse
-            </TabsTrigger>
-          </TabsList>
-
-          {/* ── Synthèse ── */}
-          <TabsContent value="synthese" className="space-y-6">
-            <FeasibilityDashboard kpis={buildKPIs(result)} />
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <Card className="p-6 border-slate-100 shadow-none">
-                <TypologyChart data={result.mix_typologique ?? {}} />
-              </Card>
-
-              <Card className="p-6 border-slate-100 shadow-none space-y-4">
-                <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
-                  Résumé de faisabilité
-                </h3>
-                {result.feasibility_summary ? (
-                  <p className="text-sm text-slate-700 leading-relaxed">
-                    {result.feasibility_summary}
-                  </p>
-                ) : (
-                  <p className="text-sm text-slate-400 italic">Résumé non disponible</p>
-                )}
-                {result.plu_confidence != null && (
-                  <div className="pt-3 border-t border-slate-100">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-400">Confiance PLU</span>
-                      <span
-                        className="font-semibold"
-                        style={{
-                          color:
-                            result.plu_confidence >= 0.85
-                              ? "var(--ac-green)"
-                              : "var(--ac-amber)",
-                        }}
-                      >
-                        {Math.round(result.plu_confidence * 100)}%
-                      </span>
-                    </div>
-                    <div className="mt-1.5 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all"
-                        style={{
-                          width: `${Math.round(result.plu_confidence * 100)}%`,
-                          backgroundColor:
-                            result.plu_confidence >= 0.85
-                              ? "var(--ac-green)"
-                              : "var(--ac-amber)",
-                        }}
-                      />
-                    </div>
-                  </div>
-                )}
-              </Card>
-            </div>
-          </TabsContent>
-
-          {/* ── Règles ── */}
-          <TabsContent value="regles">
-            <Card className="p-6 border-slate-100 shadow-none">
-              <RulesPanel
-                parsedRules={result.parsed_rules ?? {}}
-                numericRules={result.numeric_rules}
-                validated={result.plu_validated ?? false}
-                confidence={result.plu_confidence}
-              />
-            </Card>
-          </TabsContent>
-
-          {/* ── Capacité ── */}
-          <TabsContent value="capacite" className="space-y-6">
-            <FeasibilityDashboard kpis={buildKPIs(result)} />
-            <Card className="p-6 border-slate-100 shadow-none space-y-4">
-              <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
-                Détail du programme
-              </h3>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                {[
-                  { label: "Surface plancher", value: result.sdp_m2, unit: "m²" },
-                  { label: "Nombre de niveaux", value: result.niveaux },
-                  { label: "Nombre de logements", value: result.nb_logements },
-                  { label: "Places de stationnement", value: result.stationnement },
-                  { label: "Emprise au sol", value: result.emprise_pct, unit: "%" },
-                  { label: "Pleine terre", value: result.pleine_terre_pct, unit: "%" },
-                ].map((item) => (
-                  <div key={item.label} className="flex flex-col gap-1">
-                    <span className="text-xs text-slate-400 uppercase tracking-wider">
-                      {item.label}
-                    </span>
-                    <span className="text-xl font-bold tabular-nums" style={{ color: "var(--ac-primary)" }}>
-                      {item.value ?? "—"}
-                      {item.unit && item.value != null && (
-                        <span className="text-sm font-normal text-slate-400 ml-0.5">{item.unit}</span>
-                      )}
-                    </span>
-                  </div>
-                ))}
+        {!loading && !error && project && (
+          <>
+            {alerts.length > 0 && (
+              <div className="mb-6">
+                <ServitudesList alerts={alerts} />
               </div>
-            </Card>
-
-            {Object.keys(result.mix_typologique ?? {}).length > 0 && (
-              <Card className="p-6 border-slate-100 shadow-none">
-                <TypologyChart data={result.mix_typologique ?? {}} />
-              </Card>
             )}
-          </TabsContent>
 
-          {/* ── Compliance ── */}
-          <TabsContent value="compliance">
-            <Card className="p-6 border-slate-100 shadow-none">
-              <ComplianceSummary
-                incendie={result.incendie ?? ""}
-                pmr_ascenseur={result.pmr_ascenseur ?? false}
-                re2020_seuil={result.re2020_seuil ?? ""}
-                lls_statut={result.lls_statut ?? ""}
-                rsdu_obligations={result.rsdu_obligations ?? []}
-              />
-            </Card>
-          </TabsContent>
+            {bmNotFound && (
+              <div className="mb-6 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                Aucun modèle bâtiment généré pour ce projet — le rapport affiche les objectifs du brief uniquement.
+              </div>
+            )}
 
-          {/* ── Site ── */}
-          <TabsContent value="site">
-            <Card className="p-10 border-slate-100 shadow-none text-center space-y-3">
-              <p className="text-slate-400 text-sm">
-                Les photos de rue (Mapillary) et les données DVF seront affichées ici.
-              </p>
-              <p className="text-slate-300 text-xs">
-                Composants SitePhotosGallery et DvfChart disponibles — en attente de données géolocalisées.
-              </p>
-            </Card>
-          </TabsContent>
+            <Tabs defaultValue="synthese" className="space-y-6">
+              <TabsList className="bg-white border border-slate-100 rounded-xl p-1 h-auto flex-wrap gap-1">
+                <TabsTrigger value="synthese" className="rounded-lg text-sm">Synthèse</TabsTrigger>
+                <TabsTrigger value="capacite" className="rounded-lg text-sm">Capacité</TabsTrigger>
+                <TabsTrigger value="compliance" className="rounded-lg text-sm">Conformité</TabsTrigger>
+                <TabsTrigger value="site" className="rounded-lg text-sm">Site</TabsTrigger>
+                <TabsTrigger value="analyse" className="rounded-lg text-sm">Analyse</TabsTrigger>
+              </TabsList>
 
-          {/* ── Analyse ── */}
-          <TabsContent value="analyse">
-            <Card className="p-6 border-slate-100 shadow-none">
-              <ArchitectureNoteRenderer markdown={result.architecture_note_md ?? ""} />
-            </Card>
-          </TabsContent>
-        </Tabs>
+              {/* Synthèse */}
+              <TabsContent value="synthese" className="space-y-6">
+                <FeasibilityDashboard kpis={kpis} />
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <Card className="p-6 border-slate-100 shadow-none">
+                    <TypologyChart data={mix} />
+                  </Card>
+                  <Card className="p-6 border-slate-100 shadow-none space-y-4">
+                    <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
+                      Résumé
+                    </h3>
+                    {buildingModel ? (
+                      <p className="text-sm text-slate-700 leading-relaxed">
+                        {buildingSummary(buildingModel.model_json, countLogements(buildingModel.model_json))}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-slate-500 leading-relaxed">
+                        Objectifs (brief) : {project.brief?.cible_sdp_m2 ?? "—"} m² SDP cible,{" "}
+                        {project.brief?.cible_nb_logements ?? "—"} logements cible.
+                      </p>
+                    )}
+                  </Card>
+                </div>
+              </TabsContent>
+
+              {/* Capacité */}
+              <TabsContent value="capacite" className="space-y-6">
+                <FeasibilityDashboard kpis={kpis} />
+                {buildingModel && (
+                  <Card className="p-6 border-slate-100 shadow-none space-y-4">
+                    <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
+                      Détail par niveau
+                    </h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {buildingModel.model_json.niveaux.map((n) => {
+                        const logs = n.cellules.filter((c) => c.type === "logement");
+                        const typos = logs.map((c) => c.typologie).filter(Boolean).join(" · ");
+                        return (
+                          <div key={n.code} className="rounded-lg border border-slate-100 p-4 space-y-1">
+                            <div className="flex items-baseline justify-between">
+                              <span className="text-sm font-semibold text-slate-900">{n.code}</span>
+                              <span className="text-xs text-slate-400">{n.usage_principal}</span>
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              {logs.length} logement{logs.length > 1 ? "s" : ""} — {Math.round(n.surface_plancher_m2)} m²
+                              {typos && <span className="ml-1">· {typos}</span>}
+                            </div>
+                            <div className="text-xs text-slate-400">
+                              HSP {n.hauteur_sous_plafond_m} m
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Card>
+                )}
+                <Card className="p-6 border-slate-100 shadow-none">
+                  <TypologyChart data={mix} />
+                </Card>
+              </TabsContent>
+
+              {/* Conformité */}
+              <TabsContent value="compliance" className="space-y-6">
+                {buildingModel?.conformite_check ? (
+                  <Card className="p-6 border-slate-100 shadow-none">
+                    <ComplianceSummary
+                      incendie={buildingModel.conformite_check.incendie_distance_sorties_ok ? "Distance sorties OK" : "Distance sorties à revoir"}
+                      pmr_ascenseur={buildingModel.conformite_check.pmr_ascenseur_ok}
+                      re2020_seuil="—"
+                      lls_statut="—"
+                      rsdu_obligations={[]}
+                    />
+                  </Card>
+                ) : (
+                  <Card className="p-6 border-slate-100 shadow-none text-sm text-slate-400">
+                    Conformité non disponible — aucun modèle bâtiment généré.
+                  </Card>
+                )}
+                {buildingModel?.conformite_check?.alerts && buildingModel.conformite_check.alerts.length > 0 && (
+                  <Card className="p-6 border-slate-100 shadow-none space-y-3">
+                    <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
+                      Alertes détaillées ({buildingModel.conformite_check.alerts.length})
+                    </h3>
+                    <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                      {buildingModel.conformite_check.alerts.map((a, i) => (
+                        <div key={i} className="py-2 text-xs">
+                          <span
+                            className="inline-block uppercase tracking-wider font-semibold mr-2"
+                            style={{
+                              color: a.level === "error" ? "var(--ac-red)" : a.level === "warning" ? "var(--ac-amber)" : "var(--ac-blue)",
+                            }}
+                          >
+                            {a.level}
+                          </span>
+                          <span className="text-slate-700">{a.message}</span>
+                          <span className="ml-2 text-slate-400">[{a.category}]</span>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </TabsContent>
+
+              {/* Site */}
+              <TabsContent value="site" className="space-y-6">
+                <Card className="p-6 border-slate-100 shadow-none space-y-4">
+                  <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                    <MapPin className="h-4 w-4" /> Parcelle & site
+                  </h3>
+                  {buildingModel ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <div className="text-xs text-slate-400 uppercase tracking-wider">Adresse</div>
+                        <div className="font-semibold text-slate-900 mt-0.5">{buildingModel.model_json.metadata.address}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-400 uppercase tracking-wider">Zone PLU</div>
+                        <div className="font-semibold text-slate-900 mt-0.5">{buildingModel.model_json.metadata.zone_plu}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-400 uppercase tracking-wider">Surface parcelle</div>
+                        <div className="font-semibold text-slate-900 mt-0.5">
+                          {Math.round(buildingModel.model_json.site.parcelle_surface_m2)} m²
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-400 uppercase tracking-wider">Voirie</div>
+                        <div className="font-semibold text-slate-900 mt-0.5">
+                          {buildingModel.model_json.site.voirie_orientations.join(", ")}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <div className="text-xs text-slate-400 uppercase tracking-wider">Projet</div>
+                        <div className="font-semibold text-slate-900 mt-0.5">{project.name}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-400 uppercase tracking-wider">Destination</div>
+                        <div className="font-semibold text-slate-900 mt-0.5">{project.brief?.destination ?? "—"}</div>
+                      </div>
+                    </div>
+                  )}
+                </Card>
+
+                <Card className="p-6 border-slate-100 shadow-none space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                    <Building2 className="h-4 w-4" /> Programme cible (brief)
+                  </h3>
+                  {project.brief ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <div className="text-xs text-slate-400 uppercase tracking-wider">Destination</div>
+                        <div className="font-semibold text-slate-900 mt-0.5">{project.brief.destination}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-400 uppercase tracking-wider">SDP cible</div>
+                        <div className="font-semibold text-slate-900 mt-0.5">
+                          {project.brief.cible_sdp_m2 ?? "—"} {project.brief.cible_sdp_m2 != null && "m²"}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-400 uppercase tracking-wider">Logements cible</div>
+                        <div className="font-semibold text-slate-900 mt-0.5">{project.brief.cible_nb_logements ?? "—"}</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-400">Pas de brief renseigné.</p>
+                  )}
+                </Card>
+              </TabsContent>
+
+              {/* Analyse */}
+              <TabsContent value="analyse">
+                <Card className="p-6 border-slate-100 shadow-none">
+                  <ArchitectureNoteRenderer
+                    markdown={buildingModel
+                      ? [
+                          `## Synthèse — ${project.name}`,
+                          "",
+                          buildingSummary(buildingModel.model_json, countLogements(buildingModel.model_json)),
+                          "",
+                          "## Programme (brief)",
+                          "",
+                          `- Destination : ${project.brief?.destination ?? "—"}`,
+                          `- Cible SDP : ${project.brief?.cible_sdp_m2 ?? "—"} m²`,
+                          `- Cible logements : ${project.brief?.cible_nb_logements ?? "—"}`,
+                          "",
+                          "## Conformité",
+                          "",
+                          `- ${buildingModel.conformite_check?.alerts.length ?? 0} alertes détectées par \`validate_all\``,
+                          `- PMR ascenseur : ${buildingModel.conformite_check?.pmr_ascenseur_ok ? "OK" : "À revoir"}`,
+                          `- PLU emprise : ${buildingModel.conformite_check?.plu_emprise_ok ? "OK" : "À revoir"}`,
+                        ].join("\n")
+                      : `## ${project.name}\n\nModèle bâtiment pas encore généré.`}
+                  />
+                </Card>
+              </TabsContent>
+            </Tabs>
+          </>
+        )}
       </div>
     </main>
   );
