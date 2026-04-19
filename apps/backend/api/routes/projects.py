@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
+from api.deps import CurrentUserDep
+from db.models.project_status_history import ProjectStatusHistoryRow
 from db.models.projects import ProjectRow
 from db.session import SessionDep
 from schemas.project import (
@@ -15,6 +19,10 @@ from schemas.project import (
     ProjectCreate,
     ProjectDetail,
     ProjectOut,
+    ProjectStatusChange,
+    ProjectStatusHistoryItem,
+    ProjectStatusHistoryResponse,
+    ProjectStatusResponse,
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -114,3 +122,78 @@ async def analyze_status(
     # Placeholder job ID derived from project ID (deterministic for v1)
     job_id = f"job-{project_id}"
     return AnalyzeStatusResponse(job_id=job_id, status="pending", progress=None)
+
+
+ALLOWED_TRANSITIONS: dict[str, set[str]] = {
+    "draft": {"analyzed", "archived"},
+    "analyzed": {"reviewed", "archived"},
+    "reviewed": {"ready_for_pc", "archived"},
+    "ready_for_pc": {"archived"},
+    "archived": {"draft"},
+}
+
+
+@router.patch("/{project_id}/status", response_model=ProjectStatusResponse)
+async def update_project_status(
+    project_id: str,
+    body: ProjectStatusChange,
+    current_user: CurrentUserDep,
+    session: SessionDep,
+) -> ProjectStatusResponse:
+    project = await session.get(ProjectRow, UUID(project_id))
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    from_status = project.status
+    to_status = body.status
+
+    if to_status not in ALLOWED_TRANSITIONS.get(from_status, set()):
+        raise HTTPException(
+            400, f"Transition {from_status} -> {to_status} not allowed"
+        )
+
+    project.status = to_status
+    project.status_changed_at = datetime.now(UTC)
+    project.status_changed_by = current_user.id
+
+    session.add(
+        ProjectStatusHistoryRow(
+            project_id=project.id,
+            from_status=from_status,
+            to_status=to_status,
+            changed_by=current_user.id,
+            notes=body.notes,
+        )
+    )
+    await session.commit()
+    return ProjectStatusResponse(status=to_status)
+
+
+@router.get(
+    "/{project_id}/status_history", response_model=ProjectStatusHistoryResponse
+)
+async def get_status_history(
+    project_id: str,
+    current_user: CurrentUserDep,
+    session: SessionDep,
+) -> ProjectStatusHistoryResponse:
+    rows = (
+        await session.execute(
+            select(ProjectStatusHistoryRow)
+            .where(ProjectStatusHistoryRow.project_id == UUID(project_id))
+            .order_by(ProjectStatusHistoryRow.changed_at.desc())
+        )
+    ).scalars().all()
+    return ProjectStatusHistoryResponse(
+        items=[
+            ProjectStatusHistoryItem(
+                id=str(r.id),
+                from_status=r.from_status,
+                to_status=r.to_status,
+                changed_by=str(r.changed_by) if r.changed_by else None,
+                changed_at=r.changed_at.isoformat() if r.changed_at else None,
+                notes=r.notes,
+            )
+            for r in rows
+        ]
+    )

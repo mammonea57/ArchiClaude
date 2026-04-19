@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -42,3 +44,25 @@ class AnalyzeStatusResponse(BaseModel):
     job_id: str
     status: str
     progress: str | None = None
+
+
+class ProjectStatusChange(BaseModel):
+    status: Literal["draft", "analyzed", "reviewed", "ready_for_pc", "archived"]
+    notes: str | None = None
+
+
+class ProjectStatusHistoryItem(BaseModel):
+    id: str
+    from_status: str | None
+    to_status: str
+    changed_by: str | None
+    changed_at: str | None
+    notes: str | None
+
+
+class ProjectStatusHistoryResponse(BaseModel):
+    items: list[ProjectStatusHistoryItem]
+
+
+class ProjectStatusResponse(BaseModel):
+    status: str
