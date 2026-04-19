@@ -133,13 +133,109 @@ class ApartmentSlot:
     position_in_floor: str  # "angle" | "milieu" | "extremite"
 
 
+def _decompose_into_wings(footprint: ShapelyPolygon) -> list[ShapelyPolygon]:
+    """Split an L / T / cross footprint into rectangular wings.
+
+    Greedy axis-aligned decomposition: iteratively carve the largest
+    bounding rectangle from the footprint until only slivers remain.
+    For a simple rectangular footprint returns [footprint]. For an L
+    returns 2 rectangles that union to the L. Works for axis-aligned
+    polygons with right-angle corners (typical cadastral shapes).
+    """
+    remaining = footprint
+    wings: list[ShapelyPolygon] = []
+    safety = 10
+    while remaining.area > 1.0 and safety > 0:
+        safety -= 1
+        minx, miny, maxx, maxy = remaining.bounds
+        # Try both axis slices: horizontal sweep + vertical sweep, pick whichever
+        # yields the largest fully-contained rectangle.
+        best_rect: ShapelyPolygon | None = None
+        best_area = 0.0
+        # Vertical strips: find longest horizontal strip of full footprint height
+        step = 0.5
+        x = minx
+        while x < maxx:
+            x2 = x + step
+            # Strip from x to x2, full y range, intersected with remaining
+            strip = ShapelyPolygon([(x, miny), (x2, miny), (x2, maxy), (x, maxy)]).intersection(remaining)
+            # Extend x2 as long as strip is a clean rectangle (no reflex)
+            while x2 + step <= maxx:
+                next_strip = ShapelyPolygon(
+                    [(x, miny), (x2 + step, miny), (x2 + step, maxy), (x, maxy)]
+                ).intersection(remaining)
+                if _is_rectangle(next_strip, tol=0.5):
+                    strip = next_strip
+                    x2 += step
+                else:
+                    break
+            if _is_rectangle(strip, tol=0.5) and strip.area > best_area:
+                # Fit strip to its own minimal bbox
+                sxmin, symin, sxmax, symax = strip.bounds
+                rect = ShapelyPolygon([(sxmin, symin), (sxmax, symin), (sxmax, symax), (sxmin, symax)])
+                if rect.within(remaining.buffer(0.01)):
+                    best_rect = rect
+                    best_area = rect.area
+            x = x2 if x2 > x else x + step
+
+        # Horizontal strips for the other axis
+        y = miny
+        while y < maxy:
+            y2 = y + step
+            strip = ShapelyPolygon([(minx, y), (maxx, y), (maxx, y2), (minx, y2)]).intersection(remaining)
+            while y2 + step <= maxy:
+                next_strip = ShapelyPolygon(
+                    [(minx, y), (maxx, y), (maxx, y2 + step), (minx, y2 + step)]
+                ).intersection(remaining)
+                if _is_rectangle(next_strip, tol=0.5):
+                    strip = next_strip
+                    y2 += step
+                else:
+                    break
+            if _is_rectangle(strip, tol=0.5) and strip.area > best_area:
+                sxmin, symin, sxmax, symax = strip.bounds
+                rect = ShapelyPolygon([(sxmin, symin), (sxmax, symin), (sxmax, symax), (sxmin, symax)])
+                if rect.within(remaining.buffer(0.01)):
+                    best_rect = rect
+                    best_area = rect.area
+            y = y2 if y2 > y else y + step
+
+        if best_rect is None or best_area < 1.0:
+            break
+        wings.append(best_rect)
+        remaining = remaining.difference(best_rect.buffer(0.001))
+        if remaining.geom_type == "MultiPolygon":
+            # Keep working on the biggest piece
+            remaining = max(remaining.geoms, key=lambda g: g.area)
+
+    return wings or [footprint]
+
+
+def _is_rectangle(poly: ShapelyPolygon, tol: float = 0.5) -> bool:
+    """Is this polygon close to a rectangle (= bbox area ≈ polygon area)?"""
+    if poly.is_empty or poly.geom_type != "Polygon":
+        return False
+    minx, miny, maxx, maxy = poly.bounds
+    bbox_area = (maxx - minx) * (maxy - miny)
+    if bbox_area <= 0:
+        return False
+    return abs(bbox_area - poly.area) < tol
+
+
 def compute_apartment_slots(
     grid: ModularGrid,
     core: CorePlacement,
     mix_typologique: dict[Typologie, float],
     voirie_side: str,
 ) -> list[ApartmentSlot]:
-    """Divide footprint minus core minus circulation into slots per mix."""
+    """Divide footprint into slots per mix.
+
+    For rectangular footprints: slice the whole footprint along its longer
+    axis. For L-shaped / non-convex footprints: decompose into rectangular
+    wings and slice each wing independently, so a mairie-compliant corner
+    building (L-shape at the angle of two streets) produces coherent
+    apartments on both arms.
+    """
     if grid.footprint is None:
         raise ValueError("grid.footprint is None")
 
@@ -180,62 +276,119 @@ def compute_apartment_slots(
     min_slots = len(active_mix)
     typos_expanded = typos_expanded[:max(nb_apartments, min_slots)]
 
-    # Strip-divide usable area along longest axis, assign a typo to each strip
-    minx, miny, maxx, maxy = usable.bounds
-    width = maxx - minx
-    height = maxy - miny
+    # Decompose footprint into rectangular wings (1 for rectangle, 2+ for L).
+    wings = _decompose_into_wings(grid.footprint)
 
-    # Equal-width slicing, intersected with footprint so L-shaped or
-    # non-convex footprints produce slots that follow the building outline
-    # (but not the core — core + palier are separate niveau elements).
-    # Empty intersections are dropped (missing corners of an L).
-    n = len(typos_expanded)
     slots: list[ApartmentSlot] = []
     slot_idx = 0
-    if width >= height:
-        slot_w = width / n
-        for i, typo in enumerate(typos_expanded):
-            x_cursor = minx + i * slot_w
-            rect = ShapelyPolygon([
-                (x_cursor, miny), (x_cursor + slot_w, miny),
-                (x_cursor + slot_w, maxy), (x_cursor, maxy),
-            ])
-            slot_poly = rect.intersection(grid.footprint)
-            if slot_poly.is_empty or slot_poly.area < 10:
+
+    for wing in wings:
+        wxmin, wymin, wxmax, wymax = wing.bounds
+        wing_w = wxmax - wxmin
+        wing_h = wymax - wymin
+
+        # Decide slice axis (longer side) and how many slots fit the template
+        # depth constraints. Template profondeur ranges are [7, 11.5]m across
+        # T1-T5, so a wing depth in that range is what we want. If the wing is
+        # deeper than 12m along the slicing axis, we slice MORE strips to make
+        # each strip ~8-10m along the slicing direction.
+        slice_x = wing_w >= wing_h
+        slice_length = wing_w if slice_x else wing_h
+        perp_length = wing_h if slice_x else wing_w
+
+        # Pick #slots so each slot's slicing-length ≈ 8m (common apartment width)
+        # OR ≈ 10m (apartment depth) depending on wing orientation.
+        target_slot_len = 8.5 if perp_length <= 10.5 else 6.8
+        nb_slots_in_wing = max(1, round(slice_length / target_slot_len))
+
+        # Pick typologies for this wing based on wing dimensions:
+        # - If perp_length ∈ [T4 depth ~9-11.5], can use T4
+        # - If ∈ [T3 depth ~8.5-10.5], T3
+        # - Else T2
+        # Prefer the dominant typo from the active mix that fits.
+        candidates: list[Typologie] = []
+        for typo, ratio in sorted(mix_norm.items(), key=lambda kv: -kv[1]):
+            dim_range = _TYPO_DIM_RANGE.get(typo)
+            if dim_range is None:
                 continue
-            if slot_poly.geom_type == "MultiPolygon":
-                slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
-            orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
-            position = _infer_position(slot_idx, n)
-            slots.append(ApartmentSlot(
-                id=f"slot_{slot_idx}", polygon=slot_poly, surface_m2=slot_poly.area,
-                target_typologie=typo, orientations=orientations,
-                position_in_floor=position,
-            ))
-            slot_idx += 1
-    else:
-        slot_h = height / n
-        for i, typo in enumerate(typos_expanded):
-            y_cursor = miny + i * slot_h
-            rect = ShapelyPolygon([
-                (minx, y_cursor), (maxx, y_cursor),
-                (maxx, y_cursor + slot_h), (minx, y_cursor + slot_h),
-            ])
-            slot_poly = rect.intersection(grid.footprint)
-            if slot_poly.is_empty or slot_poly.area < 10:
-                continue
-            if slot_poly.geom_type == "MultiPolygon":
-                slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
-            orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
-            position = _infer_position(slot_idx, n)
-            slots.append(ApartmentSlot(
-                id=f"slot_{slot_idx}", polygon=slot_poly, surface_m2=slot_poly.area,
-                target_typologie=typo, orientations=orientations,
-                position_in_floor=position,
-            ))
-            slot_idx += 1
+            lw_min, lw_max, ld_min, ld_max = dim_range
+            slot_width_if = target_slot_len if slice_x else perp_length
+            slot_depth_if = perp_length if slice_x else target_slot_len
+            if (lw_min * 0.85 <= slot_width_if <= lw_max * 1.15
+                    and ld_min * 0.85 <= slot_depth_if <= ld_max * 1.15):
+                candidates.append(typo)
+        if not candidates:
+            # No typo fits — skip this wing
+            continue
+
+        # Distribute slots across candidate typologies proportional to mix
+        wing_typos: list[Typologie] = []
+        total_cand_ratio = sum(mix_norm[t] for t in candidates)
+        for typo in candidates:
+            share = round(nb_slots_in_wing * mix_norm[typo] / total_cand_ratio)
+            wing_typos.extend([typo] * max(0, share))
+        # Trim/pad to nb_slots_in_wing
+        if len(wing_typos) < nb_slots_in_wing:
+            wing_typos.extend([candidates[0]] * (nb_slots_in_wing - len(wing_typos)))
+        wing_typos = wing_typos[:nb_slots_in_wing]
+
+        n = len(wing_typos)
+        if slice_x:
+            slot_w = wing_w / n
+            for i, typo in enumerate(wing_typos):
+                x_cursor = wxmin + i * slot_w
+                rect = ShapelyPolygon([
+                    (x_cursor, wymin), (x_cursor + slot_w, wymin),
+                    (x_cursor + slot_w, wymax), (x_cursor, wymax),
+                ])
+                slot_poly = rect.intersection(grid.footprint)
+                if slot_poly.is_empty or slot_poly.area < 10:
+                    continue
+                if slot_poly.geom_type == "MultiPolygon":
+                    slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
+                orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
+                position = _infer_position(i, n)
+                slots.append(ApartmentSlot(
+                    id=f"slot_{slot_idx}", polygon=slot_poly, surface_m2=slot_poly.area,
+                    target_typologie=typo, orientations=orientations,
+                    position_in_floor=position,
+                ))
+                slot_idx += 1
+        else:
+            slot_h = wing_h / n
+            for i, typo in enumerate(wing_typos):
+                y_cursor = wymin + i * slot_h
+                rect = ShapelyPolygon([
+                    (wxmin, y_cursor), (wxmax, y_cursor),
+                    (wxmax, y_cursor + slot_h), (wxmin, y_cursor + slot_h),
+                ])
+                slot_poly = rect.intersection(grid.footprint)
+                if slot_poly.is_empty or slot_poly.area < 10:
+                    continue
+                if slot_poly.geom_type == "MultiPolygon":
+                    slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
+                orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
+                position = _infer_position(i, n)
+                slots.append(ApartmentSlot(
+                    id=f"slot_{slot_idx}", polygon=slot_poly, surface_m2=slot_poly.area,
+                    target_typologie=typo, orientations=orientations,
+                    position_in_floor=position,
+                ))
+                slot_idx += 1
 
     return slots
+
+
+# Width & depth min/max per typology, read from the seed templates to keep
+# per-wing candidate selection in sync with the adapter tolerances.
+_TYPO_DIM_RANGE: dict[Typologie, tuple[float, float, float, float]] = {
+    Typologie.STUDIO: (4.0, 5.5, 5.5, 7.0),
+    Typologie.T1: (4.5, 6.0, 6.0, 7.5),
+    Typologie.T2: (6.0, 7.5, 7.0, 8.5),
+    Typologie.T3: (7.2, 9.0, 8.5, 10.5),
+    Typologie.T4: (8.5, 11.0, 9.0, 11.5),
+    Typologie.T5: (8.5, 11.0, 9.0, 11.5),  # no T5 seed — use T4 bounds
+}
 
 
 def _infer_orientations(slot_poly: ShapelyPolygon, footprint: ShapelyPolygon, voirie_side: str) -> list[str]:
