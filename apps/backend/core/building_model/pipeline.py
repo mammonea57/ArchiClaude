@@ -113,6 +113,13 @@ async def generate_building_model(
                     continue  # Fallback solver would go here (Sprint 2 task)
                 fit = adapter.fit_to_slot(sel.template, slot)
                 if fit.success and fit.apartment is not None:
+                    # Reclassify typologie using the ACTUAL apartment surface
+                    # (room sum can differ from slot poly area). Enforces the
+                    # strict T2<T3<T4<T5 hierarchy the user expects.
+                    from core.building_model.solver import _reclassify_by_surface
+                    fit.apartment.typologie = _reclassify_by_surface(
+                        fit.apartment.surface_m2, fit.apartment.typologie or slot.target_typologie,
+                    )
                     cells_for_niveau.append(fit.apartment)
 
         circ = Circulation(

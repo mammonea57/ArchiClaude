@@ -86,6 +86,9 @@ class TemplateAdapter:
                 merged = cell_polys[0]
                 for p in cell_polys[1:]:
                     merged = merged.union(p)
+            # Fallback if cells aren't contiguous — use the largest piece
+            if merged.geom_type == "MultiPolygon":
+                merged = max(merged.geoms, key=lambda g: g.area)
             # Simplify to coords list
             coords = list(merged.exterior.coords)[:-1]
             surface = merged.area
@@ -140,7 +143,13 @@ class TemplateAdapter:
                 swing=ao.get("swing"),
             ))
 
-        # 5. Build Cellule
+        # 5. Add exterior-wall windows for living rooms that don't yet have one.
+        #    Slot.orientations carries the cardinal sides that face the outside
+        #    (voirie or cœur d'îlot). Each séjour + chambre on the apartment's
+        #    perimeter receives a standard window on its nearest exterior side.
+        self._add_exterior_openings(rooms, walls, openings, slot)
+
+        # 6. Build Cellule
         apartment = Cellule(
             id=slot.id,
             type=CelluleType.LOGEMENT,
@@ -153,6 +162,134 @@ class TemplateAdapter:
         )
 
         return FitResult(success=True, apartment=apartment, stretch_x=stretch_x, stretch_y=stretch_y)
+
+    @staticmethod
+    def _add_exterior_openings(
+        rooms: list[Room], walls: list[Wall], openings: list[Opening], slot: ApartmentSlot
+    ) -> None:
+        """Ensure every living room has a window on an exterior wall.
+
+        A room is a living room if its type is sejour*, cuisine, or chambre*.
+        An exterior side is one listed in slot.orientations (sud/nord/est/ouest).
+        For each such room that doesn't already have a window, we add a
+        140-cm-wide fenêtre (200 cm for séjour) on the side of the room
+        that coincides with an exterior side of the slot.
+        """
+        from core.building_model.schemas import OpeningType  # local to avoid top-level churn
+
+        if slot.polygon.is_empty:
+            return
+        sminx, sminy, smaxx, smaxy = slot.polygon.bounds
+        exterior_sides = set(slot.orientations or [])
+        if not exterior_sides:
+            return
+
+        LIVING_ROOMS = {
+            RoomType.SEJOUR, RoomType.SEJOUR_CUISINE, RoomType.CUISINE,
+            RoomType.CHAMBRE_PARENTS, RoomType.CHAMBRE_ENFANT, RoomType.CHAMBRE_SUPP,
+        }
+
+        def _room_touches_side(room: Room, side: str, tol: float = 0.35) -> bool:
+            if not room.polygon_xy:
+                return False
+            xs = [p[0] for p in room.polygon_xy]
+            ys = [p[1] for p in room.polygon_xy]
+            if side == "sud":   return min(ys) - sminy < tol
+            if side == "nord":  return smaxy - max(ys) < tol
+            if side == "ouest": return min(xs) - sminx < tol
+            if side == "est":   return smaxx - max(xs) < tol
+            return False
+
+        def _side_segment(side: str, room: Room) -> tuple[tuple[float, float], tuple[float, float]] | None:
+            """Return the (start, end) world coords of the room edge along that side."""
+            if not room.polygon_xy:
+                return None
+            xs = [p[0] for p in room.polygon_xy]
+            ys = [p[1] for p in room.polygon_xy]
+            if side == "sud":   return ((min(xs), sminy), (max(xs), sminy))
+            if side == "nord":  return ((min(xs), smaxy), (max(xs), smaxy))
+            if side == "ouest": return ((sminx, min(ys)), (sminx, max(ys)))
+            if side == "est":   return ((smaxx, min(ys)), (smaxx, max(ys)))
+            return None
+
+        next_op_idx = len(openings)
+        next_wall_idx = len(walls)
+
+        for room in rooms:
+            if room.type not in LIVING_ROOMS:
+                continue
+            # Skip if room already has a window (via wall_id lookup)
+            has_window = False
+            for op in openings:
+                if op.type not in (OpeningType.FENETRE, OpeningType.PORTE_FENETRE, OpeningType.BAIE_COULISSANTE):
+                    continue
+                w = next((ww for ww in walls if ww.id == op.wall_id), None)
+                if w is None:
+                    continue
+                coords = w.geometry.get("coords", [])
+                if len(coords) < 2:
+                    continue
+                # Is this wall along one of the room's polygon edges?
+                # Quick check: at least one wall endpoint is close to the room
+                for wp in coords:
+                    if any((abs(wp[0] - p[0]) + abs(wp[1] - p[1])) < 0.4 for p in room.polygon_xy):
+                        has_window = True
+                        break
+                if has_window:
+                    break
+            if has_window:
+                continue
+
+            # Pick the best exterior side for this room
+            chosen_side = None
+            for side in ("sud", "ouest", "est", "nord"):  # prefer south, then voirie-likely sides
+                if side in exterior_sides and _room_touches_side(room, side):
+                    chosen_side = side
+                    break
+            if chosen_side is None:
+                continue
+
+            seg = _side_segment(chosen_side, room)
+            if seg is None:
+                continue
+            (x0, y0), (x1, y1) = seg
+            # Create (or reuse) a wall for that side
+            wall = Wall(
+                id=f"w_ext_{next_wall_idx}",
+                type=WallType.PORTEUR,
+                thickness_cm=20,
+                geometry={"type": "LineString", "coords": [[x0, y0], [x1, y1]]},
+                hauteur_cm=260,
+                materiau="beton_banche",
+            )
+            walls.append(wall)
+            next_wall_idx += 1
+
+            wall_len_cm = int(((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 * 100)
+            if wall_len_cm < 100:
+                continue
+            # Window size: large for séjour, medium for chambres, small for cuisine-only
+            if room.type in (RoomType.SEJOUR, RoomType.SEJOUR_CUISINE):
+                op_type = OpeningType.PORTE_FENETRE
+                width_cm = min(240, int(wall_len_cm * 0.55))
+            elif room.type == RoomType.CUISINE:
+                op_type = OpeningType.FENETRE
+                width_cm = min(120, int(wall_len_cm * 0.4))
+            else:
+                op_type = OpeningType.FENETRE
+                width_cm = min(140, int(wall_len_cm * 0.45))
+
+            openings.append(Opening(
+                id=f"op_ext_{next_op_idx}",
+                type=op_type,
+                wall_id=wall.id,
+                position_along_wall_cm=wall_len_cm // 2,
+                width_cm=width_cm,
+                height_cm=220 if op_type == OpeningType.PORTE_FENETRE else 200,
+                allege_cm=None if op_type == OpeningType.PORTE_FENETRE else 95,
+                swing=None,
+            ))
+            next_op_idx += 1
 
     @staticmethod
     def _label_fr(room_type: RoomType) -> str:

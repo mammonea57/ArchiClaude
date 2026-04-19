@@ -113,13 +113,15 @@ def place_core(grid: ModularGrid, core_surface_m2: float) -> CorePlacement:
     )
 
 
+# Typology size hierarchy — strict T2 < T3 < T4 < T5 per user spec.
+# T3 ≤ 60 m² target; T4 starts at 70+ m² (never smaller than a T3).
 _TYPO_TARGET_SURFACE_M2 = {
     Typologie.STUDIO: 22.0,
     Typologie.T1: 32.0,
     Typologie.T2: 48.0,
-    Typologie.T3: 68.0,
-    Typologie.T4: 85.0,
-    Typologie.T5: 108.0,
+    Typologie.T3: 58.0,   # user: T3 entre 55 et 60 m²
+    Typologie.T4: 78.0,   # must be > T3 max
+    Typologie.T5: 100.0,  # must be > T4 max
 }
 
 
@@ -282,113 +284,178 @@ def compute_apartment_slots(
     slots: list[ApartmentSlot] = []
     slot_idx = 0
 
-    for wing in wings:
-        wxmin, wymin, wxmax, wymax = wing.bounds
-        wing_w = wxmax - wxmin
-        wing_h = wymax - wymin
+    _CORRIDOR_WIDTH_M = 1.6   # minimum PMR corridor
+    _DUAL_LOADED_THRESHOLD_M = 12.0  # wings deeper than this get a central corridor
 
-        # Decide slice axis (longer side) and how many slots fit the template
-        # depth constraints. Template profondeur ranges are [7, 11.5]m across
-        # T1-T5, so a wing depth in that range is what we want. If the wing is
-        # deeper than 12m along the slicing axis, we slice MORE strips to make
-        # each strip ~8-10m along the slicing direction.
-        slice_x = wing_w >= wing_h
-        slice_length = wing_w if slice_x else wing_h
-        perp_length = wing_h if slice_x else wing_w
+    for wing_outer in wings:
+        wxmin_o, wymin_o, wxmax_o, wymax_o = wing_outer.bounds
+        wing_w_o = wxmax_o - wxmin_o
+        wing_h_o = wymax_o - wymin_o
 
-        # Pick #slots so each slot's slicing-length ≈ 8m (common apartment width)
-        # OR ≈ 10m (apartment depth) depending on wing orientation.
-        target_slot_len = 8.5 if perp_length <= 10.5 else 6.8
-        nb_slots_in_wing = max(1, round(slice_length / target_slot_len))
+        # Dual-loaded corridor: if the perpendicular span exceeds
+        # _DUAL_LOADED_THRESHOLD_M, split the wing into two parallel strips
+        # (north + south, or east + west) separated by a central corridor so
+        # apartments land at architect-appropriate depths on both sides.
+        slice_x_outer = wing_w_o >= wing_h_o
+        perp_outer = wing_h_o if slice_x_outer else wing_w_o
 
-        # Pick typologies for this wing based on wing dimensions:
-        # - If perp_length ∈ [T4 depth ~9-11.5], can use T4
-        # - If ∈ [T3 depth ~8.5-10.5], T3
-        # - Else T2
-        # Prefer the dominant typo from the active mix that fits.
-        candidates: list[Typologie] = []
-        for typo, ratio in sorted(mix_norm.items(), key=lambda kv: -kv[1]):
-            dim_range = _TYPO_DIM_RANGE.get(typo)
-            if dim_range is None:
-                continue
-            lw_min, lw_max, ld_min, ld_max = dim_range
-            slot_width_if = target_slot_len if slice_x else perp_length
-            slot_depth_if = perp_length if slice_x else target_slot_len
-            if (lw_min * 0.85 <= slot_width_if <= lw_max * 1.15
-                    and ld_min * 0.85 <= slot_depth_if <= ld_max * 1.15):
-                candidates.append(typo)
-        if not candidates:
-            # No typo fits — skip this wing
-            continue
-
-        # Distribute slots across candidate typologies proportional to mix
-        wing_typos: list[Typologie] = []
-        total_cand_ratio = sum(mix_norm[t] for t in candidates)
-        for typo in candidates:
-            share = round(nb_slots_in_wing * mix_norm[typo] / total_cand_ratio)
-            wing_typos.extend([typo] * max(0, share))
-        # Trim/pad to nb_slots_in_wing
-        if len(wing_typos) < nb_slots_in_wing:
-            wing_typos.extend([candidates[0]] * (nb_slots_in_wing - len(wing_typos)))
-        wing_typos = wing_typos[:nb_slots_in_wing]
-
-        n = len(wing_typos)
-        if slice_x:
-            slot_w = wing_w / n
-            for i, typo in enumerate(wing_typos):
-                x_cursor = wxmin + i * slot_w
-                rect = ShapelyPolygon([
-                    (x_cursor, wymin), (x_cursor + slot_w, wymin),
-                    (x_cursor + slot_w, wymax), (x_cursor, wymax),
-                ])
-                slot_poly = rect.intersection(grid.footprint)
-                if slot_poly.is_empty or slot_poly.area < 10:
-                    continue
-                if slot_poly.geom_type == "MultiPolygon":
-                    slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
-                orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
-                position = _infer_position(i, n)
-                slots.append(ApartmentSlot(
-                    id=f"slot_{slot_idx}", polygon=slot_poly, surface_m2=slot_poly.area,
-                    target_typologie=typo, orientations=orientations,
-                    position_in_floor=position,
-                ))
-                slot_idx += 1
+        if perp_outer > _DUAL_LOADED_THRESHOLD_M:
+            half = (perp_outer - _CORRIDOR_WIDTH_M) / 2
+            if slice_x_outer:
+                # Corridor is horizontal in the middle of the wing
+                sub_wings = [
+                    ShapelyPolygon([
+                        (wxmin_o, wymin_o), (wxmax_o, wymin_o),
+                        (wxmax_o, wymin_o + half), (wxmin_o, wymin_o + half),
+                    ]),
+                    ShapelyPolygon([
+                        (wxmin_o, wymax_o - half), (wxmax_o, wymax_o - half),
+                        (wxmax_o, wymax_o), (wxmin_o, wymax_o),
+                    ]),
+                ]
+            else:
+                sub_wings = [
+                    ShapelyPolygon([
+                        (wxmin_o, wymin_o), (wxmin_o + half, wymin_o),
+                        (wxmin_o + half, wymax_o), (wxmin_o, wymax_o),
+                    ]),
+                    ShapelyPolygon([
+                        (wxmax_o - half, wymin_o), (wxmax_o, wymin_o),
+                        (wxmax_o, wymax_o), (wxmax_o - half, wymax_o),
+                    ]),
+                ]
         else:
-            slot_h = wing_h / n
-            for i, typo in enumerate(wing_typos):
-                y_cursor = wymin + i * slot_h
-                rect = ShapelyPolygon([
-                    (wxmin, y_cursor), (wxmax, y_cursor),
-                    (wxmax, y_cursor + slot_h), (wxmin, y_cursor + slot_h),
-                ])
-                slot_poly = rect.intersection(grid.footprint)
-                if slot_poly.is_empty or slot_poly.area < 10:
-                    continue
-                if slot_poly.geom_type == "MultiPolygon":
-                    slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
-                orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
-                position = _infer_position(i, n)
-                slots.append(ApartmentSlot(
-                    id=f"slot_{slot_idx}", polygon=slot_poly, surface_m2=slot_poly.area,
-                    target_typologie=typo, orientations=orientations,
-                    position_in_floor=position,
-                ))
-                slot_idx += 1
+            sub_wings = [wing_outer]
+
+        # Process each sub-wing (single or dual strip around the corridor)
+        for wing in sub_wings:
+            wxmin, wymin, wxmax, wymax = wing.bounds
+            wing_w = wxmax - wxmin
+            wing_h = wymax - wymin
+
+            # Slice along the longer side; apartments span the perpendicular.
+            slice_x = wing_w >= wing_h
+            slice_length = wing_w if slice_x else wing_h
+            perp_length = wing_h if slice_x else wing_w
+
+            # 1. Typologies whose DEPTH range can host this perp_length
+            fitting_typos = [
+                t for t in mix_norm
+                if _TYPO_DIM_RANGE[t][2] * 0.85 <= perp_length <= _TYPO_DIM_RANGE[t][3] * 1.15
+            ]
+            if not fitting_typos:
+                continue
+
+            # 2. Target slot width = smallest fitting typo to pack more apts
+            smallest_typo = min(fitting_typos, key=lambda t: typo_surface_targets[t])
+            lw_min, lw_max, _ld_min, _ld_max = _TYPO_DIM_RANGE[smallest_typo]
+            target_slot_width = (lw_min + lw_max) / 2
+            nb_slots_in_wing = max(1, round(slice_length / target_slot_width))
+            max_nb = max(1, int(slice_length / (lw_min * 0.85)))
+            min_nb = max(1, math.ceil(slice_length / (lw_max * 1.15)))
+            nb_slots_in_wing = max(min_nb, min(nb_slots_in_wing, max_nb))
+            actual_slot_width = slice_length / nb_slots_in_wing
+
+            # 3. Re-filter candidates against the ACTUAL slot dimensions
+            candidates: list[Typologie] = []
+            for typo in sorted(mix_norm.keys(), key=lambda t: -mix_norm[t]):
+                wmin, wmax, dmin, dmax = _TYPO_DIM_RANGE[typo]
+                if (wmin * 0.85 <= actual_slot_width <= wmax * 1.15
+                        and dmin * 0.85 <= perp_length <= dmax * 1.15):
+                    candidates.append(typo)
+            if not candidates:
+                candidates = [smallest_typo]
+
+            # 4. Distribute slots across candidates proportional to mix
+            wing_typos: list[Typologie] = []
+            total_cand_ratio = sum(mix_norm[t] for t in candidates)
+            for typo in candidates:
+                share = round(nb_slots_in_wing * mix_norm[typo] / total_cand_ratio)
+                wing_typos.extend([typo] * max(0, share))
+            if len(wing_typos) < nb_slots_in_wing:
+                wing_typos.extend([candidates[0]] * (nb_slots_in_wing - len(wing_typos)))
+            wing_typos = wing_typos[:nb_slots_in_wing]
+
+            n = len(wing_typos)
+            if slice_x:
+                slot_w = wing_w / n
+                for i, typo in enumerate(wing_typos):
+                    x_cursor = wxmin + i * slot_w
+                    rect = ShapelyPolygon([
+                        (x_cursor, wymin), (x_cursor + slot_w, wymin),
+                        (x_cursor + slot_w, wymax), (x_cursor, wymax),
+                    ])
+                    slot_poly = rect.intersection(grid.footprint)
+                    if slot_poly.is_empty or slot_poly.area < 10:
+                        continue
+                    if slot_poly.geom_type == "MultiPolygon":
+                        slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
+                    orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
+                    position = _infer_position(i, n)
+                    final_typo = _reclassify_by_surface(slot_poly.area, typo)
+                    slots.append(ApartmentSlot(
+                        id=f"slot_{slot_idx}", polygon=slot_poly, surface_m2=slot_poly.area,
+                        target_typologie=final_typo, orientations=orientations,
+                        position_in_floor=position,
+                    ))
+                    slot_idx += 1
+            else:
+                slot_h = wing_h / n
+                for i, typo in enumerate(wing_typos):
+                    y_cursor = wymin + i * slot_h
+                    rect = ShapelyPolygon([
+                        (wxmin, y_cursor), (wxmax, y_cursor),
+                        (wxmax, y_cursor + slot_h), (wxmin, y_cursor + slot_h),
+                    ])
+                    slot_poly = rect.intersection(grid.footprint)
+                    if slot_poly.is_empty or slot_poly.area < 10:
+                        continue
+                    if slot_poly.geom_type == "MultiPolygon":
+                        slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
+                    orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
+                    position = _infer_position(i, n)
+                    final_typo = _reclassify_by_surface(slot_poly.area, typo)
+                    slots.append(ApartmentSlot(
+                        id=f"slot_{slot_idx}", polygon=slot_poly, surface_m2=slot_poly.area,
+                        target_typologie=final_typo, orientations=orientations,
+                        position_in_floor=position,
+                    ))
+                    slot_idx += 1
 
     return slots
 
 
-# Width & depth min/max per typology, read from the seed templates to keep
-# per-wing candidate selection in sync with the adapter tolerances.
+# Width × depth ranges per typology. Allow some depth overlap between typos
+# since depth is set by the wing and apts of multiple typologies live in
+# similar wings; strict ordering is enforced by _TYPO_SURFACE_RANGE below.
 _TYPO_DIM_RANGE: dict[Typologie, tuple[float, float, float, float]] = {
-    Typologie.STUDIO: (4.0, 5.5, 5.5, 7.0),
-    Typologie.T1: (4.5, 6.0, 6.0, 7.5),
-    Typologie.T2: (6.0, 7.5, 7.0, 8.5),
-    Typologie.T3: (7.2, 9.0, 8.5, 10.5),
-    Typologie.T4: (8.5, 11.0, 9.0, 11.5),
-    Typologie.T5: (8.5, 11.0, 9.0, 11.5),  # no T5 seed — use T4 bounds
+    Typologie.STUDIO: (4.0, 5.5, 5.5, 8.0),
+    Typologie.T1:     (4.5, 6.0, 6.0, 9.0),
+    Typologie.T2:     (5.8, 7.2, 7.0, 11.0),
+    Typologie.T3:     (7.0, 8.5, 7.5, 12.0),
+    Typologie.T4:     (8.0, 10.5, 8.0, 12.0),
+    Typologie.T5:     (9.5, 12.0, 10.0, 13.0),
 }
+
+# Strict surface hierarchy — T2 < T3 < T4 < T5. Any slot outside these bounds
+# for a given typology is re-labelled to the correct typo.
+_TYPO_SURFACE_RANGE: dict[Typologie, tuple[float, float]] = {
+    Typologie.STUDIO: (18.0, 32.0),
+    Typologie.T1:     (28.0, 42.0),
+    Typologie.T2:     (42.0, 52.0),
+    Typologie.T3:     (52.0, 65.0),   # user: ≤60 m²
+    Typologie.T4:     (65.0, 90.0),   # > T3 max
+    Typologie.T5:     (90.0, 120.0),  # > T4 max
+}
+
+
+def _reclassify_by_surface(surface_m2: float, hint: Typologie) -> Typologie:
+    """Pick the typology whose surface range contains the slot area.
+    Falls back to the hint when no range matches (e.g. huge slot)."""
+    for typo, (lo, hi) in _TYPO_SURFACE_RANGE.items():
+        if lo <= surface_m2 < hi:
+            return typo
+    return hint
 
 
 def _infer_orientations(slot_poly: ShapelyPolygon, footprint: ShapelyPolygon, voirie_side: str) -> list[str]:
