@@ -18,6 +18,7 @@ from db.base import Base  # noqa: E402
 from db.models import (  # noqa: F401, E402
     agency_settings,
     audit_logs,
+    building_models,
     commune_sru,
     comparable_projects,
     extraction_feedback,
@@ -34,8 +35,10 @@ from db.models import (  # noqa: F401, E402
     project_versions,
     projects,
     recours_cases,
+    renders,
     reports,
     servitudes,
+    templates,
     users,
     workspace_invitations,
     workspace_members,
