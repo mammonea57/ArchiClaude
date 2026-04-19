@@ -2594,30 +2594,23 @@ class TemplateAdapter:
         slot_width = maxx - minx
         slot_depth = maxy - miny
 
-        # Template abstract grid: max col×row → physical size at 3m/cell
+        # Stretch reference = template's declared max dimensions. Using bounds_cells
+        # under-counts the reference and rejects valid slots at the upper stretch edge.
+        dim = template.dimensions_grille
         topo = template.topologie
-        max_col = max(max(c[0] for c in room["bounds_cells"]) for room in topo["rooms"])
-        max_row = max(max(c[1] for c in room["bounds_cells"]) for room in topo["rooms"])
-        template_width_m = (max_col + 1) * 3.0
-        template_depth_m = (max_row + 1) * 3.0
+        template_width_ref = dim.largeur_max_m
+        template_depth_ref = dim.profondeur_max_m
 
-        stretch_x = slot_width / template_width_m
-        stretch_y = slot_depth / template_depth_m
+        stretch_x = slot_width / template_width_ref
+        stretch_y = slot_depth / template_depth_ref
 
         if not (_STRETCH_MIN <= stretch_x <= _STRETCH_MAX and _STRETCH_MIN <= stretch_y <= _STRETCH_MAX):
             return FitResult(
                 success=False,
-                rejection_reason=f"stretch out of [0.85,1.15] range: x={stretch_x:.2f} y={stretch_y:.2f} "
-                                 f"(slot {slot_width:.1f}×{slot_depth:.1f}m vs template {template_width_m:.1f}×{template_depth_m:.1f}m)",
+                rejection_reason=f"slot dimensions too small/large for template "
+                                 f"(stretch x={stretch_x:.2f} y={stretch_y:.2f} outside [0.85,1.15])",
                 stretch_x=stretch_x, stretch_y=stretch_y,
             )
-
-        # Also check absolute dimensions vs template's declared ranges
-        dim = template.dimensions_grille
-        if not (dim.largeur_min_m <= slot_width <= dim.largeur_max_m):
-            return FitResult(success=False, rejection_reason=f"slot width {slot_width:.1f}m outside template range [{dim.largeur_min_m}, {dim.largeur_max_m}]")
-        if not (dim.profondeur_min_m <= slot_depth <= dim.profondeur_max_m):
-            return FitResult(success=False, rejection_reason=f"slot depth {slot_depth:.1f}m outside template range [{dim.profondeur_min_m}, {dim.profondeur_max_m}]")
 
         # 2. Build rooms with scaled polygons
         rooms: list[Room] = []
