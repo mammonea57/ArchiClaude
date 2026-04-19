@@ -494,15 +494,34 @@ def compute_apartment_slots(
             if not fitting_typos:
                 continue
 
-            # 2. Target slot width = smallest fitting typo to pack more apts
-            smallest_typo = min(fitting_typos, key=lambda t: typo_surface_targets[t])
-            lw_min, lw_max, _ld_min, _ld_max = _TYPO_DIM_RANGE[smallest_typo]
-            target_slot_width = (lw_min + lw_max) / 2
+            # 2. Target slot width = MIX-WEIGHTED fitting typo. This lets a
+            #    floor's requested mix drive the slot sizing: a T5-heavy
+            #    floor gets wider slots (fewer, larger apts), a T2-heavy
+            #    floor gets narrower slots (more, smaller apts).
+            total_fit_ratio = sum(mix_norm[t] for t in fitting_typos)
+            if total_fit_ratio > 0:
+                target_slot_width = sum(
+                    mix_norm[t] / total_fit_ratio
+                    * ((_TYPO_DIM_RANGE[t][0] + _TYPO_DIM_RANGE[t][1]) / 2)
+                    for t in fitting_typos
+                )
+            else:
+                smallest_typo = min(fitting_typos, key=lambda t: typo_surface_targets[t])
+                lw_min, lw_max, *_ = _TYPO_DIM_RANGE[smallest_typo]
+                target_slot_width = (lw_min + lw_max) / 2
+
+            # Global slot-width bounds = tightest fit + loosest fit across the
+            # fitting typos so we don't clamp below what any typo accepts.
+            min_w_global = min(_TYPO_DIM_RANGE[t][0] * 0.85 for t in fitting_typos)
+            max_w_global = max(_TYPO_DIM_RANGE[t][1] * 1.15 for t in fitting_typos)
             nb_slots_in_wing = max(1, round(slice_length / target_slot_width))
-            max_nb = max(1, int(slice_length / (lw_min * 0.85)))
-            min_nb = max(1, math.ceil(slice_length / (lw_max * 1.15)))
+            max_nb = max(1, int(slice_length / min_w_global))
+            min_nb = max(1, math.ceil(slice_length / max_w_global))
             nb_slots_in_wing = max(min_nb, min(nb_slots_in_wing, max_nb))
             actual_slot_width = slice_length / nb_slots_in_wing
+
+            # Keep a legacy reference for the error fallback in step 3
+            smallest_typo = min(fitting_typos, key=lambda t: typo_surface_targets[t])
 
             # 3. Re-filter candidates against the ACTUAL slot dimensions
             candidates: list[Typologie] = []

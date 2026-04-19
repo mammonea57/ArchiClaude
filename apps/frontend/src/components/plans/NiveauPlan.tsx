@@ -834,35 +834,111 @@ function MainEntrance({
   const [dx, dy] = project([doorMx, doorMy]);
   const [coreX, coreY] = project(corePosition);
 
+  // Door width in pixels — 1.4 m PMR door
+  const doorWidthPx = Math.max(18, 1.4 * scale);
+  const doorDepthPx = Math.max(6, 0.3 * scale);
+  // Orient the door gap perpendicular to the voirie wall
+  const isHorizontalWall = voirieSide === "sud" || voirieSide === "nord";
+
   return (
     <g style={{ pointerEvents: "none" }}>
-      {/* Path from street to core */}
+      {/* 1. White rectangle that erases the building's outer wall at the
+             door position — visually creates an OPENING in the envelope. */}
+      {isHorizontalWall ? (
+        <rect
+          x={dx - doorWidthPx / 2}
+          y={dy - doorDepthPx / 2}
+          width={doorWidthPx}
+          height={doorDepthPx}
+          fill="white"
+        />
+      ) : (
+        <rect
+          x={dx - doorDepthPx / 2}
+          y={dy - doorWidthPx / 2}
+          width={doorDepthPx}
+          height={doorWidthPx}
+          fill="white"
+        />
+      )}
+
+      {/* 2. Glass door — double lines on the gap edges + a swing arc */}
+      {isHorizontalWall ? (
+        <>
+          <line x1={dx - doorWidthPx / 2} y1={dy} x2={dx + doorWidthPx / 2} y2={dy} stroke="#0c4a6e" strokeWidth={1} />
+          <line x1={dx - doorWidthPx / 2} y1={dy - 2} x2={dx + doorWidthPx / 2} y2={dy - 2} stroke="#7dd3fc" strokeWidth={0.8} />
+          <line x1={dx - doorWidthPx / 2} y1={dy + 2} x2={dx + doorWidthPx / 2} y2={dy + 2} stroke="#7dd3fc" strokeWidth={0.8} />
+          {/* Door leaf (half of the width swings open) + arc */}
+          <line
+            x1={dx - doorWidthPx / 2}
+            y1={dy}
+            x2={dx}
+            y2={dy - arrowDy * doorWidthPx / 2}
+            stroke="#0f172a"
+            strokeWidth={1.3}
+          />
+          <path
+            d={`M ${dx - doorWidthPx / 2} ${dy} A ${doorWidthPx / 2} ${doorWidthPx / 2} 0 0 ${arrowDy < 0 ? 0 : 1} ${dx} ${dy - arrowDy * doorWidthPx / 2}`}
+            fill="none"
+            stroke="#64748b"
+            strokeWidth={0.6}
+            strokeDasharray="2 2"
+          />
+        </>
+      ) : (
+        <>
+          <line x1={dx} y1={dy - doorWidthPx / 2} x2={dx} y2={dy + doorWidthPx / 2} stroke="#0c4a6e" strokeWidth={1} />
+          <line x1={dx - 2} y1={dy - doorWidthPx / 2} x2={dx - 2} y2={dy + doorWidthPx / 2} stroke="#7dd3fc" strokeWidth={0.8} />
+          <line x1={dx + 2} y1={dy - doorWidthPx / 2} x2={dx + 2} y2={dy + doorWidthPx / 2} stroke="#7dd3fc" strokeWidth={0.8} />
+          <line
+            x1={dx}
+            y1={dy - doorWidthPx / 2}
+            x2={dx - arrowDx * doorWidthPx / 2}
+            y2={dy}
+            stroke="#0f172a"
+            strokeWidth={1.3}
+          />
+          <path
+            d={`M ${dx} ${dy - doorWidthPx / 2} A ${doorWidthPx / 2} ${doorWidthPx / 2} 0 0 ${arrowDx < 0 ? 1 : 0} ${dx - arrowDx * doorWidthPx / 2} ${dy}`}
+            fill="none"
+            stroke="#64748b"
+            strokeWidth={0.6}
+            strokeDasharray="2 2"
+          />
+        </>
+      )}
+
+      {/* 3. Dashed path from the door to the core (just inside the corridor) */}
       <line
-        x1={dx}
-        y1={dy}
+        x1={dx - arrowDx * doorWidthPx * 0.5}
+        y1={dy - arrowDy * doorWidthPx * 0.5}
         x2={coreX}
         y2={coreY}
         stroke="#b45309"
-        strokeWidth={1.5}
-        strokeDasharray="4 3"
+        strokeWidth={1}
+        strokeDasharray="3 3"
+        opacity={0.6}
       />
-      {/* Door symbol at entrance */}
-      <circle cx={dx} cy={dy} r={6} fill="white" stroke="#b45309" strokeWidth={2} />
-      <text x={dx} y={dy + 2} textAnchor="middle" fontSize={7} fontWeight={700} fill="#b45309">E</text>
-      {/* Arrow to core */}
-      <polygon
-        points={`${dx - arrowDx * 10 + arrowDy * 5},${dy - arrowDy * 10 + arrowDx * 5} ${dx - arrowDx * 10 - arrowDy * 5},${dy - arrowDy * 10 - arrowDx * 5} ${dx - arrowDx * 16},${dy - arrowDy * 16}`}
-        fill="#b45309"
-      />
+
+      {/* 4. External label outside the building, not on top of the wall */}
       <text
-        x={dx + arrowDy * 18}
-        y={dy + arrowDx * 18 + 4}
+        x={dx + arrowDy * (doorWidthPx / 2 + 10) * -1}
+        y={dy - arrowDy * (doorDepthPx + 12)}
         textAnchor="middle"
-        fontSize={9}
-        fontWeight={600}
+        fontSize={10}
+        fontWeight={700}
         fill="#b45309"
       >
         Entrée
+      </text>
+      <text
+        x={dx + arrowDy * (doorWidthPx / 2 + 10) * -1}
+        y={dy - arrowDy * (doorDepthPx + 24)}
+        textAnchor="middle"
+        fontSize={8}
+        fill="#b45309"
+      >
+        ↓ Rue
       </text>
     </g>
   );

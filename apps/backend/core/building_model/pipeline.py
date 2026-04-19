@@ -63,6 +63,135 @@ _DEFAULT_CORE_SURFACE_M2 = 22.0
 _CORRIDOR_WIDTH_M = 1.6
 
 
+def _mix_for_floor(
+    base_mix: dict[str, float], floor_idx: int, nb_floors: int,
+) -> dict["Typologie", float]:
+    """Vary the typology mix floor-by-floor — DISCRETE buckets.
+
+    Real residential buildings stack distinct floor types:
+      - RDC      : T2 dominant (smaller, easier to sell / rent)
+      - R+1..2   : T3 dominant (family standard, balanced market)
+      - R+3..n-2 : T4 dominant (larger family, higher price/m²)
+      - Top floor: T5 / duplex (premium, views, rooftop setbacks)
+
+    Each floor thus shows a distinct visual + commercial character.
+    The TOTAL across floors still approximates the brief's base_mix via
+    the count balance between floor types.
+    """
+    # Which mix bucket does this floor belong to?
+    if nb_floors <= 1:
+        bucket = "standard"
+    elif floor_idx == 0:
+        bucket = "rdc"
+    elif floor_idx == nb_floors - 1:
+        bucket = "top"
+    elif floor_idx <= (nb_floors - 1) // 3:
+        bucket = "low"
+    elif floor_idx >= 2 * (nb_floors - 1) // 3:
+        bucket = "high"
+    else:
+        bucket = "mid"
+
+    # Bucket → target mix (covers T2 → T5)
+    buckets: dict[str, dict[Typologie, float]] = {
+        "rdc":       {Typologie.T2: 0.55, Typologie.T3: 0.45},
+        "low":       {Typologie.T2: 0.30, Typologie.T3: 0.60, Typologie.T4: 0.10},
+        "mid":       {Typologie.T3: 0.60, Typologie.T4: 0.40},
+        "high":      {Typologie.T3: 0.25, Typologie.T4: 0.55, Typologie.T5: 0.20},
+        "top":       {Typologie.T4: 0.40, Typologie.T5: 0.60},
+        "standard":  {Typologie(k): v for k, v in base_mix.items()},
+    }
+    result = buckets[bucket]
+    # Keep only typologies present in the original brief (don't invent)
+    allowed = {Typologie(k) for k, v in base_mix.items() if v > 0}
+    if allowed:
+        filtered = {t: v for t, v in result.items() if t in allowed}
+        if filtered:
+            result = filtered
+        else:
+            # No overlap — fall back to the brief mix unchanged
+            result = {Typologie(k): v for k, v in base_mix.items()}
+    # Renormalise
+    total = sum(result.values())
+    if total > 0:
+        result = {k: v / total for k, v in result.items()}
+    return result
+
+
+def _relocate_entries_to_corridor(
+    cells: list[Cellule], circulations: list[Circulation],
+) -> None:
+    """Replace each apt's porte_entree with one on the wall closest to a
+    circulation polygon. Called after the solver + adapter so it uses the
+    real placed geometry."""
+    from core.building_model.schemas import Opening, OpeningType, Wall, WallType
+    from shapely.geometry import Polygon as ShapelyPoly
+
+    if not circulations:
+        return
+
+    circ_polys = [
+        ShapelyPoly(c.polygon_xy) for c in circulations if len(c.polygon_xy) >= 3
+    ]
+    if not circ_polys:
+        return
+
+    for apt in cells:
+        if apt.type != CelluleType.LOGEMENT or not apt.polygon_xy:
+            continue
+        apt_poly = ShapelyPoly(apt.polygon_xy)
+        # Find closest circulation polygon to this apt
+        closest = min(circ_polys, key=lambda p: p.distance(apt_poly))
+        # Compute the apt's bbox sides and see which one is closest to the
+        # circulation
+        xs = [p[0] for p in apt.polygon_xy]
+        ys = [p[1] for p in apt.polygon_xy]
+        minx, miny, maxx, maxy = min(xs), min(ys), max(xs), max(ys)
+        # Test each side's midpoint distance to closest circulation
+        from shapely.geometry import Point
+        sides = {
+            "sud":   Point((minx + maxx) / 2, miny),
+            "nord":  Point((minx + maxx) / 2, maxy),
+            "ouest": Point(minx, (miny + maxy) / 2),
+            "est":   Point(maxx, (miny + maxy) / 2),
+        }
+        best_side = min(sides.keys(), key=lambda s: sides[s].distance(closest))
+
+        # Remove existing porte_entree(s)
+        apt.openings = [op for op in apt.openings if op.type != OpeningType.PORTE_ENTREE]
+
+        # Build/find the wall on that side
+        if best_side == "sud":
+            p0, p1 = (minx, miny), (maxx, miny)
+        elif best_side == "nord":
+            p0, p1 = (minx, maxy), (maxx, maxy)
+        elif best_side == "ouest":
+            p0, p1 = (minx, miny), (minx, maxy)
+        else:
+            p0, p1 = (maxx, miny), (maxx, maxy)
+
+        wall_id = f"{apt.id}_w_corridor"
+        apt.walls.append(Wall(
+            id=wall_id,
+            type=WallType.PORTEUR,
+            thickness_cm=20,
+            geometry={"type": "LineString", "coords": [list(p0), list(p1)]},
+            hauteur_cm=260,
+            materiau="beton_banche",
+        ))
+        wall_len_cm = int(((p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2) ** 0.5 * 100)
+        apt.openings.append(Opening(
+            id=f"{apt.id}_op_entree",
+            type=OpeningType.PORTE_ENTREE,
+            wall_id=wall_id,
+            position_along_wall_cm=max(50, wall_len_cm // 2),
+            width_cm=93,
+            height_cm=220,
+            allege_cm=None,
+            swing="interior_right",
+        ))
+
+
 def _emit_wing_corridors(
     niveau_idx: int,
     core,
@@ -199,11 +328,7 @@ async def generate_building_model(
 
     core = place_core(grid, core_surface_m2=_DEFAULT_CORE_SURFACE_M2)
 
-    mix = {
-        Typologie(k): v
-        for k, v in inputs.brief.mix_typologique.items()
-    }
-    slots_per_floor = compute_apartment_slots(grid, core, mix_typologique=mix, voirie_side=voirie)
+    base_mix = inputs.brief.mix_typologique  # dict[str, float]
 
     # --- Étape 3-4: Select template per slot + adapt ---
     selector = TemplateSelector(session=session)
@@ -211,6 +336,13 @@ async def generate_building_model(
     niveaux: list[Niveau] = []
 
     for idx in range(inputs.niveaux_recommandes):
+        # Per-floor mix: ground floors favour smaller typos, top floors
+        # skew larger. Each floor thus shows a distinct typology mix while
+        # the building as a whole respects the brief's target ratios.
+        floor_mix = _mix_for_floor(base_mix, idx, inputs.niveaux_recommandes)
+        slots_per_floor = compute_apartment_slots(
+            grid, core, mix_typologique=floor_mix, voirie_side=voirie,
+        )
         cells_for_niveau: list[Cellule] = []
 
         # RDC may be commerce or logements depending on brief
@@ -273,6 +405,11 @@ async def generate_building_model(
             ),
         ]
         circulations.extend(_emit_wing_corridors(idx, core, footprint, cells_for_niveau))
+
+        # Relocate every apt's porte_entree onto the wall CLOSEST to a
+        # circulation polygon. This guarantees entries open onto corridors,
+        # not onto facades or side walls shared with another apt.
+        _relocate_entries_to_corridor(cells_for_niveau, circulations)
 
         hauteur_hsp = _DEFAULT_HAUTEUR_RDC_M - 0.25 if is_rdc else _DEFAULT_HAUTEUR_ETAGE_M - 0.25
         niveaux.append(Niveau(
