@@ -5,13 +5,11 @@ from __future__ import annotations
 import zipfile
 from io import BytesIO
 
-import pytest
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas as rl_canvas
 
 from core.pcmi.assembler import _build_readme, _safe_filename, assemble_dossier
-from core.pcmi.schemas import CartouchePC, PCMI_ORDER, PCMI_TITRES
-
+from core.pcmi.schemas import PCMI_ORDER, CartouchePC
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 

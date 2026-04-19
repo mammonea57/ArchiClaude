@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import io
-import struct
-
-import pytest
 
 from core.pcmi.schemas import CartouchePC
 from core.programming.plans.renderer_pdf import jpeg_to_pdf, svg_to_pdf

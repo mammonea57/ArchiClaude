@@ -5,7 +5,6 @@ TDD: tests written before implementation.
 
 from __future__ import annotations
 
-import pytest
 from shapely.geometry import Polygon
 
 from core.pcmi.facades import assemble_facades_grid_svg, generate_all_facades

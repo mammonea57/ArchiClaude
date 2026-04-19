@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from core.pcmi.photos import (
     _download_image,
     fetch_photo_environnement_lointain,

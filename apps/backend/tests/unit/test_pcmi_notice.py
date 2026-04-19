@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from core.pcmi.notice_pcmi4 import SEPARATOR, extract_notice_from_opus
 from core.pcmi.schemas import CartouchePC
 
