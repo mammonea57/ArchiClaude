@@ -1,0 +1,39 @@
+{
+  "id": "Studio_standard_v1",
+  "source": "manual",
+  "source_meta": { "author": "archiclaude" },
+  "typologie": "studio",
+  "surface_shab_range": [18, 28],
+  "orientation_compatible": ["nord-sud", "est-ouest", "mono-oriente"],
+  "position_dans_etage": ["angle", "milieu", "extremite"],
+  "dimensions_grille": {
+    "largeur_min_m": 4.0, "largeur_max_m": 5.5,
+    "profondeur_min_m": 5.5, "profondeur_max_m": 7.0,
+    "adaptable_3x3": true
+  },
+  "topologie": {
+    "rooms": [
+      { "id": "r1", "type": "entree", "area_ratio": 0.10, "bounds_cells": [[0,0]] },
+      { "id": "r2", "type": "sejour_cuisine", "area_ratio": 0.68, "bounds_cells": [[0,1],[1,0],[1,1]] },
+      { "id": "r3", "type": "sdb", "area_ratio": 0.22, "bounds_cells": [[0,0]] }
+    ],
+    "walls_abstract": [
+      { "type": "porteur", "from_cell": [0,0], "to_cell": [0,2], "side": "west" },
+      { "type": "cloison_70", "from_cell": [0,0], "to_cell": [1,0], "side": "middle" }
+    ],
+    "openings_abstract": [
+      { "type": "porte_entree", "wall_idx": 0, "position_ratio": 0.3, "swing": "interior_right" },
+      { "type": "fenetre", "wall_idx": 0, "position_ratio": 0.8, "sur_piece": "sejour_cuisine", "largeur_min_cm": 120 }
+    ]
+  },
+  "furniture_defaults": {
+    "sejour_cuisine": ["canape_convertible_2p", "cuisine_kitchenette_150", "table_2p", "dressing_120"]
+  },
+  "reglementaire_ok": {
+    "pmr_rotation_150": false,
+    "pmr_passages_80": true,
+    "ventilation_traversante": false,
+    "lumiere_naturelle_toutes_pieces_vie": true
+  },
+  "tags": ["studio", "compact", "etudiant", "investissement"]
+}

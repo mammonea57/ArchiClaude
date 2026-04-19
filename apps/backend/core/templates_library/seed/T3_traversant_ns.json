@@ -1,0 +1,50 @@
+{
+  "id": "T3_traversant_ns_v1",
+  "source": "manual",
+  "source_meta": { "author": "archiclaude" },
+  "typologie": "T3",
+  "surface_shab_range": [62, 75],
+  "orientation_compatible": ["nord-sud"],
+  "position_dans_etage": ["milieu", "extremite"],
+  "dimensions_grille": {
+    "largeur_min_m": 7.2, "largeur_max_m": 9.0,
+    "profondeur_min_m": 8.5, "profondeur_max_m": 10.5,
+    "adaptable_3x3": true
+  },
+  "topologie": {
+    "rooms": [
+      { "id": "r1", "type": "entree", "area_ratio": 0.07, "bounds_cells": [[0,0]] },
+      { "id": "r2", "type": "sejour_cuisine", "area_ratio": 0.38, "bounds_cells": [[0,1],[0,2],[1,1],[1,2]] },
+      { "id": "r3", "type": "chambre_parents", "area_ratio": 0.20, "bounds_cells": [[2,0],[2,1]] },
+      { "id": "r4", "type": "chambre_enfant",  "area_ratio": 0.17, "bounds_cells": [[2,2]] },
+      { "id": "r5", "type": "sdb",              "area_ratio": 0.09, "bounds_cells": [[1,0]] },
+      { "id": "r6", "type": "wc",               "area_ratio": 0.03, "bounds_cells": [[1,0]] },
+      { "id": "r7", "type": "cellier",          "area_ratio": 0.06, "bounds_cells": [[0,0]] }
+    ],
+    "walls_abstract": [
+      { "type": "porteur",   "from_cell": [0,0], "to_cell": [0,3], "side": "west" },
+      { "type": "porteur",   "from_cell": [3,0], "to_cell": [3,3], "side": "east" },
+      { "type": "cloison_70","from_cell": [2,0], "to_cell": [2,3], "side": "middle" },
+      { "type": "cloison_70","from_cell": [0,1], "to_cell": [3,1], "side": "middle" }
+    ],
+    "openings_abstract": [
+      { "type": "porte_entree", "wall_idx": 0, "position_ratio": 0.15, "swing": "interior_right" },
+      { "type": "fenetre", "wall_idx": 0, "position_ratio": 0.5, "sur_piece": "sejour_cuisine", "largeur_min_cm": 180 },
+      { "type": "porte_fenetre", "wall_idx": 1, "position_ratio": 0.6, "sur_piece": "sejour_cuisine", "largeur_min_cm": 240 },
+      { "type": "fenetre", "wall_idx": 1, "position_ratio": 0.2, "sur_piece": "chambre_parents", "largeur_min_cm": 140 },
+      { "type": "fenetre", "wall_idx": 1, "position_ratio": 0.85, "sur_piece": "chambre_enfant", "largeur_min_cm": 120 }
+    ]
+  },
+  "furniture_defaults": {
+    "sejour_cuisine": ["canape_3p", "table_6p", "cuisine_lineaire_300", "ilot_central_150", "meuble_tv"],
+    "chambre_parents": ["lit_queen_180", "dressing_200", "chevet_x2", "bureau_120"],
+    "chambre_enfant": ["lit_simple_90", "bureau_120", "armoire_100"]
+  },
+  "reglementaire_ok": {
+    "pmr_rotation_150": true,
+    "pmr_passages_80": true,
+    "ventilation_traversante": true,
+    "lumiere_naturelle_toutes_pieces_vie": true
+  },
+  "tags": ["traversant", "ns", "familial", "optimise-shab"]
+}

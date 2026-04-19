@@ -1,0 +1,46 @@
+{
+  "id": "T2_bi_oriente_v1",
+  "source": "manual",
+  "source_meta": { "author": "archiclaude" },
+  "typologie": "T2",
+  "surface_shab_range": [45, 55],
+  "orientation_compatible": ["nord-sud", "est-ouest"],
+  "position_dans_etage": ["milieu", "extremite"],
+  "dimensions_grille": {
+    "largeur_min_m": 6.0, "largeur_max_m": 7.5,
+    "profondeur_min_m": 7.0, "profondeur_max_m": 8.5,
+    "adaptable_3x3": true
+  },
+  "topologie": {
+    "rooms": [
+      { "id": "r1", "type": "entree", "area_ratio": 0.08, "bounds_cells": [[0,0]] },
+      { "id": "r2", "type": "sejour_cuisine", "area_ratio": 0.50, "bounds_cells": [[0,1],[1,0],[1,1]] },
+      { "id": "r3", "type": "chambre_parents", "area_ratio": 0.30, "bounds_cells": [[0,2]] },
+      { "id": "r4", "type": "sdb", "area_ratio": 0.08, "bounds_cells": [[1,2]] },
+      { "id": "r5", "type": "wc", "area_ratio": 0.04, "bounds_cells": [[1,2]] }
+    ],
+    "walls_abstract": [
+      { "type": "porteur",   "from_cell": [0,0], "to_cell": [0,3], "side": "west" },
+      { "type": "porteur",   "from_cell": [2,0], "to_cell": [2,3], "side": "east" },
+      { "type": "cloison_70","from_cell": [0,1], "to_cell": [2,1], "side": "middle" },
+      { "type": "cloison_70","from_cell": [1,2], "to_cell": [1,3], "side": "middle" }
+    ],
+    "openings_abstract": [
+      { "type": "porte_entree",     "wall_idx": 0, "position_ratio": 0.2, "swing": "interior_right" },
+      { "type": "fenetre",          "wall_idx": 0, "position_ratio": 0.7, "sur_piece": "sejour_cuisine", "largeur_min_cm": 160 },
+      { "type": "porte_fenetre",    "wall_idx": 1, "position_ratio": 0.5, "sur_piece": "sejour_cuisine", "largeur_min_cm": 200 },
+      { "type": "fenetre",          "wall_idx": 1, "position_ratio": 0.8, "sur_piece": "chambre_parents", "largeur_min_cm": 120 }
+    ]
+  },
+  "furniture_defaults": {
+    "sejour_cuisine": ["canape_3p", "table_4p", "cuisine_lineaire_240", "meuble_tv"],
+    "chambre_parents": ["lit_queen_160", "dressing_150", "chevet_x2"]
+  },
+  "reglementaire_ok": {
+    "pmr_rotation_150": true,
+    "pmr_passages_80": true,
+    "ventilation_traversante": true,
+    "lumiere_naturelle_toutes_pieces_vie": true
+  },
+  "tags": ["bi-oriente", "compact", "moderne", "familial"]
+}
