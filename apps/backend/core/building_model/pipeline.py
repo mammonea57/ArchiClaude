@@ -89,10 +89,14 @@ def _emit_wing_corridors(
     core_cx, core_cy = core.position_xy
     core_bb = core.polygon.bounds  # minx, miny, maxx, maxy
 
+    DUAL_THRESHOLD = 15.0
     for i, wing in enumerate(wings):
         wxmin, wymin, wxmax, wymax = wing.bounds
         ww = wxmax - wxmin
         wh = wymax - wymin
+        # Only dual-loaded wings get a dedicated inner corridor
+        if min(ww, wh) < DUAL_THRESHOLD:
+            continue
         if ww >= wh:
             # Horizontal corridor along the wing's length, centered vertically
             cy_mid = (wymin + wymax) / 2

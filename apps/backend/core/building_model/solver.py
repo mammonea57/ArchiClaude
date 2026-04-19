@@ -81,6 +81,87 @@ _INCENDIE_DIST_MAX_M = 25.0
 _CORE_ASPECT_MIN_LW = 0.6  # core cabine 1.1×1.4 ~ 0.7 aspect min
 
 
+def _compute_circulation_network(
+    footprint: ShapelyPolygon,
+    wings: list[ShapelyPolygon],
+    core: "CorePlacement",
+) -> ShapelyPolygon:
+    """Union of the core + every wing corridor + connectors core↔corridor.
+
+    Apartment slot polygons are cut by this network so they never overlap
+    the circulation area visually or functionally. Must stay in sync with
+    pipeline._emit_wing_corridors.
+    """
+    from shapely.ops import unary_union
+
+    corridor_width = 1.6
+    half = corridor_width / 2
+    cx, cy = core.position_xy
+    core_bb = core.polygon.bounds
+
+    polys = [core.polygon]
+    DUAL_THRESHOLD = 15.0
+    for wing in wings:
+        wxmin, wymin, wxmax, wymax = wing.bounds
+        ww = wxmax - wxmin
+        wh = wymax - wymin
+        perp = wh if ww >= wh else ww
+        # Only wings deep enough to host dual-loaded apts get a central corridor.
+        # Shallower wings are single-loaded; their palier is the wing edge
+        # itself (no dedicated corridor needed, apts open directly onto the
+        # palier/landing).
+        if perp < DUAL_THRESHOLD:
+            continue
+        if ww >= wh:
+            cy_mid = (wymin + wymax) / 2
+            corridor = ShapelyPolygon([
+                (wxmin, cy_mid - half), (wxmax, cy_mid - half),
+                (wxmax, cy_mid + half), (wxmin, cy_mid + half),
+            ])
+            axis = "horizontal"
+        else:
+            cx_mid = (wxmin + wxmax) / 2
+            corridor = ShapelyPolygon([
+                (cx_mid - half, wymin), (cx_mid + half, wymin),
+                (cx_mid + half, wymax), (cx_mid - half, wymax),
+            ])
+            axis = "vertical"
+
+        # Connector from corridor to core if they don't already overlap
+        if corridor.distance(core.polygon) > 0.2:
+            cxmin, cymin, cxmax, cymax = corridor.bounds
+            if axis == "horizontal":
+                # Vertical connector at corridor's mid-x, between core and corridor
+                connector_x = max(core_bb[0], min(core_bb[2], (cxmin + cxmax) / 2))
+                if cymin > core_bb[3]:
+                    y0 = core_bb[3]; y1 = cymin
+                elif cymax < core_bb[1]:
+                    y0 = cymax; y1 = core_bb[1]
+                else:
+                    y0 = core_bb[3]; y1 = cymax
+                connector = ShapelyPolygon([
+                    (connector_x - half, min(y0, y1)), (connector_x + half, min(y0, y1)),
+                    (connector_x + half, max(y0, y1)), (connector_x - half, max(y0, y1)),
+                ])
+            else:
+                # Horizontal connector at core's Y level
+                if cxmin > core_bb[2]:
+                    x0, x1 = core_bb[2], (cxmin + cxmax) / 2 + half
+                elif cxmax < core_bb[0]:
+                    x0, x1 = (cxmin + cxmax) / 2 - half, core_bb[0]
+                else:
+                    x0, x1 = core_bb[2], (cxmin + cxmax) / 2 + half
+                connector = ShapelyPolygon([
+                    (min(x0, x1), cy - half), (max(x0, x1), cy - half),
+                    (max(x0, x1), cy + half), (min(x0, x1), cy + half),
+                ])
+            polys.append(connector.intersection(footprint))
+        polys.append(corridor.intersection(footprint))
+
+    network = unary_union(polys)
+    return network
+
+
 def _find_reflex_vertex(footprint: ShapelyPolygon) -> tuple[float, float] | None:
     """Return the concave (reflex) vertex of the footprint if any.
 
@@ -340,11 +421,19 @@ def compute_apartment_slots(
     # Decompose footprint into rectangular wings (1 for rectangle, 2+ for L).
     wings = _decompose_into_wings(grid.footprint)
 
+    # Pre-compute the expected circulation network (corridors + core +
+    # core↔corridor connectors) so apt slots can be cut away from it.
+    # This guarantees apts never overlap the stairs, lift, or corridors.
+    circulation_network = _compute_circulation_network(grid.footprint, wings, core)
+
     slots: list[ApartmentSlot] = []
     slot_idx = 0
 
     _CORRIDOR_WIDTH_M = 1.6   # minimum PMR corridor
-    _DUAL_LOADED_THRESHOLD_M = 12.0  # wings deeper than this get a central corridor
+    # Dual-loaded splits a wing into two rows of apts (≥7 m deep each) plus a
+    # 1.6 m corridor in between. Threshold = 2×7 + 1.6 ≈ 15 m. Shallower wings
+    # use a single-loaded corridor (one row, corridor on one side).
+    _DUAL_LOADED_THRESHOLD_M = 15.0
 
     for wing_outer in wings:
         wxmin_o, wymin_o, wxmax_o, wymax_o = wing_outer.bounds
@@ -435,6 +524,18 @@ def compute_apartment_slots(
                 wing_typos.extend([candidates[0]] * (nb_slots_in_wing - len(wing_typos)))
             wing_typos = wing_typos[:nb_slots_in_wing]
 
+            def _finalise_slot(slot_poly: ShapelyPolygon) -> ShapelyPolygon | None:
+                """Clip slot to footprint AND subtract circulation network."""
+                clipped = slot_poly.intersection(grid.footprint)
+                if clipped.is_empty:
+                    return None
+                clipped = clipped.difference(circulation_network)
+                if clipped.is_empty or clipped.area < 20:
+                    return None
+                if clipped.geom_type == "MultiPolygon":
+                    clipped = max(clipped.geoms, key=lambda g: g.area)
+                return clipped
+
             n = len(wing_typos)
             if slice_x:
                 slot_w = wing_w / n
@@ -444,11 +545,9 @@ def compute_apartment_slots(
                         (x_cursor, wymin), (x_cursor + slot_w, wymin),
                         (x_cursor + slot_w, wymax), (x_cursor, wymax),
                     ])
-                    slot_poly = rect.intersection(grid.footprint)
-                    if slot_poly.is_empty or slot_poly.area < 10:
+                    slot_poly = _finalise_slot(rect)
+                    if slot_poly is None:
                         continue
-                    if slot_poly.geom_type == "MultiPolygon":
-                        slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
                     orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
                     position = _infer_position(i, n)
                     final_typo = _reclassify_by_surface(slot_poly.area, typo)
@@ -466,11 +565,9 @@ def compute_apartment_slots(
                         (wxmin, y_cursor), (wxmax, y_cursor),
                         (wxmax, y_cursor + slot_h), (wxmin, y_cursor + slot_h),
                     ])
-                    slot_poly = rect.intersection(grid.footprint)
-                    if slot_poly.is_empty or slot_poly.area < 10:
+                    slot_poly = _finalise_slot(rect)
+                    if slot_poly is None:
                         continue
-                    if slot_poly.geom_type == "MultiPolygon":
-                        slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
                     orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
                     position = _infer_position(i, n)
                     final_typo = _reclassify_by_surface(slot_poly.area, typo)

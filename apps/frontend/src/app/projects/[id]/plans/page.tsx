@@ -258,8 +258,8 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
                 hasAscenseur={!!buildingModel.model_json.core.ascenseur}
                 voirieSide={buildingModel.model_json.site.voirie_orientations?.[0] ?? "sud"}
                 isRdc={openNiveau.index === 0}
-                width={1400}
-                height={900}
+                width={1800}
+                height={1150}
                 northAngleDeg={buildingModel.model_json.site.north_angle_deg ?? 0}
               />
             )}
