@@ -162,7 +162,11 @@ def compute_apartment_slots(
 
     # Average apartment surface
     avg_surface = sum(mix_norm[t] * typo_surface_targets[t] for t in mix_norm)
-    nb_apartments = max(1, int(usable_area / avg_surface))
+    # Round up so we don't under-pack — adapter will reject slots that are
+    # genuinely too narrow. Better to try more slots than leave the footprint
+    # underutilized.
+    import math
+    nb_apartments = max(1, math.ceil(usable_area / avg_surface))
 
     # Distribute typologies according to mix
     typos_expanded: list[Typologie] = []
@@ -178,43 +182,45 @@ def compute_apartment_slots(
     width = maxx - minx
     height = maxy - miny
 
+    # Equal-width slicing: all slots get the same width (or height). Surface-
+    # proportional slicing produced strips too narrow for compact typologies
+    # (e.g. a T2 slot at 30% × 24m = 7m wide sounds OK, but when mixed with a
+    # T4 that eats 35%, T2 ends up at 15% × 24m = 3.7m — too narrow for any
+    # apartment template). Equal widths give every typology room to fit.
+    n = len(typos_expanded)
     slots: list[ApartmentSlot] = []
     if width >= height:
         # Slice along X
-        total_surface = sum(typo_surface_targets[t] for t in typos_expanded)
-        x_cursor = minx
+        slot_w = width / n
         for i, typo in enumerate(typos_expanded):
-            slot_w = width * (typo_surface_targets[typo] / total_surface)
+            x_cursor = minx + i * slot_w
             slot_poly = ShapelyPolygon([
                 (x_cursor, miny), (x_cursor + slot_w, miny),
                 (x_cursor + slot_w, maxy), (x_cursor, maxy),
             ]).intersection(usable)
             orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
-            position = _infer_position(i, len(typos_expanded))
+            position = _infer_position(i, n)
             slots.append(ApartmentSlot(
                 id=f"slot_{i}", polygon=slot_poly, surface_m2=slot_poly.area,
                 target_typologie=typo, orientations=orientations,
                 position_in_floor=position,
             ))
-            x_cursor += slot_w
     else:
         # Slice along Y
-        total_surface = sum(typo_surface_targets[t] for t in typos_expanded)
-        y_cursor = miny
+        slot_h = height / n
         for i, typo in enumerate(typos_expanded):
-            slot_h = height * (typo_surface_targets[typo] / total_surface)
+            y_cursor = miny + i * slot_h
             slot_poly = ShapelyPolygon([
                 (minx, y_cursor), (maxx, y_cursor),
                 (maxx, y_cursor + slot_h), (minx, y_cursor + slot_h),
             ]).intersection(usable)
             orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
-            position = _infer_position(i, len(typos_expanded))
+            position = _infer_position(i, n)
             slots.append(ApartmentSlot(
                 id=f"slot_{i}", polygon=slot_poly, surface_m2=slot_poly.area,
                 target_typologie=typo, orientations=orientations,
                 position_in_floor=position,
             ))
-            y_cursor += slot_h
 
     return slots
 

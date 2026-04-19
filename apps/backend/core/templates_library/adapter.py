@@ -42,15 +42,8 @@ class TemplateAdapter:
         slot_width = maxx - minx
         slot_depth = maxy - miny
 
-        # Cell sizing uses max_m (keeps rooms inside the slot); range check
-        # uses min_m too so slots near the template's lower bound still fit.
+        # Range check vs template's declared dimensions
         dim = template.dimensions_grille
-        template_width_ref = dim.largeur_max_m
-        template_depth_ref = dim.profondeur_max_m
-
-        stretch_x = slot_width / template_width_ref
-        stretch_y = slot_depth / template_depth_ref
-
         width_ok = dim.largeur_min_m * 0.85 <= slot_width <= dim.largeur_max_m * 1.15
         depth_ok = dim.profondeur_min_m * 0.85 <= slot_depth <= dim.profondeur_max_m * 1.15
         if not (width_ok and depth_ok):
@@ -61,12 +54,19 @@ class TemplateAdapter:
                     f"[{dim.largeur_min_m:.1f}–{dim.largeur_max_m:.1f}]×"
                     f"[{dim.profondeur_min_m:.1f}–{dim.profondeur_max_m:.1f}]m"
                 ),
-                stretch_x=stretch_x, stretch_y=stretch_y,
             )
 
-        # Grid cell physical size after stretch
-        cell_w = 3.0 * stretch_x
-        cell_h = 3.0 * stretch_y
+        # Determine the template grid shape from bounds_cells, then size cells so
+        # rooms tile the slot exactly (no gap, no overflow).
+        topo = template.topologie
+        max_col = max(max(c[0] for c in room["bounds_cells"]) for room in topo["rooms"])
+        max_row = max(max(c[1] for c in room["bounds_cells"]) for room in topo["rooms"])
+        n_cols = max_col + 1
+        n_rows = max_row + 1
+        cell_w = slot_width / n_cols
+        cell_h = slot_depth / n_rows
+        stretch_x = cell_w / 3.0
+        stretch_y = cell_h / 3.0
 
         # 2. Build rooms with scaled polygons
         rooms: list[Room] = []

@@ -129,7 +129,7 @@ function CelluleLayer({ cellule, scale, project }: LayerProps) {
       {/* Openings on top of walls */}
       {cellule.openings.map((op) => (
         <OpeningMark
-          key={op.id}
+          key={`${cellule.id}-${op.id}`}
           opening={op}
           walls={cellule.walls}
           scale={scale}
