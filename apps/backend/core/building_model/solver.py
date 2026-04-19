@@ -81,30 +81,89 @@ _INCENDIE_DIST_MAX_M = 25.0
 _CORE_ASPECT_MIN_LW = 0.6  # core cabine 1.1×1.4 ~ 0.7 aspect min
 
 
-def place_core(grid: ModularGrid, core_surface_m2: float) -> CorePlacement:
-    """Place core (stairs + elevator + shafts) optimally to minimise circulation waste.
+def _find_reflex_vertex(footprint: ShapelyPolygon) -> tuple[float, float] | None:
+    """Return the concave (reflex) vertex of the footprint if any.
 
-    Uses a simple grid search: try each grid cell as center, score = max distance
-    to all footprint corners. Pick minimum.
+    For an L-shape this is the inner corner — the ideal spot for the
+    common core because corridors can extend into both wings from here.
+    Returns None for convex footprints (rectangles, etc.).
+    """
+    coords = list(footprint.exterior.coords)[:-1]
+    n = len(coords)
+    if n < 5:
+        return None
+    for i in range(n):
+        p_prev = coords[(i - 1) % n]
+        p = coords[i]
+        p_next = coords[(i + 1) % n]
+        # Cross product of (prev→curr) × (curr→next)
+        v1 = (p[0] - p_prev[0], p[1] - p_prev[1])
+        v2 = (p_next[0] - p[0], p_next[1] - p[1])
+        cross = v1[0] * v2[1] - v1[1] * v2[0]
+        # For a counter-clockwise-wound polygon, a negative cross is a reflex
+        # vertex. Shapely normalizes polygons to CCW so this should hold.
+        if cross < -0.01:
+            return (p[0], p[1])
+    return None
+
+
+def place_core(grid: ModularGrid, core_surface_m2: float) -> CorePlacement:
+    """Place core (stairs + elevator + shafts) so every wing of an L/T/U
+    footprint can be reached from it via a short corridor.
+
+    Strategy:
+    - For L-shaped footprints, place the core adjacent to the reflex
+      (inner corner) vertex. Corridors then extend along BOTH wings
+      from this inner-corner position, giving every apartment access
+      to the stairs/elevator without crossing another apartment.
+    - For convex (rectangular) footprints, fall back to the original
+      grid-search minimax to keep the core roughly central.
     """
     if grid.footprint is None:
         raise ValueError("grid.footprint is None")
+
+    side = (core_surface_m2 ** 0.5)
+    reflex = _find_reflex_vertex(grid.footprint)
+    if reflex is not None:
+        rx, ry = reflex
+        # Offset the core INWARD from the reflex vertex. The inward direction
+        # is toward the centroid of the footprint.
+        centroid = grid.footprint.centroid
+        dx = centroid.x - rx
+        dy = centroid.y - ry
+        mag = max(0.01, (dx * dx + dy * dy) ** 0.5)
+        ux, uy = dx / mag, dy / mag
+        # Push the core so its near corner is ~0.5 m inside the reflex
+        offset = side / 2 + 0.5
+        ccx = rx + ux * offset
+        ccy = ry + uy * offset
+        core_poly = ShapelyPolygon([
+            (ccx - side / 2, ccy - side / 2), (ccx + side / 2, ccy - side / 2),
+            (ccx + side / 2, ccy + side / 2), (ccx - side / 2, ccy + side / 2),
+        ])
+        if core_poly.within(grid.footprint.buffer(0.1)):
+            return CorePlacement(
+                position_xy=(ccx, ccy),
+                polygon=core_poly,
+                surface_m2=core_surface_m2,
+            )
+        # else fall through to minimax if reflex-based placement lands outside
+
+    # Convex / fallback: minimax distance to all corners
     corners = list(grid.footprint.exterior.coords)[:-1]
     best: tuple[float, GridCell | None] = (float("inf"), None)
     for cell in grid.cells:
         ccx, ccy = cell.polygon.centroid.x, cell.polygon.centroid.y
-        max_dist = max(((cx-ccx)**2 + (cy-ccy)**2) ** 0.5 for cx, cy in corners)
+        max_dist = max(((cx - ccx) ** 2 + (cy - ccy) ** 2) ** 0.5 for cx, cy in corners)
         if max_dist < best[0]:
             best = (max_dist, cell)
     if best[1] is None:
         raise ValueError("no grid cells available to place core")
 
     ccx, ccy = best[1].polygon.centroid.x, best[1].polygon.centroid.y
-    # Core spans roughly sqrt(surface) × sqrt(surface) ~ 4.5 × 4.5 for 20m²
-    side = (core_surface_m2 ** 0.5)
     core_poly = ShapelyPolygon([
-        (ccx - side/2, ccy - side/2), (ccx + side/2, ccy - side/2),
-        (ccx + side/2, ccy + side/2), (ccx - side/2, ccy + side/2),
+        (ccx - side / 2, ccy - side / 2), (ccx + side / 2, ccy - side / 2),
+        (ccx + side / 2, ccy + side / 2), (ccx - side / 2, ccy + side / 2),
     ])
     return CorePlacement(
         position_xy=(ccx, ccy),

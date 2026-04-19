@@ -60,6 +60,68 @@ class GenerationInputs:
 _DEFAULT_HAUTEUR_ETAGE_M = 2.7
 _DEFAULT_HAUTEUR_RDC_M = 3.2
 _DEFAULT_CORE_SURFACE_M2 = 22.0
+_CORRIDOR_WIDTH_M = 1.6
+
+
+def _emit_wing_corridors(
+    niveau_idx: int,
+    core,
+    footprint,
+    cells: list[Cellule],
+) -> list[Circulation]:
+    """Emit one corridor per wing of the footprint.
+
+    Each wing is a rectangle (from the same decomposition used by the
+    solver). The corridor runs along the wing's longer axis, centered on
+    its shorter axis → it lies exactly between the two rows of apts in a
+    dual-loaded layout, touching every apt.
+    """
+    from shapely.geometry import Polygon as ShapelyPoly
+    from core.building_model.solver import _decompose_into_wings
+
+    corridors: list[Circulation] = []
+    if not cells:
+        return corridors
+
+    half = _CORRIDOR_WIDTH_M / 2
+    wings = _decompose_into_wings(footprint)
+
+    for i, wing in enumerate(wings):
+        wxmin, wymin, wxmax, wymax = wing.bounds
+        ww = wxmax - wxmin
+        wh = wymax - wymin
+        if ww >= wh:
+            # Horizontal corridor along the wing's length, centered vertically
+            cy_mid = (wymin + wymax) / 2
+            poly = ShapelyPoly([
+                (wxmin, cy_mid - half), (wxmax, cy_mid - half),
+                (wxmax, cy_mid + half), (wxmin, cy_mid + half),
+            ]).intersection(footprint)
+        else:
+            # Vertical corridor
+            cx_mid = (wxmin + wxmax) / 2
+            poly = ShapelyPoly([
+                (cx_mid - half, wymin), (cx_mid + half, wymin),
+                (cx_mid + half, wymax), (cx_mid - half, wymax),
+            ]).intersection(footprint)
+
+        if poly.is_empty:
+            continue
+        # Subtract the core so the corridor doesn't overlap the stairs block
+        poly = poly.difference(core.polygon)
+        if poly.is_empty:
+            continue
+        # Handle MultiPolygon — emit the biggest piece
+        if poly.geom_type == "MultiPolygon":
+            poly = max(poly.geoms, key=lambda g: g.area)
+        coords = list(poly.exterior.coords)[:-1]
+        corridors.append(Circulation(
+            id=f"couloir_w{i}_R{niveau_idx}",
+            polygon_xy=coords,
+            surface_m2=poly.area,
+            largeur_min_cm=int(_CORRIDOR_WIDTH_M * 100),
+        ))
+    return corridors
 
 
 async def generate_building_model(
@@ -127,12 +189,19 @@ async def generate_building_model(
                     )
                     cells_for_niveau.append(fit.apartment)
 
-        circ = Circulation(
-            id=f"palier_R{idx}",
-            polygon_xy=list(core.polygon.exterior.coords)[:-1],
-            surface_m2=core.polygon.area * 0.3,
-            largeur_min_cm=140,
-        )
+        # Palier + corridors: the core is the stairs/elevator block; we also
+        # emit one corridor per wing that stretches the palier from the core
+        # out along each arm so every apt sits on a corridor. Corridor width
+        # = 1.6 m (PMR). Corridors run along the interior edge of each wing.
+        circulations = [
+            Circulation(
+                id=f"palier_R{idx}",
+                polygon_xy=list(core.polygon.exterior.coords)[:-1],
+                surface_m2=core.polygon.area,
+                largeur_min_cm=140,
+            ),
+        ]
+        circulations.extend(_emit_wing_corridors(idx, core, footprint, cells_for_niveau))
 
         hauteur_hsp = _DEFAULT_HAUTEUR_RDC_M - 0.25 if is_rdc else _DEFAULT_HAUTEUR_ETAGE_M - 0.25
         niveaux.append(Niveau(
@@ -141,7 +210,7 @@ async def generate_building_model(
             hauteur_sous_plafond_m=hauteur_hsp,
             surface_plancher_m2=footprint.area,
             cellules=cells_for_niveau,
-            circulations_communes=[circ],
+            circulations_communes=circulations,
         ))
 
     # --- Build envelope ---
