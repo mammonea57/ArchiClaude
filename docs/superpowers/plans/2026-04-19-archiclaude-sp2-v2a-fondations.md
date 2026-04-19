@@ -1892,7 +1892,9 @@ def compute_apartment_slots(
     for typo, ratio in mix_norm.items():
         n = max(1, round(nb_apartments * ratio))
         typos_expanded.extend([typo] * n)
-    typos_expanded = typos_expanded[:nb_apartments]
+    # at least one slot per declared typology — never drop a typo from the programme
+    min_slots = len(mix_typologique)
+    typos_expanded = typos_expanded[:max(nb_apartments, min_slots)]
 
     # Strip-divide usable area along longest axis, assign a typo to each strip
     minx, miny, maxx, maxy = usable.bounds
