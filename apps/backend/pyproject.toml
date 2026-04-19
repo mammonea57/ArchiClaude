@@ -52,6 +52,7 @@ dependencies = [
 
     # Auth
     "passlib[bcrypt]==1.7.4",
+    "bcrypt==3.2.2",  # passlib 1.7.4 is incompatible with bcrypt>=4.0
     "pyjwt[crypto]==2.9.0",
     "slowapi==0.1.9",
 
