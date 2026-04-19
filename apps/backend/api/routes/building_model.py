@@ -31,8 +31,9 @@ def _to_out(row: BuildingModelRow) -> BuildingModelOut:
 async def get_current_building_model(
     project_id: UUID,
     session: SessionDep,
-    current_user: CurrentUserDep,
 ) -> BuildingModelOut:
+    # Read-only — public like GET /projects/{id} in v1 MVP. Auth is enforced
+    # on mutating endpoints (generate, restore).
     row = (await session.execute(
         select(BuildingModelRow)
         .where(BuildingModelRow.project_id == project_id)
@@ -118,7 +119,6 @@ async def generate_endpoint(
 async def list_versions(
     project_id: UUID,
     session: SessionDep,
-    current_user: CurrentUserDep,
 ) -> BuildingModelVersionsOut:
     rows = (await session.execute(
         select(BuildingModelRow)
