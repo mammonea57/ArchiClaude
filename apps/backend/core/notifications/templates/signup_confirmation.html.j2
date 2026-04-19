@@ -1,0 +1,11 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<h1 style="margin:0 0 16px 0;font-family:Georgia,serif;">Bienvenue sur ArchiClaude</h1>
+<p>Bonjour {{ full_name }},</p>
+<p>Votre compte ArchiClaude est prêt. Vous pouvez dès maintenant créer votre premier projet de faisabilité.</p>
+<p style="text-align:center;margin:32px 0;">
+  <a href="{{ app_url }}" style="display:inline-block;padding:12px 24px;background:#0d9488;color:#fff;text-decoration:none;border-radius:8px;">
+    Accéder à ArchiClaude
+  </a>
+</p>
+{% endblock %}

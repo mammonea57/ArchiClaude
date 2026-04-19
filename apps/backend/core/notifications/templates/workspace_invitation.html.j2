@@ -1,0 +1,13 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<h1 style="margin:0 0 16px 0;font-family:Georgia,serif;color:#0f172a;">Invitation à rejoindre un workspace</h1>
+<p>Bonjour,</p>
+<p><strong>{{ invited_by_email }}</strong> vous invite à rejoindre le workspace <strong>{{ workspace_name }}</strong> sur ArchiClaude.</p>
+<p style="text-align:center;margin:32px 0;">
+  <a href="{{ app_url }}/invitations/{{ token }}/accept"
+     style="display:inline-block;padding:12px 24px;background:#0d9488;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;">
+    Accepter l'invitation
+  </a>
+</p>
+<p style="color:#64748b;font-size:13px;">Ce lien expire dans 7 jours.</p>
+{% endblock %}

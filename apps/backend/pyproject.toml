@@ -75,6 +75,9 @@ dependencies = [
 
     # PCMI6 quality control
     "scikit-image>=0.21",
+
+    # Transactional email
+    "resend>=0.7",
 ]
 
 [project.optional-dependencies]

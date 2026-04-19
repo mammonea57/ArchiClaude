@@ -1,0 +1,6 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<h1 style="margin:0 0 16px 0;font-family:Georgia,serif;">Nouveau commentaire</h1>
+<p><strong>{{ commenter_email }}</strong> a commenté sur le projet <strong>{{ project_name }}</strong>.</p>
+<p><a href="{{ app_url }}/projects/{{ project_id }}" style="color:#0d9488;">Voir le commentaire</a></p>
+{% endblock %}

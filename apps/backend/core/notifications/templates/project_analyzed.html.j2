@@ -1,0 +1,11 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<h1 style="margin:0 0 16px 0;font-family:Georgia,serif;">Analyse de faisabilité terminée</h1>
+<p>L'analyse du projet <strong>{{ project_name }}</strong> est disponible.</p>
+<p style="text-align:center;margin:32px 0;">
+  <a href="{{ app_url }}/projects/{{ project_id }}/report"
+     style="display:inline-block;padding:12px 24px;background:#0d9488;color:#fff;text-decoration:none;border-radius:8px;">
+    Voir le rapport
+  </a>
+</p>
+{% endblock %}
