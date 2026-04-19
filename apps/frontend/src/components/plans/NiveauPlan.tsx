@@ -62,7 +62,18 @@ export function NiveauPlan({
     );
   }
 
-  const { scale, project } = makeProjector(box, width, height - 60, 44);
+  // Reserve the TOP 80 px for the sheet header (rect at y=20-58 + title
+  // text). Pass a clipped-height projection so top apts never slip under
+  // the header.
+  const HEADER_PX = 80;
+  const FOOTER_PX = 90;  // scale bar + title block at bottom
+  const plan_h = height - HEADER_PX - FOOTER_PX;
+  const { scale, project: baseProject } = makeProjector(box, width, plan_h, 24);
+  // Shift every projected y by HEADER_PX so the plan starts below the header.
+  const project = (c: Coord): Coord => {
+    const [x, y] = baseProject(c);
+    return [x, y + HEADER_PX];
+  };
 
   return (
     <svg
@@ -101,12 +112,15 @@ export function NiveauPlan({
         />
       )}
 
-      {/* RDC main entrance from voirie */}
+      {/* RDC main entrance from voirie — position it at the corridor end
+          that reaches the voirie wall (so entering leads to the corridor,
+          not into an apartment) */}
       {isRdc && corePosition && (
         <MainEntrance
           corePosition={corePosition}
           voirieSide={voirieSide}
           box={box}
+          circulations={circulations}
           scale={scale}
           project={project}
         />
@@ -433,18 +447,19 @@ function TypologieTag({ cellule, project }: { cellule: BuildingModelCellule; pro
   const bbox = bboxOf(cellule.polygon_xy);
   if (!bbox) return null;
   const [tx, ty] = project([bbox.minx, bbox.maxy]);
-  // Show apt number ('R+0.01') + typologie tag
-  const aptNum = cellule.id; // e.g. "R+0.03"
+  // Apt number: extract "03" from "R+0.03"
+  const m = cellule.id.match(/\.(\d+)$/);
+  const aptNum = m?.[1] ?? cellule.id;
   return (
     <g transform={`translate(${tx + 4}, ${ty + 16})`}>
-      {/* typologie badge */}
-      <rect x={0} y={-12} rx={2} ry={2} width={36} height={16} fill="#0f172a" />
-      <text x={18} y={0} textAnchor="middle" fontSize={10} fontWeight={700} fill="white" letterSpacing="0.4">
+      {/* typologie badge (left) */}
+      <rect x={0} y={-12} rx={2} ry={2} width={30} height={16} fill="#0f172a" />
+      <text x={15} y={0} textAnchor="middle" fontSize={10} fontWeight={700} fill="white" letterSpacing="0.4">
         {cellule.typologie}
       </text>
-      {/* apartment number */}
-      <rect x={38} y={-12} rx={2} ry={2} width={60} height={16} fill="#dc2626" />
-      <text x={68} y={0} textAnchor="middle" fontSize={10} fontWeight={700} fill="white" letterSpacing="0.2">
+      {/* apt number badge (right, shorter) */}
+      <rect x={32} y={-12} rx={2} ry={2} width={26} height={16} fill="#dc2626" />
+      <text x={45} y={0} textAnchor="middle" fontSize={10} fontWeight={700} fill="white">
         {aptNum}
       </text>
     </g>
@@ -768,22 +783,53 @@ function CoreLayer({
 }
 
 function MainEntrance({
-  corePosition, voirieSide, box, scale, project,
+  corePosition, voirieSide, box, circulations, scale, project,
 }: {
   corePosition: [number, number];
   voirieSide: string;
   box: { minx: number; miny: number; maxx: number; maxy: number };
+  circulations: BuildingModelCirculation[];
   scale: number;
   project: (c: Coord) => Coord;
 }) {
   const [cxM, cyM] = corePosition;
+
+  // Find the CIRCULATION polygon that reaches the voirie edge — the street
+  // door opens into that corridor, not into an apartment. Pick the
+  // corridor whose bbox touches the voirie wall (miny for sud, maxy for
+  // nord, etc.).
   let doorMx = cxM;
   let doorMy = cyM;
   let arrowDx = 0, arrowDy = -1;
-  if (voirieSide === "sud") { doorMy = box.miny; arrowDy = -1; }
-  else if (voirieSide === "nord") { doorMy = box.maxy; arrowDy = 1; }
-  else if (voirieSide === "est") { doorMx = box.maxx; arrowDx = 1; arrowDy = 0; }
-  else { doorMx = box.minx; arrowDx = -1; arrowDy = 0; }
+
+  const touches = (ci: BuildingModelCirculation, side: string) => {
+    if (!ci.polygon_xy || ci.polygon_xy.length < 3) return false;
+    const xs = ci.polygon_xy.map((p) => p[0]);
+    const ys = ci.polygon_xy.map((p) => p[1]);
+    if (side === "sud")   return Math.abs(Math.min(...ys) - box.miny) < 0.35;
+    if (side === "nord")  return Math.abs(box.maxy - Math.max(...ys)) < 0.35;
+    if (side === "ouest") return Math.abs(Math.min(...xs) - box.minx) < 0.35;
+    if (side === "est")   return Math.abs(box.maxx - Math.max(...xs)) < 0.35;
+    return false;
+  };
+
+  const reaching = circulations.filter((c) => touches(c, voirieSide));
+  if (reaching.length > 0) {
+    // Use the centroid of the reaching corridor edge on the voirie side
+    const ci = reaching[0];
+    const xs = ci.polygon_xy.map((p) => p[0]);
+    const ys = ci.polygon_xy.map((p) => p[1]);
+    if (voirieSide === "sud")      { doorMx = (Math.min(...xs) + Math.max(...xs)) / 2; doorMy = box.miny; arrowDy = -1; }
+    else if (voirieSide === "nord") { doorMx = (Math.min(...xs) + Math.max(...xs)) / 2; doorMy = box.maxy; arrowDy = 1; }
+    else if (voirieSide === "est")  { doorMy = (Math.min(...ys) + Math.max(...ys)) / 2; doorMx = box.maxx; arrowDx = 1; arrowDy = 0; }
+    else                            { doorMy = (Math.min(...ys) + Math.max(...ys)) / 2; doorMx = box.minx; arrowDx = -1; arrowDy = 0; }
+  } else {
+    // Fallback: align with core (old behaviour)
+    if (voirieSide === "sud") { doorMy = box.miny; arrowDy = -1; }
+    else if (voirieSide === "nord") { doorMy = box.maxy; arrowDy = 1; }
+    else if (voirieSide === "est") { doorMx = box.maxx; arrowDx = 1; arrowDy = 0; }
+    else { doorMx = box.minx; arrowDx = -1; arrowDy = 0; }
+  }
 
   const [dx, dy] = project([doorMx, doorMy]);
   const [coreX, coreY] = project(corePosition);
