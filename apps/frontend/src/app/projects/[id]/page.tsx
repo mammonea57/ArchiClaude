@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { use } from "react";
 import { useFeasibility } from "@/lib/hooks/useFeasibility";
+import { useBuildingModel } from "@/lib/hooks/useBuildingModel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FeasibilityDashboard, type KPI } from "@/components/panels/FeasibilityDashboard";
-import { ServitudesList } from "@/components/panels/ServitudesList";
+import { ServitudesList, type Alert } from "@/components/panels/ServitudesList";
 import { ArrowLeft, FileText, LayoutGrid } from "lucide-react";
-import type { Project } from "@/lib/types";
+import type { Project, BuildingModelRow, BuildingModelPayload } from "@/lib/types";
 
 function statusLabel(status: Project["status"]): string {
   switch (status) {
@@ -32,28 +33,51 @@ function StatusBadge({ status }: { status: Project["status"] }) {
   );
 }
 
-function buildKPIs(project: Project): KPI[] {
+function countLogements(bm: BuildingModelPayload): number {
+  return bm.niveaux.reduce(
+    (acc, n) => acc + n.cellules.filter((c) => c.type === "logement").length,
+    0,
+  );
+}
+
+function sumSdp(bm: BuildingModelPayload): number {
+  return bm.niveaux.reduce((acc, n) => acc + n.surface_plancher_m2, 0);
+}
+
+function empriseMetric(bm: BuildingModelPayload): string {
+  const parcelle = bm.site.parcelle_surface_m2 ?? 0;
+  if (!parcelle) return "—";
+  return `${Math.round((bm.envelope.emprise_m2 / parcelle) * 100)}%`;
+}
+
+function buildKPIs(project: Project, bm: BuildingModelRow | null): KPI[] {
   const b = project.brief;
   const mix = b?.mix_typologique ?? {};
   const typoCount = Object.values(mix).filter((v) => Number(v) > 0).length;
+
+  if (bm) {
+    const m = bm.model_json;
+    const sdp = Math.round(sumSdp(m));
+    return [
+      { label: "SDP", value: sdp, unit: "m²" },
+      { label: "Niveaux", value: m.envelope.niveaux },
+      { label: "Logements", value: countLogements(m) },
+      { label: "Typologies", value: typoCount > 0 ? typoCount : "—" },
+      { label: "Emprise", value: empriseMetric(m) },
+      { label: "Hauteur", value: m.envelope.hauteur_totale_m, unit: "m" },
+    ];
+  }
+
+  // Fallback: brief targets only (no building model generated yet)
   return [
     {
       label: "SDP cible",
       value: b?.cible_sdp_m2 ?? "—",
       unit: b?.cible_sdp_m2 != null ? "m²" : undefined,
     },
-    {
-      label: "Niveaux cible",
-      value: b?.hauteur_cible_niveaux ?? "—",
-    },
-    {
-      label: "Logements cible",
-      value: b?.cible_nb_logements ?? "—",
-    },
-    {
-      label: "Typologies",
-      value: typoCount > 0 ? typoCount : "—",
-    },
+    { label: "Niveaux cible", value: b?.hauteur_cible_niveaux ?? "—" },
+    { label: "Logements cible", value: b?.cible_nb_logements ?? "—" },
+    { label: "Typologies", value: typoCount > 0 ? typoCount : "—" },
     {
       label: "Emprise cible",
       value: b?.emprise_cible_pct != null ? `${b.emprise_cible_pct}%` : "—",
@@ -68,9 +92,24 @@ function buildKPIs(project: Project): KPI[] {
   ];
 }
 
+function buildAlerts(bm: BuildingModelRow | null): Alert[] {
+  if (!bm?.conformite_check?.alerts) return [];
+  const ALERT_LEVEL: Record<"info" | "warning" | "error", Alert["level"]> = {
+    info: "info",
+    warning: "warning",
+    error: "critical",
+  };
+  return bm.conformite_check.alerts.slice(0, 10).map((a) => ({
+    level: ALERT_LEVEL[a.level],
+    type: a.category,
+    message: a.message,
+  }));
+}
+
 export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { project, loading, error } = useFeasibility(id);
+  const { buildingModel, notFound: bmNotFound } = useBuildingModel(id);
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -110,6 +149,14 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
                 <div className="flex items-center gap-3 flex-wrap">
                   <h1 className="font-display text-3xl font-bold text-slate-900">{project.name}</h1>
                   <StatusBadge status={project.status} />
+                  {buildingModel && (
+                    <Badge
+                      className="text-xs border-transparent"
+                      style={{ backgroundColor: "#e0f2fe", color: "#075985" }}
+                    >
+                      BM v{buildingModel.version}
+                    </Badge>
+                  )}
                 </div>
                 {project.confidence_score != null && (
                   <p className="text-sm text-slate-400">
@@ -145,10 +192,17 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
             {/* KPI Dashboard */}
             {project.status === "analyzed" ? (
               <section className="space-y-4">
-                <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
-                  Indicateurs clés
-                </h2>
-                <FeasibilityDashboard kpis={buildKPIs(project)} />
+                <div className="flex items-baseline justify-between flex-wrap gap-2">
+                  <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
+                    {buildingModel ? "Indicateurs modèle bâtiment" : "Objectifs (brief)"}
+                  </h2>
+                  {bmNotFound && (
+                    <p className="text-xs text-slate-400">
+                      Modèle bâtiment pas encore généré — affichage des objectifs du brief.
+                    </p>
+                  )}
+                </div>
+                <FeasibilityDashboard kpis={buildKPIs(project, buildingModel)} />
               </section>
             ) : (
               <div className="rounded-xl border border-slate-100 bg-white p-10 text-center space-y-3">
@@ -161,8 +215,8 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
               </div>
             )}
 
-            {/* Alerts preview */}
-            <ServitudesList alerts={[]} />
+            {/* Conformité alerts */}
+            <ServitudesList alerts={buildAlerts(buildingModel)} />
 
             {/* Quick links */}
             {project.status === "analyzed" && (
