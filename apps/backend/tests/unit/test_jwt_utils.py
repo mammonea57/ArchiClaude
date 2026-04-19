@@ -1,7 +1,7 @@
 import pytest
 import time
 from uuid import uuid4
-from core.auth.jwt_utils import emit_jwt, decode_jwt, JWTError
+from core.auth.jwt_utils import emit_jwt, decode_jwt, needs_refresh, JWTError
 
 
 def test_emit_and_decode_jwt():
@@ -38,7 +38,6 @@ def test_default_expiry_7_days():
 
 
 def test_needs_refresh_when_less_than_24h():
-    from core.auth.jwt_utils import needs_refresh
     token = emit_jwt(
         user_id=uuid4(), email="u@x.fr", workspace_id=uuid4(),
         secret="s", expires_in_seconds=3600,

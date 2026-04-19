@@ -1,6 +1,7 @@
 """JWT emission and verification (HS256, 7 days default)."""
 from __future__ import annotations
 import time
+from typing import Any
 from uuid import UUID
 
 import jwt as pyjwt
@@ -33,7 +34,7 @@ def emit_jwt(
     return pyjwt.encode(payload, secret, algorithm="HS256")
 
 
-def decode_jwt(token: str, *, secret: str) -> dict:
+def decode_jwt(token: str, *, secret: str) -> dict[str, Any]:
     """Decode and validate a JWT. Raises JWTError on invalid/expired."""
     try:
         return pyjwt.decode(token, secret, algorithms=["HS256"])
@@ -44,7 +45,12 @@ def decode_jwt(token: str, *, secret: str) -> dict:
 
 
 def needs_refresh(token: str, *, secret: str) -> bool:
-    """True if token expires within REFRESH_THRESHOLD_SECONDS."""
+    """True if token expires within REFRESH_THRESHOLD_SECONDS.
+
+    Returns False for invalid/expired tokens — caller must still call
+    decode_jwt to enforce validity. This is a convenience helper for
+    already-validated sessions, not a validation primitive.
+    """
     try:
         payload = decode_jwt(token, secret=secret)
     except JWTError:
