@@ -86,6 +86,9 @@ def _emit_wing_corridors(
     half = _CORRIDOR_WIDTH_M / 2
     wings = _decompose_into_wings(footprint)
 
+    core_cx, core_cy = core.position_xy
+    core_bb = core.polygon.bounds  # minx, miny, maxx, maxy
+
     for i, wing in enumerate(wings):
         wxmin, wymin, wxmax, wymax = wing.bounds
         ww = wxmax - wxmin
@@ -93,32 +96,85 @@ def _emit_wing_corridors(
         if ww >= wh:
             # Horizontal corridor along the wing's length, centered vertically
             cy_mid = (wymin + wymax) / 2
-            poly = ShapelyPoly([
+            corridor_poly = ShapelyPoly([
                 (wxmin, cy_mid - half), (wxmax, cy_mid - half),
                 (wxmax, cy_mid + half), (wxmin, cy_mid + half),
             ]).intersection(footprint)
+            axis = "horizontal"
         else:
-            # Vertical corridor
             cx_mid = (wxmin + wxmax) / 2
-            poly = ShapelyPoly([
+            corridor_poly = ShapelyPoly([
                 (cx_mid - half, wymin), (cx_mid + half, wymin),
                 (cx_mid + half, wymax), (cx_mid - half, wymax),
             ]).intersection(footprint)
+            axis = "vertical"
 
-        if poly.is_empty:
+        if corridor_poly.is_empty:
             continue
+
+        # Ensure the corridor CONNECTS to the core. If the wing's corridor
+        # polygon doesn't touch the core, add a short connector segment in
+        # the opposite axis from the corridor's closest point to the core.
+        if corridor_poly.distance(core.polygon) > 0.2:
+            # Closest point on the corridor to the core
+            wxmin_c, wymin_c, wxmax_c, wymax_c = corridor_poly.bounds
+            if axis == "horizontal":
+                # Connector is vertical from corridor to core
+                connector_cx = max(core_bb[0], min(core_bb[2], (wxmin_c + wxmax_c) / 2))
+                # If corridor is east of core, connect from core east edge
+                # going east to corridor west edge
+                if wxmin_c > core_bb[2]:
+                    cx0 = core_bb[2]
+                    cx1 = wxmin_c
+                elif wxmax_c < core_bb[0]:
+                    cx0 = wxmax_c
+                    cx1 = core_bb[0]
+                else:
+                    cx0 = core_bb[2]
+                    cx1 = wxmax_c
+                cy_conn = (wymin_c + wymax_c) / 2
+                connector = ShapelyPoly([
+                    (min(cx0, cx1), cy_conn - half), (max(cx0, cx1), cy_conn - half),
+                    (max(cx0, cx1), cy_conn + half), (min(cx0, cx1), cy_conn + half),
+                ]).intersection(footprint)
+                corridor_poly = corridor_poly.union(connector)
+                _ = connector_cx
+            else:
+                # Vertical corridor: connector is horizontal from corridor to core
+                if wymin_c > core_bb[3]:
+                    cy0 = core_bb[3]; cy1 = wymin_c
+                elif wymax_c < core_bb[1]:
+                    cy0 = wymax_c; cy1 = core_bb[1]
+                else:
+                    cy0 = core_bb[3]; cy1 = wymax_c
+                # Horizontal connector at core's Y level, from core east/west
+                # edge toward the corridor.
+                if wxmin_c > core_bb[2]:
+                    cx0_conn = core_bb[2]; cx1_conn = (wxmin_c + wxmax_c) / 2 + half
+                elif wxmax_c < core_bb[0]:
+                    cx0_conn = (wxmin_c + wxmax_c) / 2 - half; cx1_conn = core_bb[0]
+                else:
+                    cx0_conn = core_bb[2]; cx1_conn = (wxmin_c + wxmax_c) / 2 + half
+                connector = ShapelyPoly([
+                    (min(cx0_conn, cx1_conn), core_cy - half),
+                    (max(cx0_conn, cx1_conn), core_cy - half),
+                    (max(cx0_conn, cx1_conn), core_cy + half),
+                    (min(cx0_conn, cx1_conn), core_cy + half),
+                ]).intersection(footprint)
+                corridor_poly = corridor_poly.union(connector)
+                _ = (cy0, cy1)
+
         # Subtract the core so the corridor doesn't overlap the stairs block
-        poly = poly.difference(core.polygon)
-        if poly.is_empty:
+        corridor_poly = corridor_poly.difference(core.polygon)
+        if corridor_poly.is_empty:
             continue
-        # Handle MultiPolygon — emit the biggest piece
-        if poly.geom_type == "MultiPolygon":
-            poly = max(poly.geoms, key=lambda g: g.area)
-        coords = list(poly.exterior.coords)[:-1]
+        if corridor_poly.geom_type == "MultiPolygon":
+            corridor_poly = max(corridor_poly.geoms, key=lambda g: g.area)
+        coords = list(corridor_poly.exterior.coords)[:-1]
         corridors.append(Circulation(
             id=f"couloir_w{i}_R{niveau_idx}",
             polygon_xy=coords,
-            surface_m2=poly.area,
+            surface_m2=corridor_poly.area,
             largeur_min_cm=int(_CORRIDOR_WIDTH_M * 100),
         ))
     return corridors
@@ -187,7 +243,18 @@ async def generate_building_model(
                     fit.apartment.typologie = _reclassify_by_surface(
                         fit.apartment.surface_m2, fit.apartment.typologie or slot.target_typologie,
                     )
+                    # Assign a human-readable numbering like 'R+0.01' to every
+                    # apartment. Sorted by bbox (y then x) so labels follow a
+                    # consistent visual reading order.
                     cells_for_niveau.append(fit.apartment)
+            # Sort apts on this floor left-to-right, top-to-bottom and assign
+            # a stable apt number.
+            cells_for_niveau.sort(key=lambda c: (
+                -max(p[1] for p in c.polygon_xy),
+                min(p[0] for p in c.polygon_xy),
+            ))
+            for k, apt in enumerate(cells_for_niveau, start=1):
+                apt.id = f"R+{idx}.{k:02d}"
 
         # Palier + corridors: the core is the stairs/elevator block; we also
         # emit one corridor per wing that stretches the palier from the core

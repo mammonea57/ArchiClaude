@@ -433,11 +433,19 @@ function TypologieTag({ cellule, project }: { cellule: BuildingModelCellule; pro
   const bbox = bboxOf(cellule.polygon_xy);
   if (!bbox) return null;
   const [tx, ty] = project([bbox.minx, bbox.maxy]);
+  // Show apt number ('R+0.01') + typologie tag
+  const aptNum = cellule.id; // e.g. "R+0.03"
   return (
     <g transform={`translate(${tx + 4}, ${ty + 16})`}>
-      <rect x={0} y={-12} rx={2} ry={2} width={38} height={16} fill="#0f172a" />
-      <text x={19} y={0} textAnchor="middle" fontSize={10} fontWeight={700} fill="white" letterSpacing="0.4">
+      {/* typologie badge */}
+      <rect x={0} y={-12} rx={2} ry={2} width={36} height={16} fill="#0f172a" />
+      <text x={18} y={0} textAnchor="middle" fontSize={10} fontWeight={700} fill="white" letterSpacing="0.4">
         {cellule.typologie}
+      </text>
+      {/* apartment number */}
+      <rect x={38} y={-12} rx={2} ry={2} width={60} height={16} fill="#dc2626" />
+      <text x={68} y={0} textAnchor="middle" fontSize={10} fontWeight={700} fill="white" letterSpacing="0.2">
+        {aptNum}
       </text>
     </g>
   );
