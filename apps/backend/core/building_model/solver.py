@@ -185,42 +185,55 @@ def compute_apartment_slots(
     width = maxx - minx
     height = maxy - miny
 
-    # Equal-width slicing: all slots get the same width (or height).
-    # Slots stay as clean rectangles (no intersection with core-subtracted
-    # usable) so the apartment rectangles tile the footprint cleanly. Core
-    # + palier are drawn as separate niveau elements by the pipeline.
+    # Equal-width slicing, intersected with footprint so L-shaped or
+    # non-convex footprints produce slots that follow the building outline
+    # (but not the core — core + palier are separate niveau elements).
+    # Empty intersections are dropped (missing corners of an L).
     n = len(typos_expanded)
     slots: list[ApartmentSlot] = []
+    slot_idx = 0
     if width >= height:
         slot_w = width / n
         for i, typo in enumerate(typos_expanded):
             x_cursor = minx + i * slot_w
-            slot_poly = ShapelyPolygon([
+            rect = ShapelyPolygon([
                 (x_cursor, miny), (x_cursor + slot_w, miny),
                 (x_cursor + slot_w, maxy), (x_cursor, maxy),
             ])
+            slot_poly = rect.intersection(grid.footprint)
+            if slot_poly.is_empty or slot_poly.area < 10:
+                continue
+            if slot_poly.geom_type == "MultiPolygon":
+                slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
             orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
-            position = _infer_position(i, n)
+            position = _infer_position(slot_idx, n)
             slots.append(ApartmentSlot(
-                id=f"slot_{i}", polygon=slot_poly, surface_m2=slot_poly.area,
+                id=f"slot_{slot_idx}", polygon=slot_poly, surface_m2=slot_poly.area,
                 target_typologie=typo, orientations=orientations,
                 position_in_floor=position,
             ))
+            slot_idx += 1
     else:
         slot_h = height / n
         for i, typo in enumerate(typos_expanded):
             y_cursor = miny + i * slot_h
-            slot_poly = ShapelyPolygon([
+            rect = ShapelyPolygon([
                 (minx, y_cursor), (maxx, y_cursor),
                 (maxx, y_cursor + slot_h), (minx, y_cursor + slot_h),
             ])
+            slot_poly = rect.intersection(grid.footprint)
+            if slot_poly.is_empty or slot_poly.area < 10:
+                continue
+            if slot_poly.geom_type == "MultiPolygon":
+                slot_poly = max(slot_poly.geoms, key=lambda g: g.area)
             orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
-            position = _infer_position(i, n)
+            position = _infer_position(slot_idx, n)
             slots.append(ApartmentSlot(
-                id=f"slot_{i}", polygon=slot_poly, surface_m2=slot_poly.area,
+                id=f"slot_{slot_idx}", polygon=slot_poly, surface_m2=slot_poly.area,
                 target_typologie=typo, orientations=orientations,
                 position_in_floor=position,
             ))
+            slot_idx += 1
 
     return slots
 
