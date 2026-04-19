@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID  # noqa: N811
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +15,13 @@ from db.base import Base
 
 class BuildingModelRow(Base):
     __tablename__ = "building_models"
+    __table_args__ = (
+        UniqueConstraint("project_id", "version", name="uq_building_models_project_version"),
+        CheckConstraint(
+            "source IN ('auto','user_edit','regen')",
+            name="building_models_source_check",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4

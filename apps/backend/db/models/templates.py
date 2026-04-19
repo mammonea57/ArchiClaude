@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID  # noqa: N811
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -16,6 +16,12 @@ from db.base import Base
 
 class TemplateRow(Base):
     __tablename__ = "templates"
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('manual','scraped','llm_gen','llm_augmented')",
+            name="templates_source_check",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     typologie: Mapped[str] = mapped_column(String(10), nullable=False)
