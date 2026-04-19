@@ -24,6 +24,7 @@ from db.models import (  # noqa: F401, E402
     feature_flags,
     jurisprudences,
     parcels,
+    pcmi_dossiers,
     plu,
     project_versions,
     projects,
