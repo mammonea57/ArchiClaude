@@ -5,6 +5,7 @@ from api.routes import health
 from api.routes.admin import flags as admin_flags
 from api.routes.agency import router as agency_router
 from api.routes.auth import router as auth_router
+from api.routes.building_model import router as building_model_router
 from api.routes.invitations import router as invitations_router
 from api.routes.notifications import router as notifications_router
 from api.routes.parcels import router as parcels_router
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_flags.router, prefix="/api/v1")
     app.include_router(agency_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(building_model_router, prefix="/api/v1")
     app.include_router(invitations_router, prefix="/api/v1")
     app.include_router(notifications_router, prefix="/api/v1")
     app.include_router(parcels_router, prefix="/api/v1")
