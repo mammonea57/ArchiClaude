@@ -117,3 +117,127 @@ def place_core(grid: ModularGrid, core_surface_m2: float) -> CorePlacement:
         polygon=core_poly,
         surface_m2=core_surface_m2,
     )
+
+
+from core.building_model.schemas import Typologie
+
+
+_TYPO_TARGET_SURFACE_M2 = {
+    Typologie.STUDIO: 22.0,
+    Typologie.T1: 32.0,
+    Typologie.T2: 48.0,
+    Typologie.T3: 68.0,
+    Typologie.T4: 85.0,
+    Typologie.T5: 108.0,
+}
+
+
+@dataclass
+class ApartmentSlot:
+    id: str
+    polygon: ShapelyPolygon
+    surface_m2: float
+    target_typologie: Typologie
+    orientations: list[str]
+    position_in_floor: str  # "angle" | "milieu" | "extremite"
+
+
+def compute_apartment_slots(
+    grid: ModularGrid,
+    core: CorePlacement,
+    mix_typologique: dict[Typologie, float],
+    voirie_side: str,
+) -> list[ApartmentSlot]:
+    """Divide footprint minus core minus circulation into slots per mix."""
+    if grid.footprint is None:
+        raise ValueError("grid.footprint is None")
+
+    # Subtract core from footprint
+    usable = grid.footprint.difference(core.polygon.buffer(1.4))  # +1.4m circulation
+    usable_area = usable.area
+
+    # Normalise mix (should sum to ~1.0)
+    total_ratio = sum(mix_typologique.values())
+    mix_norm = {k: v / total_ratio for k, v in mix_typologique.items()}
+
+    # Compute target surfaces per typo
+    typo_surface_targets = {t: _TYPO_TARGET_SURFACE_M2[t] for t in mix_norm}
+
+    # Average apartment surface
+    avg_surface = sum(mix_norm[t] * typo_surface_targets[t] for t in mix_norm)
+    nb_apartments = max(1, int(usable_area / avg_surface))
+
+    # Distribute typologies according to mix
+    typos_expanded: list[Typologie] = []
+    for typo, ratio in mix_norm.items():
+        n = max(1, round(nb_apartments * ratio))
+        typos_expanded.extend([typo] * n)
+    # Keep at least one slot per distinct typo in the mix
+    min_slots = len(mix_typologique)
+    typos_expanded = typos_expanded[:max(nb_apartments, min_slots)]
+
+    # Strip-divide usable area along longest axis, assign a typo to each strip
+    minx, miny, maxx, maxy = usable.bounds
+    width = maxx - minx
+    height = maxy - miny
+
+    slots: list[ApartmentSlot] = []
+    if width >= height:
+        # Slice along X
+        total_surface = sum(typo_surface_targets[t] for t in typos_expanded)
+        x_cursor = minx
+        for i, typo in enumerate(typos_expanded):
+            slot_w = width * (typo_surface_targets[typo] / total_surface)
+            slot_poly = ShapelyPolygon([
+                (x_cursor, miny), (x_cursor + slot_w, miny),
+                (x_cursor + slot_w, maxy), (x_cursor, maxy),
+            ]).intersection(usable)
+            orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
+            position = _infer_position(i, len(typos_expanded))
+            slots.append(ApartmentSlot(
+                id=f"slot_{i}", polygon=slot_poly, surface_m2=slot_poly.area,
+                target_typologie=typo, orientations=orientations,
+                position_in_floor=position,
+            ))
+            x_cursor += slot_w
+    else:
+        # Slice along Y
+        total_surface = sum(typo_surface_targets[t] for t in typos_expanded)
+        y_cursor = miny
+        for i, typo in enumerate(typos_expanded):
+            slot_h = height * (typo_surface_targets[typo] / total_surface)
+            slot_poly = ShapelyPolygon([
+                (minx, y_cursor), (maxx, y_cursor),
+                (maxx, y_cursor + slot_h), (minx, y_cursor + slot_h),
+            ]).intersection(usable)
+            orientations = _infer_orientations(slot_poly, grid.footprint, voirie_side)
+            position = _infer_position(i, len(typos_expanded))
+            slots.append(ApartmentSlot(
+                id=f"slot_{i}", polygon=slot_poly, surface_m2=slot_poly.area,
+                target_typologie=typo, orientations=orientations,
+                position_in_floor=position,
+            ))
+            y_cursor += slot_h
+
+    return slots
+
+
+def _infer_orientations(slot_poly: ShapelyPolygon, footprint: ShapelyPolygon, voirie_side: str) -> list[str]:
+    """Infer which cardinal sides the slot faces."""
+    minx, miny, maxx, maxy = footprint.bounds
+    s_minx, s_miny, s_maxx, s_maxy = slot_poly.bounds
+    threshold = 0.5  # 50cm tolerance
+    orientations = []
+    if abs(s_miny - miny) < threshold: orientations.append("sud")
+    if abs(s_maxy - maxy) < threshold: orientations.append("nord")
+    if abs(s_minx - minx) < threshold: orientations.append("ouest")
+    if abs(s_maxx - maxx) < threshold: orientations.append("est")
+    return orientations
+
+
+def _infer_position(idx: int, total: int) -> str:
+    if total <= 1:
+        return "milieu"
+    if idx == 0 or idx == total - 1:
+        return "angle" if total >= 3 else "extremite"
+    return "milieu"
