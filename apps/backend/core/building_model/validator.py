@@ -67,3 +67,125 @@ def validate_pmr_building(bm: BuildingModel) -> list[ConformiteAlert]:
                 message=f"Ascenseur requis pour R+{bm.envelope.niveaux - 1} (obligation PMR ≥R+2)",
             ))
     return alerts
+
+
+from shapely.geometry import Point, Polygon as ShapelyPolygon, LineString
+from core.building_model.schemas import Niveau, OpeningType
+
+_INCENDIE_DISTANCE_MAX_M = 25.0
+_CIRCULATION_LARGEUR_MIN_CM = 140  # PMR
+_VENTILATION_RATIO_MIN = 1.0 / 8.0
+
+
+def validate_ventilation(cellule: Cellule) -> list[ConformiteAlert]:
+    """Each living-room must have a window ≥ surface/8."""
+    alerts: list[ConformiteAlert] = []
+    for room in cellule.rooms:
+        if room.type not in {RoomType.SEJOUR, RoomType.SEJOUR_CUISINE,
+                             RoomType.CUISINE, RoomType.CHAMBRE_PARENTS,
+                             RoomType.CHAMBRE_ENFANT, RoomType.CHAMBRE_SUPP}:
+            continue
+        # Compute total window area serving this room
+        # Heuristic v1: sum of window areas on walls bordering this room's polygon
+        poly = ShapelyPolygon(room.polygon_xy)
+        win_surface = 0.0
+        for op in cellule.openings:
+            if op.type not in (OpeningType.FENETRE, OpeningType.PORTE_FENETRE, OpeningType.BAIE_COULISSANTE):
+                continue
+            wall = next((w for w in cellule.walls if w.id == op.wall_id), None)
+            if wall is None:
+                continue
+            coords = wall.geometry.get("coords", [])
+            if len(coords) < 2:
+                continue
+            line = LineString(coords)
+            if poly.distance(line) < 0.3:  # wall touches the room
+                win_surface += (op.width_cm / 100.0) * (op.height_cm / 100.0)
+        if win_surface < room.surface_m2 * _VENTILATION_RATIO_MIN:
+            alerts.append(ConformiteAlert(
+                level="error", category="ventilation",
+                message=f"{room.label_fr}: surface vitrée {win_surface:.2f}m² < 1/8 de {room.surface_m2}m²",
+                affected_element_id=room.id,
+            ))
+    return alerts
+
+
+def validate_lumiere_naturelle(cellule: Cellule) -> list[ConformiteAlert]:
+    """Each living-room must have at least one external window (not on palier)."""
+    alerts: list[ConformiteAlert] = []
+    for room in cellule.rooms:
+        if room.type not in {RoomType.SEJOUR, RoomType.SEJOUR_CUISINE,
+                             RoomType.CHAMBRE_PARENTS, RoomType.CHAMBRE_ENFANT,
+                             RoomType.CHAMBRE_SUPP}:
+            continue
+        has_external = False
+        poly = ShapelyPolygon(room.polygon_xy)
+        for op in cellule.openings:
+            if op.type not in (OpeningType.FENETRE, OpeningType.PORTE_FENETRE, OpeningType.BAIE_COULISSANTE):
+                continue
+            wall = next((w for w in cellule.walls if w.id == op.wall_id), None)
+            if wall is None:
+                continue
+            coords = wall.geometry.get("coords", [])
+            if len(coords) < 2:
+                continue
+            line = LineString(coords)
+            if poly.distance(line) < 0.3:
+                has_external = True
+                break
+        if not has_external:
+            alerts.append(ConformiteAlert(
+                level="error", category="lumiere",
+                message=f"{room.label_fr}: pas de fenêtre extérieure",
+                affected_element_id=room.id,
+            ))
+    return alerts
+
+
+def validate_incendie_niveau(niveau: Niveau) -> list[ConformiteAlert]:
+    """Distance max porte logement → circulation commune ≤ 25m."""
+    alerts: list[ConformiteAlert] = []
+    # Take first circulation polygon as reference for sortie de secours
+    if not niveau.circulations_communes:
+        return [ConformiteAlert(level="error", category="incendie",
+                                message=f"{niveau.code}: aucune circulation commune définie")]
+    sortie = ShapelyPolygon(niveau.circulations_communes[0].polygon_xy).centroid
+
+    # Circulation width
+    for circ in niveau.circulations_communes:
+        if circ.largeur_min_cm < _CIRCULATION_LARGEUR_MIN_CM:
+            alerts.append(ConformiteAlert(
+                level="error", category="incendie",
+                message=f"Circulation {circ.id}: largeur {circ.largeur_min_cm}cm < 140cm (PMR/incendie)",
+                affected_element_id=circ.id,
+            ))
+
+    for cell in niveau.cellules:
+        if cell.type != CelluleType.LOGEMENT:
+            continue
+        entry = next((o for o in cell.openings if o.type == OpeningType.PORTE_ENTREE), None)
+        if entry is None:
+            alerts.append(ConformiteAlert(
+                level="error", category="incendie",
+                message=f"Cellule {cell.id}: pas de porte d'entrée définie",
+                affected_element_id=cell.id,
+            ))
+            continue
+        wall = next((w for w in cell.walls if w.id == entry.wall_id), None)
+        if wall is None:
+            continue
+        coords = wall.geometry.get("coords", [])
+        if len(coords) < 2:
+            continue
+        # Approximate door position = wall midpoint
+        midx = (coords[0][0] + coords[1][0]) / 2.0
+        midy = (coords[0][1] + coords[1][1]) / 2.0
+        door_pt = Point(midx, midy)
+        dist = door_pt.distance(sortie)
+        if dist > _INCENDIE_DISTANCE_MAX_M:
+            alerts.append(ConformiteAlert(
+                level="error", category="incendie",
+                message=f"Porte {cell.id}: {dist:.1f}m à la sortie > 25m",
+                affected_element_id=cell.id,
+            ))
+    return alerts
