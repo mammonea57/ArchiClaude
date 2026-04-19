@@ -258,7 +258,14 @@
       "Bash(python -m pytest tests/unit/test_renderer_pdf.py -v)",
       "Bash(python -m pytest tests/unit/test_pcmi_assembler.py -v)",
       "Bash(python -m pytest tests/integration/test_pcmi_endpoints.py -v)",
-      "Bash(python -m pytest --tb=short -q)"
+      "Bash(python -m pytest --tb=short -q)",
+      "Bash(python -m pytest tests/unit/test_pcmi6_schemas.py -v)",
+      "Bash(python -m pytest tests/unit/test_rendering_provider.py tests/unit/test_rendering_rerender.py -v)",
+      "Bash(python -m pytest tests/unit/test_rendering_materials.py -v)",
+      "Bash(python -m pytest tests/unit/test_rendering_quality.py -v)",
+      "Bash(python -m pytest tests/unit/test_pcmi6_pipeline.py -v)",
+      "Bash(python -m pytest tests/integration/test_pcmi6_endpoints.py -v)",
+      "Bash(/Users/anthonymammone/.local/bin/pnpm add *)"
     ],
     "additionalDirectories": [
       "/Users/anthonymammone/Desktop/ArchiClaude/docs/superpowers",
