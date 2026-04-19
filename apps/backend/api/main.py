@@ -18,6 +18,7 @@ from api.routes.rag import router as rag_router
 from api.routes.rendering import router as rendering_router
 from api.routes.reports import router as reports_router
 from api.routes.site import router as site_router
+from api.routes.templates import router as templates_router
 from api.routes.versions import router as versions_router
 from api.routes.workspaces import router as workspaces_router
 
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(rag_router, prefix="/api/v1")
     app.include_router(reports_router, prefix="/api/v1")
     app.include_router(site_router, prefix="/api/v1")
+    app.include_router(templates_router, prefix="/api/v1")
     app.include_router(versions_router, prefix="/api/v1")
     app.include_router(pcmi6_router, prefix="/api/v1")
     app.include_router(rendering_router, prefix="/api/v1")
