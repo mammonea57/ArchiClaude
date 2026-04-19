@@ -14,6 +14,7 @@ from core.building_model.schemas import (
     OpeningType,
     Room,
     RoomType,
+    Typologie,
     Wall,
     WallType,
 )
@@ -36,6 +37,52 @@ class FitResult:
 class TemplateAdapter:
     """Adapter that applies scale + rotation + mirror to fit a template in a slot."""
 
+    def _fit_using_layout_generator(
+        self, slot: ApartmentSlot, template: Template,
+    ) -> FitResult:
+        """Use the architectural layout generator instead of the grid template.
+
+        Produces realistic French apartment layouts with:
+          - entrée near the palier
+          - dégagement connecting rooms
+          - séjour + chambres on the façade
+          - SdB + WC in the interior
+          - porte d'entrée on the palier wall, fenêtres on façade walls
+        """
+        from core.templates_library.layout_generator import (
+            build_walls_and_openings, generate_apartment,
+        )
+        rooms, _, _, palier_side = generate_apartment(
+            slot_bounds=slot.polygon.bounds,
+            typologie=slot.target_typologie,
+            orientations=slot.orientations or [],
+            slot_id=slot.id,
+            template_id=template.id,
+        )
+        walls, openings = build_walls_and_openings(
+            rooms, slot.polygon.bounds, palier_side, slot.id,
+        )
+
+        # Assign label_fr from the generator (already set) and re-label any
+        # room whose label was left blank
+        for r in rooms:
+            if not r.label_fr:
+                r.label_fr = self._label_fr(r.type)
+
+        apartment = Cellule(
+            id=slot.id,
+            type=CelluleType.LOGEMENT,
+            typologie=slot.target_typologie,
+            surface_m2=sum(r.surface_m2 for r in rooms),
+            polygon_xy=[(x, y) for (x, y) in slot.polygon.exterior.coords[:-1]],
+            orientation=slot.orientations,
+            template_id=template.id,
+            rooms=rooms,
+            walls=walls,
+            openings=openings,
+        )
+        return FitResult(success=True, apartment=apartment, stretch_x=1.0, stretch_y=1.0)
+
     def fit_to_slot(self, template: Template, slot: ApartmentSlot) -> FitResult:
         # 1. Check slot dimensions compatibility
         minx, miny, maxx, maxy = slot.polygon.bounds
@@ -55,6 +102,16 @@ class TemplateAdapter:
                     f"[{dim.profondeur_min_m:.1f}–{dim.profondeur_max_m:.1f}]m"
                 ),
             )
+
+        # 1b. ARCHITECTURAL LAYOUT GENERATOR — bypasses the grid-cell template
+        # for a proper promoteur-style layout: entrée côté palier, séjour +
+        # chambres sur façade, wet-rooms en zone intérieure, circulation par
+        # couloir. Falls back to the old template-based path only if the
+        # layout generator cannot handle the typologie.
+        if slot.target_typologie in (
+            Typologie.T2, Typologie.T3, Typologie.T4, Typologie.T5
+        ):
+            return self._fit_using_layout_generator(slot, template)
 
         # Determine the template grid shape from bounds_cells, then size cells so
         # rooms tile the slot exactly (no gap, no overflow).
