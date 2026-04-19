@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PgUUID  # noqa: N811
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,7 +27,7 @@ class WorkspaceInvitationRow(Base):
     invited_by: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
-    token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    token: Mapped[str] = mapped_column(Text, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -35,12 +35,13 @@ class WorkspaceInvitationRow(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     __table_args__ = (
+        UniqueConstraint("token", name="uq_invitations_token"),
         CheckConstraint(
             "role IN ('admin', 'member', 'viewer')",
-            name="workspace_invitations_role_check",
+            name="invitations_role_check",
         ),
     )

@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     SmallInteger,
     Text,
@@ -48,7 +49,7 @@ class ProjectRow(Base):
     )  # draft | analyzed | reviewed | ready_for_pc | archived
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
-        ForeignKey("workspaces.id"),
+        ForeignKey("workspaces.id", ondelete="SET NULL"),
         nullable=True,
     )
     status_changed_at: Mapped[datetime] = mapped_column(
@@ -69,6 +70,7 @@ class ProjectRow(Base):
             "status IN ('draft','analyzed','reviewed','ready_for_pc','archived')",
             name="projects_status_check",
         ),
+        Index("projects_workspace_id", "workspace_id"),
     )
 
 

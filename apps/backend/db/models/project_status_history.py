@@ -28,7 +28,7 @@ class ProjectStatusHistoryRow(Base):
         PgUUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
     changed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

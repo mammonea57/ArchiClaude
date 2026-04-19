@@ -28,7 +28,7 @@ class WorkspaceRow(Base):
         PgUUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

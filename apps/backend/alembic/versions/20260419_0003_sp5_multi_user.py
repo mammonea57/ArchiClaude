@@ -29,7 +29,12 @@ def upgrade():
             sa.ForeignKey("users.id"),
             nullable=False,
         ),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True),
         sa.UniqueConstraint("slug", name="uq_workspaces_slug"),
     )
@@ -56,10 +61,16 @@ def upgrade():
             sa.ForeignKey("users.id"),
             nullable=True,
         ),
-        sa.Column("invited_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "invited_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.Column("joined_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
-            "role IN ('admin','member','viewer')", name="workspace_members_role_check"
+            "role IN ('admin', 'member', 'viewer')",
+            name="workspace_members_role_check",
         ),
     )
     op.create_index("workspace_members_user", "workspace_members", ["user_id"])
@@ -84,10 +95,16 @@ def upgrade():
         sa.Column("token", sa.Text, nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.UniqueConstraint("token", name="uq_invitations_token"),
         sa.CheckConstraint(
-            "role IN ('admin','member','viewer')", name="invitations_role_check"
+            "role IN ('admin', 'member', 'viewer')",
+            name="invitations_role_check",
         ),
     )
     op.execute(
@@ -107,11 +124,17 @@ def upgrade():
         ),
         sa.Column("provider", sa.Text, nullable=False),
         sa.Column("provider_user_id", sa.Text, nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.UniqueConstraint(
             "provider", "provider_user_id", name="uq_oauth_provider_user"
         ),
     )
+    op.create_index("oauth_accounts_user_id", "oauth_accounts", ["user_id"])
 
     # --- Status history ---
     op.create_table(
@@ -131,7 +154,12 @@ def upgrade():
             sa.ForeignKey("users.id"),
             nullable=True,
         ),
-        sa.Column("changed_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "changed_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.Column("notes", sa.Text, nullable=True),
     )
     op.create_index(
@@ -156,9 +184,17 @@ def upgrade():
         sa.Column("link", sa.Text, nullable=True),
         sa.Column("extra", postgresql.JSONB, nullable=True),
         sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
     )
-    op.create_index("notifications_user_unread", "notifications", ["user_id", "read_at"])
+    op.execute(
+        "CREATE INDEX notifications_user_unread ON notifications(user_id) "
+        "WHERE read_at IS NULL"
+    )
 
     op.create_table(
         "notification_preferences",
@@ -168,15 +204,51 @@ def upgrade():
             sa.ForeignKey("users.id", ondelete="CASCADE"),
             primary_key=True,
         ),
-        sa.Column("in_app_enabled", sa.Boolean, server_default="true"),
-        sa.Column("email_workspace_invitations", sa.Boolean, server_default="true"),
-        sa.Column("email_project_analyzed", sa.Boolean, server_default="true"),
-        sa.Column("email_project_ready_for_pc", sa.Boolean, server_default="true"),
-        sa.Column("email_mentions", sa.Boolean, server_default="true"),
-        sa.Column("email_comments", sa.Boolean, server_default="false"),
-        sa.Column("email_pcmi6_generated", sa.Boolean, server_default="false"),
-        sa.Column("email_weekly_digest", sa.Boolean, server_default="false"),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "in_app_enabled", sa.Boolean, nullable=False, server_default="true"
+        ),
+        sa.Column(
+            "email_workspace_invitations",
+            sa.Boolean,
+            nullable=False,
+            server_default="true",
+        ),
+        sa.Column(
+            "email_project_analyzed",
+            sa.Boolean,
+            nullable=False,
+            server_default="true",
+        ),
+        sa.Column(
+            "email_project_ready_for_pc",
+            sa.Boolean,
+            nullable=False,
+            server_default="true",
+        ),
+        sa.Column(
+            "email_mentions", sa.Boolean, nullable=False, server_default="true"
+        ),
+        sa.Column(
+            "email_comments", sa.Boolean, nullable=False, server_default="false"
+        ),
+        sa.Column(
+            "email_pcmi6_generated",
+            sa.Boolean,
+            nullable=False,
+            server_default="false",
+        ),
+        sa.Column(
+            "email_weekly_digest",
+            sa.Boolean,
+            nullable=False,
+            server_default="false",
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
     )
 
     # --- Alter projects (status already exists — only add workspace_id + status_changed_* + CHECK constraint) ---
@@ -185,7 +257,7 @@ def upgrade():
         sa.Column(
             "workspace_id",
             postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("workspaces.id"),
+            sa.ForeignKey("workspaces.id", ondelete="SET NULL"),
             nullable=True,
         ),
     )
@@ -206,6 +278,7 @@ def upgrade():
             nullable=True,
         ),
     )
+    op.create_index("projects_workspace_id", "projects", ["workspace_id"])
     op.create_check_constraint(
         "projects_status_check",
         "projects",
@@ -223,6 +296,7 @@ def upgrade():
             true,
             u.id
         FROM users u
+        ON CONFLICT (slug) DO NOTHING
         """
     )
 
@@ -232,9 +306,11 @@ def upgrade():
         SELECT w.id, w.created_by, 'admin', now()
         FROM workspaces w
         WHERE w.is_personal = true
+        ON CONFLICT (workspace_id, user_id) DO NOTHING
         """
     )
 
+    # UPDATE is already idempotent (sets to same value on re-run)
     op.execute(
         """
         UPDATE projects p
@@ -252,6 +328,7 @@ def downgrade():
     op.drop_constraint("projects_status_check", "projects", type_="check")
     op.drop_column("projects", "status_changed_by")
     op.drop_column("projects", "status_changed_at")
+    op.execute("DROP INDEX IF EXISTS projects_workspace_id")
     op.drop_column("projects", "workspace_id")
     op.drop_table("notification_preferences")
     op.drop_index("notifications_user_unread", table_name="notifications")

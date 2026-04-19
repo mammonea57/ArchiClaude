@@ -29,7 +29,7 @@ class WorkspaceMemberRow(Base):
         PgUUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
     invited_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     joined_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

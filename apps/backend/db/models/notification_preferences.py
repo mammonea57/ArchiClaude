@@ -19,24 +19,30 @@ class NotificationPreferencesRow(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    in_app_enabled: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    in_app_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
     email_workspace_invitations: Mapped[bool] = mapped_column(
-        Boolean, server_default="true"
+        Boolean, nullable=False, server_default="true"
     )
     email_project_analyzed: Mapped[bool] = mapped_column(
-        Boolean, server_default="true"
+        Boolean, nullable=False, server_default="true"
     )
     email_project_ready_for_pc: Mapped[bool] = mapped_column(
-        Boolean, server_default="true"
+        Boolean, nullable=False, server_default="true"
     )
-    email_mentions: Mapped[bool] = mapped_column(Boolean, server_default="true")
-    email_comments: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    email_mentions: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
+    email_comments: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     email_pcmi6_generated: Mapped[bool] = mapped_column(
-        Boolean, server_default="false"
+        Boolean, nullable=False, server_default="false"
     )
     email_weekly_digest: Mapped[bool] = mapped_column(
-        Boolean, server_default="false"
+        Boolean, nullable=False, server_default="false"
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
