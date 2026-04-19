@@ -177,7 +177,7 @@ export default function ProjectsPage() {
                       )}
                     </td>
                     <td className="px-5 py-4 text-slate-500">
-                      {formatDate(project.created_at)}
+                      {project.created_at ? formatDate(project.created_at) : "—"}
                     </td>
                   </tr>
                 ))}

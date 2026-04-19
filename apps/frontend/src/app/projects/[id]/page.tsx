@@ -7,8 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FeasibilityDashboard, type KPI } from "@/components/panels/FeasibilityDashboard";
 import { ServitudesList } from "@/components/panels/ServitudesList";
-import { ArrowLeft, FileText } from "lucide-react";
-import type { Project, FeasibilityResult } from "@/lib/types";
+import { ArrowLeft, FileText, LayoutGrid } from "lucide-react";
+import type { Project } from "@/lib/types";
 
 function statusLabel(status: Project["status"]): string {
   switch (status) {
@@ -32,23 +32,41 @@ function StatusBadge({ status }: { status: Project["status"] }) {
   );
 }
 
-function buildKPIs(result: FeasibilityResult): KPI[] {
+function buildKPIs(project: Project): KPI[] {
+  const b = project.brief;
+  const mix = b?.mix_typologique ?? {};
+  const typoCount = Object.values(mix).filter((v) => Number(v) > 0).length;
   return [
-    { label: "SDP", value: result.sdp_m2 ?? "—", unit: result.sdp_m2 != null ? "m²" : undefined },
-    { label: "Niveaux", value: result.niveaux ?? "—" },
-    { label: "Logements", value: result.nb_logements ?? "—" },
-    { label: "Stationnement", value: result.stationnement ?? "—", unit: result.stationnement != null ? "pl." : undefined },
-    { label: "Emprise", value: result.emprise_pct != null ? `${result.emprise_pct}%` : "—" },
-    { label: "Pleine terre", value: result.pleine_terre_pct != null ? `${result.pleine_terre_pct}%` : "—" },
+    {
+      label: "SDP cible",
+      value: b?.cible_sdp_m2 ?? "—",
+      unit: b?.cible_sdp_m2 != null ? "m²" : undefined,
+    },
+    {
+      label: "Niveaux cible",
+      value: b?.hauteur_cible_niveaux ?? "—",
+    },
+    {
+      label: "Logements cible",
+      value: b?.cible_nb_logements ?? "—",
+    },
+    {
+      label: "Typologies",
+      value: typoCount > 0 ? typoCount : "—",
+    },
+    {
+      label: "Emprise cible",
+      value: b?.emprise_cible_pct != null ? `${b.emprise_cible_pct}%` : "—",
+    },
+    {
+      label: "Pleine terre cible",
+      value:
+        b?.espaces_verts_pleine_terre_cible_pct != null
+          ? `${b.espaces_verts_pleine_terre_cible_pct}%`
+          : "—",
+    },
   ];
 }
-
-// Placeholder result for when backend returns no feasibility yet
-const PLACEHOLDER_RESULT: FeasibilityResult = {
-  id: "placeholder",
-  project_id: "",
-  status: "pending",
-};
 
 export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -104,15 +122,23 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
               </div>
 
               {project.status === "analyzed" && (
-                <Link href={`/projects/${id}/report`}>
-                  <Button
-                    className="gap-2 text-white font-medium"
-                    style={{ backgroundColor: "var(--ac-primary)" }}
-                  >
-                    <FileText className="h-4 w-4" />
-                    Voir le rapport
-                  </Button>
-                </Link>
+                <div className="flex gap-2 flex-wrap">
+                  <Link href={`/projects/${id}/plans`}>
+                    <Button variant="outline" className="gap-2 font-medium">
+                      <LayoutGrid className="h-4 w-4" />
+                      Plans
+                    </Button>
+                  </Link>
+                  <Link href={`/projects/${id}/report`}>
+                    <Button
+                      className="gap-2 text-white font-medium"
+                      style={{ backgroundColor: "var(--ac-primary)" }}
+                    >
+                      <FileText className="h-4 w-4" />
+                      Voir le rapport
+                    </Button>
+                  </Link>
+                </div>
               )}
             </div>
 
@@ -122,7 +148,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
                 <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">
                   Indicateurs clés
                 </h2>
-                <FeasibilityDashboard kpis={buildKPIs(PLACEHOLDER_RESULT)} />
+                <FeasibilityDashboard kpis={buildKPIs(project)} />
               </section>
             ) : (
               <div className="rounded-xl border border-slate-100 bg-white p-10 text-center space-y-3">

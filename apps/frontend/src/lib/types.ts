@@ -2,8 +2,9 @@ export interface Project {
   id: string;
   name: string;
   status: "draft" | "analyzed" | "archived";
-  created_at: string;
+  created_at?: string;
   confidence_score?: number;
+  brief?: Brief;
 }
 
 export interface GeocodingResult {
