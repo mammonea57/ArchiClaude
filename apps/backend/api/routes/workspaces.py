@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response
@@ -279,7 +279,7 @@ async def create_invitation(
         raise HTTPException(404, "Workspace not found")
 
     token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    expires_at = datetime.now(UTC) + timedelta(days=7)
 
     inv = WorkspaceInvitationRow(
         workspace_id=workspace_id,

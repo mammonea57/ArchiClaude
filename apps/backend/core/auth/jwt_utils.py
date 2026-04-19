@@ -1,5 +1,6 @@
 """JWT emission and verification (HS256, 7 days default)."""
 from __future__ import annotations
+
 import time
 from typing import Any
 from uuid import UUID

@@ -1,4 +1,3 @@
-import pytest
 from core.auth.password import hash_password, verify_password
 
 

@@ -1,7 +1,7 @@
 """Invitation acceptance routes (invitee side)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Response
 from sqlalchemy import select
@@ -22,7 +22,7 @@ async def my_invitations(
     session: SessionDep,
     current_user: CurrentUserDep,
 ) -> list[InvitationOut]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rows = (
         await session.execute(
             select(WorkspaceInvitationRow, WorkspaceRow, UserRow)
@@ -73,7 +73,7 @@ async def accept_invitation(
         raise HTTPException(404, "Invitation not found")
     if inv.accepted_at is not None:
         raise HTTPException(400, "Invitation already accepted")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if inv.expires_at <= now:
         raise HTTPException(400, "Invitation expired")
     if inv.email.lower() != current_user.email.lower():

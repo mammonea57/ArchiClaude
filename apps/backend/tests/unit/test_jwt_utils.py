@@ -1,7 +1,9 @@
-import pytest
 import time
 from uuid import uuid4
-from core.auth.jwt_utils import emit_jwt, decode_jwt, needs_refresh, JWTError
+
+import pytest
+
+from core.auth.jwt_utils import JWTError, decode_jwt, emit_jwt, needs_refresh
 
 
 def test_emit_and_decode_jwt():
