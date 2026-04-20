@@ -488,17 +488,42 @@ async def analyze_project(
         rot_angle_deg = math.degrees(math.atan2(long_edge[1], long_edge[0]))
 
         # Rotate terrain into the parcel-aligned frame. Footprint will
-        # be a fresh axis-aligned rect sized to the feasibility emprise.
+        # be an elongated axis-aligned rect sized for maximum apt density.
         origin = fp_l93.centroid.coords[0]
         terrain_axis = shp_rotate(terrain_l93, -rot_angle_deg, origin=origin)
         terrain_bounds = terrain_axis.bounds
         tminx, tminy, tmaxx, tmaxy = terrain_bounds
+        terrain_long = max(tmaxx - tminx, tmaxy - tminy)
 
-        # Keep the OBB proportions but shrink to emprise target.
-        ratio = (target_emprise / (long_len * short_len)) ** 0.5
-        rect_long = long_len * ratio
-        rect_short = short_len * ratio
-        # Centre the rectangle on the terrain's centroid (in aligned frame)
+        # Maximise slot count by keeping the rectangle as ELONGATED as
+        # possible. Use the TERRAIN OBB long side as the target length
+        # (not the feasibility footprint's short OBB) — the feasibility
+        # footprint tends to be shrunk by setbacks, but we can still
+        # build along the terrain's longest direction.
+        #
+        # Target: rect_long ≤ terrain_long
+        #         rect_short ≈ 18-20 m (sweet spot for dual-loaded)
+        # This yields 2 sub-wings of ~9 m depth — T3/T4 ideal range.
+        IDEAL_DEPTH = 18.0   # sub-wings ~8.2m each, T3 sweet spot
+        MIN_DEPTH = 16.0
+        MAX_DEPTH = 22.0
+        rect_long = terrain_long - 2.0  # leave 1 m on each short side for margin
+        rect_short = target_emprise / rect_long
+        if rect_short < MIN_DEPTH:
+            rect_short = MIN_DEPTH
+            rect_long = target_emprise / rect_short
+        elif rect_short > MAX_DEPTH:
+            rect_short = MAX_DEPTH
+            rect_long = target_emprise / rect_short
+        # Still prefer something close to IDEAL_DEPTH when possible:
+        # if rect_short is mid-range, pivot toward IDEAL and recompute long
+        if MIN_DEPTH < rect_short < MAX_DEPTH:
+            rect_short = IDEAL_DEPTH
+            rect_long = target_emprise / rect_short
+            if rect_long > terrain_long - 2.0:
+                rect_long = terrain_long - 2.0
+                rect_short = target_emprise / rect_long
+        # Centre the rectangle on the terrain's centroid (aligned frame)
         cx = (tminx + tmaxx) / 2
         cy = (tminy + tmaxy) / 2
         fp_axis = shp_box(
