@@ -695,14 +695,18 @@ function deduceFlightAxis(
   corePosition: [number, number],
   circulations: BuildingModelCirculation[],
 ): "horizontal" | "vertical" {
-  // The flight axis is the axis along which the stair RUN extends, so that
-  // people walking down the corridor enter the stairs heading in the same
-  // direction. We look at the nearest corridor's aspect ratio.
+  // Architectural convention: the stair flight is PERPENDICULAR to the
+  // main corridor, so the user steps out of the stairs and turns 90° into
+  // the corridor. We look at the nearest REAL corridor (not the palier,
+  // which is the core itself — same bbox, degenerate) and set the flight
+  // axis perpendicular to its long axis.
   const [cxM, cyM] = corePosition;
   let best: BuildingModelCirculation | null = null;
   let bestD = Infinity;
   for (const c of circulations) {
     if (!c.polygon_xy || c.polygon_xy.length < 3) continue;
+    const id = (c.id ?? "").toLowerCase();
+    if (id.startsWith("palier")) continue;  // skip the core itself
     const xs = c.polygon_xy.map((p) => p[0]);
     const ys = c.polygon_xy.map((p) => p[1]);
     const midX = (Math.min(...xs) + Math.max(...xs)) / 2;
@@ -718,8 +722,9 @@ function deduceFlightAxis(
   const ys = best.polygon_xy.map((p) => p[1]);
   const w = Math.max(...xs) - Math.min(...xs);
   const h = Math.max(...ys) - Math.min(...ys);
-  // Long axis of corridor → flight axis of stairs (same direction).
-  return w >= h ? "horizontal" : "vertical";
+  // Corridor runs horizontally (wide)  → stair flight vertical (tall box)
+  // Corridor runs vertically (tall)   → stair flight horizontal (wide box)
+  return w >= h ? "vertical" : "horizontal";
 }
 
 
@@ -758,20 +763,22 @@ function CoreLayer({
   let stairRect: { x: number; y: number; w: number; h: number };
   let elevRect: { x: number; y: number; w: number; h: number };
   if (isHorizontal) {
-    stairRect = { x: sx, y: sy, w: fullW * stairFrac, h: fullH };
-    elevRect = {
-      x: sx + fullW * stairFrac,
-      y: sy + fullH * 0.15,
-      w: fullW * elevFrac * 0.85,
-      h: fullH * 0.7,
-    };
-  } else {
+    // Flight runs east-west → WIDE stair box on top, elevator below.
     stairRect = { x: sx, y: sy, w: fullW, h: fullH * stairFrac };
     elevRect = {
       x: sx + fullW * 0.15,
       y: sy + fullH * stairFrac,
       w: fullW * 0.7,
       h: fullH * elevFrac * 0.85,
+    };
+  } else {
+    // Flight runs north-south → TALL stair box on left, elevator on right.
+    stairRect = { x: sx, y: sy, w: fullW * stairFrac, h: fullH };
+    elevRect = {
+      x: sx + fullW * stairFrac,
+      y: sy + fullH * 0.15,
+      w: fullW * elevFrac * 0.85,
+      h: fullH * 0.7,
     };
   }
 
@@ -923,8 +930,23 @@ function MainEntrance({
 
   const reaching = circulations.filter((c) => touches(c, voirieSide));
   if (reaching.length > 0) {
-    // Use the centroid of the reaching corridor edge on the voirie side
-    const ci = reaching[0];
+    // Among the circulations reaching voirie, prefer the lobby (id
+    // starting with "hall_") — we add one on RDC precisely to hit the
+    // voirie wall at the core's axis. Otherwise pick the one whose
+    // perpendicular midpoint is closest to the core so the door lands
+    // aligned with the stairs, not at an arbitrary corridor end that
+    // happens to touch voirie via a connector.
+    const hall = reaching.find((c) =>
+      (c.id ?? "").toLowerCase().startsWith("hall_"),
+    );
+    const perpAxis = voirieSide === "sud" || voirieSide === "nord" ? "x" : "y";
+    const coreKey = perpAxis === "x" ? cxM : cyM;
+    const sortKey = (c: BuildingModelCirculation) => {
+      const coords = c.polygon_xy.map((p) => (perpAxis === "x" ? p[0] : p[1]));
+      const mid = (Math.min(...coords) + Math.max(...coords)) / 2;
+      return Math.abs(mid - coreKey);
+    };
+    const ci = hall ?? [...reaching].sort((a, b) => sortKey(a) - sortKey(b))[0];
     const xs = ci.polygon_xy.map((p) => p[0]);
     const ys = ci.polygon_xy.map((p) => p[1]);
     if (voirieSide === "sud")      { doorMx = (Math.min(...xs) + Math.max(...xs)) / 2; doorMy = box.miny; arrowDy = -1; }

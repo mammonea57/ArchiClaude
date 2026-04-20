@@ -366,7 +366,11 @@ def build_walls_and_openings(
                 return ((lo, a0[1]), (hi, a0[1]))
         return None
 
+    # Track which pair of rooms is separated by each emitted internal wall,
+    # so we can add a PORTE_INTERIEURE on walls connecting the entrée to
+    # every other room, plus séjour↔cuisine when they're distinct rooms.
     wi = 0
+    wall_room_pairs: list[tuple[str, Room, Room]] = []
     for i in range(len(rooms)):
         for j in range(i + 1, len(rooms)):
             edges_i = _room_edges(rooms[i])
@@ -382,11 +386,74 @@ def build_walls_and_openings(
                     if any(_seg_eq((p0, p1), e) for e in emitted):
                         continue
                     emitted.append((p0, p1))
-                    walls.append(_wall(
-                        f"{slot_id}_p_{wi}",
-                        p0[0], p0[1], p1[0], p1[1], porteur=False,
-                    ))
+                    wid = f"{slot_id}_p_{wi}"
+                    walls.append(_wall(wid, p0[0], p0[1], p1[0], p1[1], porteur=False))
+                    wall_room_pairs.append((wid, rooms[i], rooms[j]))
                     wi += 1
+
+    # PORTE_INTERIEURE placement — every room must be reachable from the
+    # entrée. Rules (all symmetric):
+    #   - ENTREE links to any adjacent room (hub).
+    #   - SEJOUR/SEJOUR_CUISINE opens onto CUISINE and any CHAMBRE (common
+    #     in French T2/T3 where there's no dedicated night corridor).
+    #   - SDB links to WC (en-suite WC) and to CHAMBRE_PARENTS (suite
+    #     parentale) so the SdB is accessible even if not adjacent to
+    #     the entrée.
+    HUB_TYPES = {RoomType.ENTREE}
+    LIVING_TYPES = {
+        RoomType.SEJOUR, RoomType.SEJOUR_CUISINE,
+    }
+    CHAMBRES = {
+        RoomType.CHAMBRE_PARENTS, RoomType.CHAMBRE_ENFANT, RoomType.CHAMBRE_SUPP,
+    }
+    WET_ROOMS = {
+        RoomType.SDB, RoomType.SALLE_DE_DOUCHE, RoomType.WC, RoomType.WC_SDB,
+    }
+
+    def _should_link(a: Room, b: Room) -> bool:
+        ta, tb = a.type, b.type
+        # Hub pattern
+        if ta in HUB_TYPES or tb in HUB_TYPES:
+            return True
+        # Séjour ↔ cuisine (open-plan) and séjour ↔ chambres (petit appt)
+        if ta in LIVING_TYPES and tb in (
+            {RoomType.CUISINE} | CHAMBRES
+        ):
+            return True
+        if tb in LIVING_TYPES and ta in (
+            {RoomType.CUISINE} | CHAMBRES
+        ):
+            return True
+        # Wet-room chain: SDB ↔ WC (en-suite) or SDB ↔ master
+        if ta in WET_ROOMS and tb in WET_ROOMS:
+            return True
+        if (ta == RoomType.SDB and tb == RoomType.CHAMBRE_PARENTS) or (
+            tb == RoomType.SDB and ta == RoomType.CHAMBRE_PARENTS
+        ):
+            return True
+        return False
+
+    door_idx = 0
+    for wid, ra, rb in wall_room_pairs:
+        if not _should_link(ra, rb):
+            continue
+        wcoords = next(w for w in walls if w.id == wid).geometry["coords"]
+        (x0, y0), (x1, y1) = wcoords[0], wcoords[1]
+        wlen = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+        if wlen < 0.9:
+            continue  # wall too short for a 83 cm door
+        door_pos_cm = max(30, int(wlen * 50) - 42)
+        openings.append(Opening(
+            id=f"{slot_id}_op_int_{door_idx}",
+            type=OpeningType.PORTE_INTERIEURE,
+            wall_id=wid,
+            position_along_wall_cm=door_pos_cm,
+            width_cm=83,
+            height_cm=210,
+            allege_cm=None,
+            swing="interior_right",
+        ))
+        door_idx += 1
 
     # Palier wall + entry door
     palier_wall_id = {"sud": w_sud.id, "nord": w_nord.id, "ouest": w_ouest.id, "est": w_est.id}[palier_side]
