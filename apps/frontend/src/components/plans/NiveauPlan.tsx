@@ -101,8 +101,10 @@ export function NiveauPlan({
         <PalierLayer key={circ.id} circulation={circ} scale={scale} project={project} />
       ))}
 
-      {/* Core (escalier + ascenseur) — flight axis matches the main
-          corridor so the stairs flow naturally into circulation */}
+      {/* Core (escalier top-left, ASC top-right, palier strip bottom).
+          The palier sits SOUTH of the stairs/ASC so it flows naturally
+          into the south-facing hall on RDC and into the corridors on
+          upper floors. */}
       {corePosition && (
         <CoreLayer
           position={corePosition}
@@ -110,7 +112,6 @@ export function NiveauPlan({
           hasAscenseur={hasAscenseur}
           scale={scale}
           project={project}
-          flightAxis={deduceFlightAxis(corePosition, circulations)}
         />
       )}
 
@@ -673,60 +674,36 @@ function PalierLayer({ circulation, scale, project }: {
 }) {
   const centroid = polygonCentroid(circulation.polygon_xy);
   const [lx, ly] = project(centroid);
+  // Hall/corridor/palier circulations share edges; using the previous
+  // thick stroke drew a double-line at every junction that read as a
+  // wall. Render with a thinner stroke so adjacent circulations visually
+  // connect (passage from palier to corridors).
+  const isCorePalier = (circulation.id ?? "").toLowerCase().startsWith("palier");
+  const stroke = Math.max(1, 0.05 * scale);
   return (
     <g style={{ pointerEvents: "none" }}>
       <path
         d={ringToPath(circulation.polygon_xy, project)}
         fill="url(#pat-tiles)"
         stroke="#0f172a"
-        strokeWidth={Math.max(3, 0.15 * scale)}
+        strokeWidth={stroke}
+        strokeLinejoin="round"
       />
-      <text x={lx} y={ly + 3} textAnchor="middle" fontSize={10} fontWeight={600} fill="#475569">
-        palier
-      </text>
-      <text x={lx} y={ly + 15} textAnchor="middle" fontSize={8.5} fill="#64748b">
-        {circulation.largeur_min_cm} cm
-      </text>
+      {/* Only the core-palier and hall keep their label inline — corridors
+          already have their width annotated via the plan legend. */}
+      {!isCorePalier && (
+        <>
+          <text x={lx} y={ly + 3} textAnchor="middle" fontSize={10} fontWeight={600} fill="#475569">
+            palier
+          </text>
+          <text x={lx} y={ly + 15} textAnchor="middle" fontSize={8.5} fill="#64748b">
+            {circulation.largeur_min_cm} cm
+          </text>
+        </>
+      )}
     </g>
   );
 }
-
-function deduceFlightAxis(
-  corePosition: [number, number],
-  circulations: BuildingModelCirculation[],
-): "horizontal" | "vertical" {
-  // Architectural convention: the stair flight is PERPENDICULAR to the
-  // main corridor, so the user steps out of the stairs and turns 90° into
-  // the corridor. We look at the nearest REAL corridor (not the palier,
-  // which is the core itself — same bbox, degenerate) and set the flight
-  // axis perpendicular to its long axis.
-  const [cxM, cyM] = corePosition;
-  let best: BuildingModelCirculation | null = null;
-  let bestD = Infinity;
-  for (const c of circulations) {
-    if (!c.polygon_xy || c.polygon_xy.length < 3) continue;
-    const id = (c.id ?? "").toLowerCase();
-    if (id.startsWith("palier")) continue;  // skip the core itself
-    const xs = c.polygon_xy.map((p) => p[0]);
-    const ys = c.polygon_xy.map((p) => p[1]);
-    const midX = (Math.min(...xs) + Math.max(...xs)) / 2;
-    const midY = (Math.min(...ys) + Math.max(...ys)) / 2;
-    const d = (midX - cxM) ** 2 + (midY - cyM) ** 2;
-    if (d < bestD) {
-      bestD = d;
-      best = c;
-    }
-  }
-  if (!best) return "horizontal";
-  const xs = best.polygon_xy.map((p) => p[0]);
-  const ys = best.polygon_xy.map((p) => p[1]);
-  const w = Math.max(...xs) - Math.min(...xs);
-  const h = Math.max(...ys) - Math.min(...ys);
-  // Corridor runs horizontally (wide)  → stair flight vertical (tall box)
-  // Corridor runs vertically (tall)   → stair flight horizontal (wide box)
-  return w >= h ? "vertical" : "horizontal";
-}
-
 
 function CoreLayer({
   position,
@@ -734,57 +711,77 @@ function CoreLayer({
   hasAscenseur,
   scale,
   project,
-  flightAxis = "horizontal",
 }: {
   position: [number, number];
   surfaceM2: number;
   hasAscenseur: boolean;
   scale: number;
   project: (c: Coord) => Coord;
-  flightAxis?: "horizontal" | "vertical";
 }) {
+  // Layout convention (user spec, maximises usable space + exterior views):
+  //   Top 62 % : escalier (left 58 %) + ASC (right 42 %)
+  //   Bottom 38 % : palier strip (landing that connects to the corridor
+  //                  AND to the voirie-facing hall)
+  // This replaces the previous "whole core = palier with stairs inside"
+  // rendering so the palier is actually a distinct landing zone at the
+  // south of the core (adjacent to the hall) and the stairs/ASC sit on
+  // the north side.
   const side = Math.sqrt(surfaceM2);
   const [cxM, cyM] = position;
-  const [sx, sy] = project([cxM - side / 2, cyM - side / 2]);
-  const [sx2, sy2] = project([cxM + side / 2, cyM + side / 2]);
-  const fullW = Math.abs(sx2 - sx);
-  const fullH = Math.abs(sy2 - sy);
-  const [elx, ely] = project([cxM, cyM]);
+  // Project the core's SW (world small-x, small-y) and NE corners. Because
+  // the projector flips Y (SVG y grows down, world y grows up), SW maps to
+  // the PIXEL BOTTOM-LEFT and NE to the PIXEL TOP-RIGHT. Compute the
+  // unambiguous pixel-rect top-left with min().
+  const [pswX, pswY] = project([cxM - side / 2, cyM - side / 2]);
+  const [pneX, pneY] = project([cxM + side / 2, cyM + side / 2]);
+  const rectLeft = Math.min(pswX, pneX);
+  const rectTop = Math.min(pswY, pneY); // pixel-top of the core on screen
+  const fullW = Math.abs(pneX - pswX);
+  const fullH = Math.abs(pneY - pswY);
+
+  const STAIRS_ZONE_FRAC = 0.62;
+  const PALIER_ZONE_FRAC = 0.38;
+  const STAIR_W_FRAC = 0.58;
+  const ASC_W_FRAC = 0.42;
+
+  const topZoneH = fullH * STAIRS_ZONE_FRAC; // stairs + ASC (pixel TOP of core)
+  const palierZoneH = fullH * PALIER_ZONE_FRAC; // palier strip (pixel BOTTOM = world SOUTH)
+
+  const stairRect = {
+    x: rectLeft,
+    y: rectTop,
+    w: fullW * STAIR_W_FRAC,
+    h: topZoneH,
+  };
+  const elevRect = {
+    x: rectLeft + fullW * STAIR_W_FRAC,
+    y: rectTop + topZoneH * 0.18,
+    w: fullW * ASC_W_FRAC,
+    h: topZoneH * 0.64,
+  };
 
   const NB_TREADS = 11;
-  const isHorizontal = flightAxis === "horizontal";
-
-  // Layout: stairs occupy ~55% of the core along the flight axis, elevator
-  // the remaining 45%. Stairs sit on the side AWAY from palier entry (the
-  // corridor is visually aligned with the stair flight).
-  const stairFrac = 0.55;
-  const elevFrac = 0.45;
-
-  let stairRect: { x: number; y: number; w: number; h: number };
-  let elevRect: { x: number; y: number; w: number; h: number };
-  if (isHorizontal) {
-    // Flight runs east-west → WIDE stair box on top, elevator below.
-    stairRect = { x: sx, y: sy, w: fullW, h: fullH * stairFrac };
-    elevRect = {
-      x: sx + fullW * 0.15,
-      y: sy + fullH * stairFrac,
-      w: fullW * 0.7,
-      h: fullH * elevFrac * 0.85,
-    };
-  } else {
-    // Flight runs north-south → TALL stair box on left, elevator on right.
-    stairRect = { x: sx, y: sy, w: fullW * stairFrac, h: fullH };
-    elevRect = {
-      x: sx + fullW * stairFrac,
-      y: sy + fullH * 0.15,
-      w: fullW * elevFrac * 0.85,
-      h: fullH * 0.7,
-    };
-  }
 
   return (
     <g style={{ pointerEvents: "none" }}>
-      {/* Stairs rectangle */}
+      {/* 1. Erase the palier tile pattern on the TOP zone (pixel top =
+            world north) so stairs + ASC appear on a clean white
+            background. Bottom zone (pixel bottom = world south) keeps
+            its tile pattern drawn earlier by PalierLayer. */}
+      <rect x={rectLeft} y={rectTop} width={fullW} height={topZoneH} fill="white" />
+
+      {/* 2. Black separator line between top (stairs+ASC) and bottom
+            (palier) zones — visually confirms the two-zone split. */}
+      <line
+        x1={rectLeft}
+        y1={rectTop + topZoneH}
+        x2={rectLeft + fullW}
+        y2={rectTop + topZoneH}
+        stroke="#0f172a"
+        strokeWidth={1.4}
+      />
+
+      {/* 3. Stairs rectangle (top-left) */}
       <rect
         x={stairRect.x}
         y={stairRect.y}
@@ -794,52 +791,29 @@ function CoreLayer({
         stroke="#0f172a"
         strokeWidth={1.4}
       />
-      {/* Stair tread lines — perpendicular to the flight axis */}
+      {/* Vertical tread lines across the stair box */}
       {Array.from({ length: NB_TREADS }).map((_, i) => {
         const frac = (i + 0.5) / NB_TREADS;
-        if (isHorizontal) {
-          const x = stairRect.x + stairRect.w * frac;
-          return (
-            <line
-              key={i}
-              x1={x}
-              y1={stairRect.y + 4}
-              x2={x}
-              y2={stairRect.y + stairRect.h - 4}
-              stroke="#475569"
-              strokeWidth={0.5}
-            />
-          );
-        }
-        const y = stairRect.y + stairRect.h * frac;
+        const x = stairRect.x + stairRect.w * frac;
         return (
           <line
             key={i}
-            x1={stairRect.x + 4}
-            y1={y}
-            x2={stairRect.x + stairRect.w - 4}
-            y2={y}
+            x1={x}
+            y1={stairRect.y + 4}
+            x2={x}
+            y2={stairRect.y + stairRect.h - 4}
             stroke="#475569"
             strokeWidth={0.5}
           />
         );
       })}
-      {/* Diagonal UP arrow along flight axis */}
-      {isHorizontal ? (
-        <path
-          d={`M ${stairRect.x + 6} ${stairRect.y + stairRect.h - 6} L ${stairRect.x + stairRect.w - 6} ${stairRect.y + 10}`}
-          stroke="#0f172a"
-          strokeWidth={0.8}
-          markerEnd="url(#arrow-n)"
-        />
-      ) : (
-        <path
-          d={`M ${stairRect.x + stairRect.w - 6} ${stairRect.y + stairRect.h - 6} L ${stairRect.x + 10} ${stairRect.y + 6}`}
-          stroke="#0f172a"
-          strokeWidth={0.8}
-          markerEnd="url(#arrow-n)"
-        />
-      )}
+      {/* Diagonal UP arrow from bottom-left to top-right of the stairs */}
+      <path
+        d={`M ${stairRect.x + 6} ${stairRect.y + stairRect.h - 6} L ${stairRect.x + stairRect.w - 6} ${stairRect.y + 10}`}
+        stroke="#0f172a"
+        strokeWidth={0.8}
+        markerEnd="url(#arrow-n)"
+      />
       <text
         x={stairRect.x + 4}
         y={stairRect.y + stairRect.h - 10}
@@ -848,8 +822,18 @@ function CoreLayer({
       >
         UP
       </text>
+      <text
+        x={stairRect.x + stairRect.w / 2}
+        y={stairRect.y + 14}
+        textAnchor="middle"
+        fontSize={8.5}
+        fontWeight={600}
+        fill="#475569"
+      >
+        escalier
+      </text>
 
-      {/* Elevator (the other half of the core) */}
+      {/* 4. Elevator (top-right, beside the stairs in the SAME top zone) */}
       {hasAscenseur && (
         <g>
           <rect
@@ -883,15 +867,26 @@ function CoreLayer({
         </g>
       )}
 
-      {/* "Escalier" label — placed below the stair rectangle */}
+      {/* 5. Palier label in the BOTTOM strip (the palier tiles from
+             PalierLayer are still visible there). */}
       <text
-        x={stairRect.x + stairRect.w / 2}
-        y={stairRect.y + stairRect.h + 12}
+        x={rectLeft + fullW / 2}
+        y={rectTop + topZoneH + palierZoneH / 2 - 2}
         textAnchor="middle"
-        fontSize={8.5}
-        fill="#475569"
+        fontSize={9.5}
+        fontWeight={600}
+        fill="#334155"
       >
-        escalier
+        palier
+      </text>
+      <text
+        x={rectLeft + fullW / 2}
+        y={rectTop + topZoneH + palierZoneH / 2 + 10}
+        textAnchor="middle"
+        fontSize={8}
+        fill="#64748b"
+      >
+        140 cm
       </text>
     </g>
   );

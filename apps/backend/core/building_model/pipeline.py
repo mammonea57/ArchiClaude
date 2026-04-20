@@ -206,11 +206,28 @@ def _relocate_entries_to_corridor(
         wall_len_cm = int(
             ((p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2) ** 0.5 * 100
         )
+        # Position the 93 cm door *inside* the ENTREE room, not at the
+        # geometric midpoint of the wall which may sit on the boundary
+        # with the adjacent SdB. We project the entrée's CENTROID onto
+        # the wall and use that as the door's position.
+        if entree is not None:
+            e_cx = sum(x for x, _ in entree.polygon_xy) / len(entree.polygon_xy)
+            e_cy = sum(y for _, y in entree.polygon_xy) / len(entree.polygon_xy)
+            if best_side in ("sud", "nord"):
+                proj_along = e_cx - p0[0]
+            else:
+                proj_along = e_cy - p0[1]
+            # Keep the door at least 60 cm from either jamb so the 93 cm
+            # leaf fully fits inside the entrée room bbox.
+            pos_raw_cm = int(abs(proj_along) * 100)
+            door_pos_cm = max(60, min(wall_len_cm - 60, pos_raw_cm))
+        else:
+            door_pos_cm = max(50, wall_len_cm // 2)
         apt.openings.append(Opening(
             id=f"{apt.id}_op_entree",
             type=OpeningType.PORTE_ENTREE,
             wall_id=wall_id,
-            position_along_wall_cm=max(50, wall_len_cm // 2),
+            position_along_wall_cm=door_pos_cm,
             width_cm=93,
             height_cm=220,
             allege_cm=None,
@@ -306,13 +323,185 @@ def _build_entry_hall(
     )
 
 
+_MIN_APT_AFTER_CARVE_M2 = 40.0  # T2 minimum viable surface
+_POCKET_NEW_APT_MIN_M2 = 40.0   # dropped-apt pockets ≥ this become new apts
+
+
+def _fill_pockets_with_apts(
+    niveau_idx: int,
+    footprint,
+    cells: list[Cellule],
+    circulations: list[Circulation],
+    voirie_side: str,
+) -> list[Cellule]:
+    """Detect empty pockets ≥ 40 m² left after carving and turn them
+    into new apartments, densifying the floor.
+
+    Returns the list of new cellules created (the caller appends them).
+    The new apts use a T2 or T3 template depending on surface.
+    """
+    from shapely.geometry import Polygon as ShapelyPoly
+    from shapely.ops import unary_union
+    from core.templates_library.layout_generator import (
+        build_walls_and_openings,
+        generate_apartment,
+    )
+    from core.building_model.schemas import Cellule as CelluleSchema
+    from core.building_model.schemas import CelluleType, Typologie
+
+    occupied_polys = [
+        ShapelyPoly(c.polygon_xy) for c in cells if len(c.polygon_xy) >= 3
+    ]
+    occupied_polys += [
+        ShapelyPoly(c.polygon_xy)
+        for c in circulations
+        if len(c.polygon_xy) >= 3
+    ]
+    if not occupied_polys:
+        return []
+    occupied = unary_union(occupied_polys)
+    empty = footprint.difference(occupied)
+    if empty.is_empty:
+        return []
+
+    pockets = list(empty.geoms) if empty.geom_type == "MultiPolygon" else [empty]
+    pockets = [p for p in pockets if p.area >= _POCKET_NEW_APT_MIN_M2]
+    if not pockets:
+        return []
+
+    # Largest axis-aligned rectangle that fits entirely inside the pocket.
+    # We scan the bbox at 0.5 m steps and try each candidate rectangle,
+    # keeping the biggest one whose full area is inside the pocket.
+    def _inscribed_rect(poly) -> ShapelyPoly | None:
+        minx, miny, maxx, maxy = poly.bounds
+        buffered = poly.buffer(0.05)
+        best: ShapelyPoly | None = None
+        best_area = _POCKET_NEW_APT_MIN_M2
+        step = 0.5
+        # Try every axis-aligned rectangle of width ≥ 5 m and depth ≥ 5 m
+        # fitting inside the bbox. This is O(n^4) on a bbox grid but the
+        # bbox is small (~10 m) and step is 0.5 m so ≤ 20^4 ≈ 160k tests.
+        xs = [minx + i * step for i in range(int((maxx - minx) / step) + 1)]
+        ys = [miny + i * step for i in range(int((maxy - miny) / step) + 1)]
+        for x0 in xs:
+            for x1 in xs:
+                if x1 - x0 < 5.0:
+                    continue
+                for y0 in ys:
+                    for y1 in ys:
+                        if y1 - y0 < 5.0:
+                            continue
+                        area = (x1 - x0) * (y1 - y0)
+                        if area <= best_area:
+                            continue
+                        # Aspect filter
+                        w, h = x1 - x0, y1 - y0
+                        if max(w, h) / min(w, h) > 2.8:
+                            continue
+                        trial = ShapelyPoly([
+                            (x0, y0), (x1, y0), (x1, y1), (x0, y1),
+                        ])
+                        if buffered.contains(trial):
+                            best = trial
+                            best_area = area
+        return best
+
+    # For each pocket, infer palier_side (side facing the nearest circulation)
+    circ_polys = [
+        ShapelyPoly(c.polygon_xy)
+        for c in circulations
+        if len(c.polygon_xy) >= 3
+    ]
+
+    new_cells: list[Cellule] = []
+
+    for p_idx, pocket in enumerate(pockets):
+        rect = _inscribed_rect(pocket)
+        if rect is None:
+            continue
+        rxmin, rymin, rxmax, rymax = rect.bounds
+        rw = rxmax - rxmin
+        rh = rymax - rymin
+        # Target typology based on area. T2 range is 40-52 m²; T3 52-65 m².
+        area = rect.area
+        if area >= 52:
+            typo = Typologie.T3
+        else:
+            typo = Typologie.T2
+
+        # Reject pockets whose aspect ratio is too extreme for a realistic
+        # apartment (narrow corridors disguised as apts).
+        if min(rw, rh) < 5.0 or max(rw, rh) / min(rw, rh) > 2.8:
+            continue
+
+        # Infer palier side: the edge closest to any circulation polygon
+        from shapely.geometry import Point
+        sides = {
+            "sud":   Point((rxmin + rxmax) / 2, rymin),
+            "nord":  Point((rxmin + rxmax) / 2, rymax),
+            "ouest": Point(rxmin, (rymin + rymax) / 2),
+            "est":   Point(rxmax, (rymin + rymax) / 2),
+        }
+        if not circ_polys:
+            continue
+        palier_side = min(
+            sides.keys(),
+            key=lambda s: min(p.distance(sides[s]) for p in circ_polys),
+        )
+        # Distance must be tight (< 1.5 m) to ensure the apt is reachable
+        best_d = min(p.distance(sides[palier_side]) for p in circ_polys)
+        if best_d > 1.5:
+            continue
+
+        slot_id = f"pocket_R{niveau_idx}_{p_idx}"
+        try:
+            rooms, _, _, actual_palier = generate_apartment(
+                slot_bounds=(rxmin, rymin, rxmax, rymax),
+                typologie=typo,
+                orientations=[],
+                slot_id=slot_id,
+                template_id="pocket_infill",
+            )
+        except Exception:
+            continue
+        # Override palier_side with the one we inferred from the adjacent
+        # circulation (generate_apartment picks based on orientations)
+        walls, openings = build_walls_and_openings(
+            rooms,
+            (rxmin, rymin, rxmax, rymax),
+            palier_side,  # type: ignore[arg-type]
+            slot_id,
+        )
+        _ = actual_palier
+
+        apt = CelluleSchema(
+            id=slot_id,
+            type=CelluleType.LOGEMENT,
+            typologie=typo,
+            surface_m2=sum(r.surface_m2 for r in rooms),
+            polygon_xy=[(rxmin, rymin), (rxmax, rymin),
+                        (rxmax, rymax), (rxmin, rymax)],
+            orientation=[],
+            template_id="pocket_infill",
+            rooms=rooms,
+            walls=walls,
+            openings=openings,
+        )
+        new_cells.append(apt)
+
+    return new_cells
+
+
 def _carve_circulations_from_cells(
     cells: list[Cellule],
     new_circulations: list[Circulation],
 ) -> None:
     """Subtract every circulation polygon from every apt polygon in place.
 
-    Apts whose area shrinks below 20 m² are dropped (lobby ate them).
+    Apts whose surface drops below the T2 minimum (40 m²) are dropped —
+    the space they occupied becomes an empty pocket that later phases
+    (or the user) can repurpose. Keeping a stub of < 40 m² would create
+    an unsellable apt; better to drop and redistribute.
     """
     from shapely.geometry import Polygon as ShapelyPoly
 
@@ -329,9 +518,7 @@ def _carve_circulations_from_cells(
         poly = ShapelyPoly(apt.polygon_xy)
         for cp in circ_polys:
             poly = poly.difference(cp)
-        if poly.is_empty or poly.area < 20.0:
-            # Dropped — lobby ate the whole apt; solver will just have one
-            # fewer logement on RDC, which is fine.
+        if poly.is_empty or poly.area < _MIN_APT_AFTER_CARVE_M2:
             continue
         if poly.geom_type == "MultiPolygon":
             poly = max(poly.geoms, key=lambda g: g.area)
@@ -429,19 +616,23 @@ def _emit_wing_corridors(
                     cy0 = wymax_c; cy1 = core_bb[1]
                 else:
                     cy0 = core_bb[3]; cy1 = wymax_c
-                # Horizontal connector at core's Y level, from core east/west
-                # edge toward the corridor.
+                # Horizontal connector running along the SOUTH edge of the
+                # core. This is the core's palier strip — renders below the
+                # escalier/ASC in the frontend so the corridor opens cleanly
+                # into the palier without the stairs blocking visual flow.
                 if wxmin_c > core_bb[2]:
                     cx0_conn = core_bb[2]; cx1_conn = (wxmin_c + wxmax_c) / 2 + half
                 elif wxmax_c < core_bb[0]:
                     cx0_conn = (wxmin_c + wxmax_c) / 2 - half; cx1_conn = core_bb[0]
                 else:
                     cx0_conn = core_bb[2]; cx1_conn = (wxmin_c + wxmax_c) / 2 + half
+                # Connector sits at core_bb[1] (south edge) up to +1.6 m
+                # to stay inside the palier strip (bottom 38 % of the core).
                 connector = ShapelyPoly([
-                    (min(cx0_conn, cx1_conn), core_cy - half),
-                    (max(cx0_conn, cx1_conn), core_cy - half),
-                    (max(cx0_conn, cx1_conn), core_cy + half),
-                    (min(cx0_conn, cx1_conn), core_cy + half),
+                    (min(cx0_conn, cx1_conn), core_bb[1]),
+                    (max(cx0_conn, cx1_conn), core_bb[1]),
+                    (max(cx0_conn, cx1_conn), core_bb[1] + _CORRIDOR_WIDTH_M),
+                    (min(cx0_conn, cx1_conn), core_bb[1] + _CORRIDOR_WIDTH_M),
                 ]).intersection(footprint)
                 corridor_poly = corridor_poly.union(connector)
                 _ = (cy0, cy1)
@@ -567,6 +758,28 @@ async def generate_building_model(
                 # The hall overlaps one or more apt rectangles — carve it out
                 # of every cellule so nothing stays under the lobby.
                 _carve_circulations_from_cells(cells_for_niveau, [entry_hall])
+
+        # Densify: any empty pocket ≥ 40 m² that sits against a circulation
+        # becomes a new apartment. Without this step, carving leaves wasted
+        # space the user would see as dead zones.
+        new_pocket_apts = _fill_pockets_with_apts(
+            niveau_idx=idx,
+            footprint=footprint,
+            cells=cells_for_niveau,
+            circulations=circulations,
+            voirie_side=voirie,
+        )
+        cells_for_niveau.extend(new_pocket_apts)
+
+        # Resort + renumber so the numbering stays consistent after drops
+        # and pocket fills.
+        if cells_for_niveau:
+            cells_for_niveau.sort(key=lambda c: (
+                -max(p[1] for p in c.polygon_xy),
+                min(p[0] for p in c.polygon_xy),
+            ))
+            for k, apt in enumerate(cells_for_niveau, start=1):
+                apt.id = f"R+{idx}.{k:02d}"
 
         # Relocate every apt's porte_entree onto the wall CLOSEST to a
         # circulation polygon. This guarantees entries open onto corridors,
