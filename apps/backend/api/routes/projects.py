@@ -454,9 +454,6 @@ async def analyze_project(
     try:
         fp_l93_raw = _reproject(shapely_shape(footprint_geojson), "EPSG:4326", "EPSG:2154")
         terrain_l93_raw = _reproject(shapely_shape(terrain_geojson), "EPSG:4326", "EPSG:2154")
-        # The BM solver expects a single Polygon (not MultiPolygon). If the
-        # reprojection / PLU carving produced multi-parts, keep only the
-        # largest connected component so the solver has a clean footprint.
         fp_l93 = (
             max(fp_l93_raw.geoms, key=lambda g: g.area)
             if fp_l93_raw.geom_type == "MultiPolygon" else fp_l93_raw
@@ -465,9 +462,52 @@ async def analyze_project(
             max(terrain_l93_raw.geoms, key=lambda g: g.area)
             if terrain_l93_raw.geom_type == "MultiPolygon" else terrain_l93_raw
         )
-        minx, miny, _, _ = terrain_l93.bounds
-        fp_shift = translate(fp_l93, xoff=-minx, yoff=-miny)
-        terrain_shift = translate(terrain_l93, xoff=-minx, yoff=-miny)
+        # The BM solver expects an AXIS-ALIGNED near-rectangular
+        # footprint. Fused-parcel shapes are L-shaped at arbitrary
+        # angles and break the solver's slicing. We therefore:
+        #   1. Compute the feasibility footprint's min rotated rectangle
+        #      (OBB) → gives the parcel's main axis.
+        #   2. Rotate everything (footprint + terrain) so the OBB's long
+        #      edge becomes horizontal.
+        #   3. Replace the footprint with an AXIS-ALIGNED RECTANGLE
+        #      sized to match the feasibility emprise target, centred
+        #      on the footprint's centroid in the rotated frame.
+        # The terrain (legal parcel) stays the true shape after rotation
+        # so the rendered site plan shows the real parcel outline.
+        import math
+        from shapely.affinity import rotate as shp_rotate
+        from shapely.geometry import box as shp_box
+        target_emprise = feas.surface_emprise_m2 or fp_l93.area
+        obb = fp_l93.minimum_rotated_rectangle
+        obb_coords = list(obb.exterior.coords)[:-1]
+        e0 = (obb_coords[1][0] - obb_coords[0][0], obb_coords[1][1] - obb_coords[0][1])
+        e1 = (obb_coords[2][0] - obb_coords[1][0], obb_coords[2][1] - obb_coords[1][1])
+        long_edge = e0 if (e0[0]**2 + e0[1]**2) >= (e1[0]**2 + e1[1]**2) else e1
+        long_len = (long_edge[0]**2 + long_edge[1]**2) ** 0.5
+        short_len = obb.area / long_len if long_len else 1.0
+        rot_angle_deg = math.degrees(math.atan2(long_edge[1], long_edge[0]))
+
+        # Rotate terrain into the parcel-aligned frame. Footprint will
+        # be a fresh axis-aligned rect sized to the feasibility emprise.
+        origin = fp_l93.centroid.coords[0]
+        terrain_axis = shp_rotate(terrain_l93, -rot_angle_deg, origin=origin)
+        terrain_bounds = terrain_axis.bounds
+        tminx, tminy, tmaxx, tmaxy = terrain_bounds
+
+        # Keep the OBB proportions but shrink to emprise target.
+        ratio = (target_emprise / (long_len * short_len)) ** 0.5
+        rect_long = long_len * ratio
+        rect_short = short_len * ratio
+        # Centre the rectangle on the terrain's centroid (in aligned frame)
+        cx = (tminx + tmaxx) / 2
+        cy = (tminy + tmaxy) / 2
+        fp_axis = shp_box(
+            cx - rect_long / 2, cy - rect_short / 2,
+            cx + rect_long / 2, cy + rect_short / 2,
+        )
+        # Normalise so solver works in positive coords starting at origin.
+        fp_shift = translate(fp_axis, xoff=-tminx, yoff=-tminy)
+        terrain_shift = translate(terrain_axis, xoff=-tminx, yoff=-tminy)
         footprint_normalised = mapping(fp_shift)
         parcelle_normalised = mapping(terrain_shift)
     except Exception as exc:  # noqa: BLE001

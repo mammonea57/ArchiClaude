@@ -866,17 +866,13 @@ async def generate_building_model(
                     circulations.append(entry_hall)
                     _carve_circulations_from_cells(cells_for_niveau, [entry_hall])
 
-        # Densify: any empty pocket ≥ 40 m² that sits against a circulation
-        # becomes a new apartment. Without this step, carving leaves wasted
-        # space the user would see as dead zones.
-        new_pocket_apts = _fill_pockets_with_apts(
-            niveau_idx=idx,
-            footprint=footprint,
-            cells=cells_for_niveau,
-            circulations=circulations,
-            voirie_side=voirie,
-        )
-        cells_for_niveau.extend(new_pocket_apts)
+        # Pocket-filling temporarily disabled: the O(n^4) inscribed-
+        # rectangle scan stalls the solver on complex fused-parcel
+        # footprints (observed 99 % CPU for 3 min on 3 Nogent parcels).
+        # The unused empty space is cosmetically suboptimal but safer
+        # than an infinite-looking analyse. Proper fix: replace the
+        # brute-force scan with a shapely minimum_rotated_rectangle
+        # heuristic — pending.
 
         # Resort + renumber so the numbering stays consistent after drops
         # and pocket fills.
