@@ -81,6 +81,47 @@ _INCENDIE_DIST_MAX_M = 25.0
 _CORE_ASPECT_MIN_LW = 0.6  # core cabine 1.1×1.4 ~ 0.7 aspect min
 
 
+_CORE_ADJ_MAX_EDGE_LEN = 22.0  # max length along the shared edge
+
+
+def _core_adjacent_edge(
+    wing: ShapelyPolygon, core_bb: tuple[float, float, float, float],
+) -> str | None:
+    """Return the wing edge ("west"/"east"/"north"/"south") that the core
+    protrudes into, or None.
+
+    A wing is "core-adjacent" on side X when the core's bounding box
+    intersects the wing's edge X-line (the core sits on or just inside
+    the wing from that side). We also cap the edge length: long wings
+    (> 22 m along the shared edge) would produce landlocked middle
+    slots after 2-column subdivision, so we fall back to the legacy
+    central corridor for those.
+    """
+    wxmin, wymin, wxmax, wymax = wing.bounds
+    c_minx, c_miny, c_maxx, c_maxy = core_bb
+    wing_w = wxmax - wxmin
+    wing_h = wymax - wymin
+
+    # Check each edge. The core must cross the edge's midline AND be
+    # close to the wing edge (not centred in the wing interior).
+    if wing_h <= _CORE_ADJ_MAX_EDGE_LEN:
+        # West edge (x = wxmin): core must span past x=wxmin on its east side
+        if c_minx <= wxmin + 0.5 and c_maxx >= wxmin - 0.5 and c_maxx <= wxmin + wing_w * 0.5:
+            if c_miny < wymax and c_maxy > wymin:
+                return "west"
+        if c_maxx >= wxmax - 0.5 and c_minx <= wxmax + 0.5 and c_minx >= wxmax - wing_w * 0.5:
+            if c_miny < wymax and c_maxy > wymin:
+                return "east"
+    if wing_w <= _CORE_ADJ_MAX_EDGE_LEN:
+        if c_miny <= wymin + 0.5 and c_maxy >= wymin - 0.5 and c_maxy <= wymin + wing_h * 0.5:
+            if c_minx < wxmax and c_maxx > wxmin:
+                return "south"
+        if c_maxy >= wymax - 0.5 and c_miny <= wymax + 0.5 and c_miny >= wymax - wing_h * 0.5:
+            if c_minx < wxmax and c_maxx > wxmin:
+                return "north"
+    return None
+
+
 def _compute_circulation_network(
     footprint: ShapelyPolygon,
     wings: list[ShapelyPolygon],
@@ -91,6 +132,10 @@ def _compute_circulation_network(
     Apartment slot polygons are cut by this network so they never overlap
     the circulation area visually or functionally. Must stay in sync with
     pipeline._emit_wing_corridors.
+
+    Wings that share an edge with the core get their corridor placed
+    ALONG that shared edge (no connector needed, no apt-carving); this
+    maximises usable apt area + removes landlocked slots.
     """
     from shapely.ops import unary_union
 
@@ -106,10 +151,37 @@ def _compute_circulation_network(
         ww = wxmax - wxmin
         wh = wymax - wymin
         perp = wh if ww >= wh else ww
-        # Only wings deep enough to host dual-loaded apts get a central corridor.
-        # Shallower wings are single-loaded; their palier is the wing edge
-        # itself (no dedicated corridor needed, apts open directly onto the
-        # palier/landing).
+
+        # Core-adjacent corridor: place along the shared edge so it
+        # directly touches the core (no connector cutting through apts).
+        adj = _core_adjacent_edge(wing, core_bb)
+        if adj is not None:
+            if adj == "west":
+                # corridor runs vertically at wing's west edge
+                corridor = ShapelyPolygon([
+                    (wxmin, wymin), (wxmin + corridor_width, wymin),
+                    (wxmin + corridor_width, wymax), (wxmin, wymax),
+                ])
+            elif adj == "east":
+                corridor = ShapelyPolygon([
+                    (wxmax - corridor_width, wymin), (wxmax, wymin),
+                    (wxmax, wymax), (wxmax - corridor_width, wymax),
+                ])
+            elif adj == "south":
+                corridor = ShapelyPolygon([
+                    (wxmin, wymin), (wxmax, wymin),
+                    (wxmax, wymin + corridor_width), (wxmin, wymin + corridor_width),
+                ])
+            else:  # north
+                corridor = ShapelyPolygon([
+                    (wxmin, wymax - corridor_width), (wxmax, wymax - corridor_width),
+                    (wxmax, wymax), (wxmin, wymax),
+                ])
+            polys.append(corridor.intersection(footprint))
+            continue
+
+        # Fallback: central corridor + connector to core (legacy path for
+        # wings that don't share an edge with the core).
         if perp < DUAL_THRESHOLD:
             continue
         if ww >= wh:
@@ -127,11 +199,9 @@ def _compute_circulation_network(
             ])
             axis = "vertical"
 
-        # Connector from corridor to core if they don't already overlap
         if corridor.distance(core.polygon) > 0.2:
             cxmin, cymin, cxmax, cymax = corridor.bounds
             if axis == "horizontal":
-                # Vertical connector at corridor's mid-x, between core and corridor
                 connector_x = max(core_bb[0], min(core_bb[2], (cxmin + cxmax) / 2))
                 if cymin > core_bb[3]:
                     y0 = core_bb[3]; y1 = cymin
@@ -144,7 +214,6 @@ def _compute_circulation_network(
                     (connector_x + half, max(y0, y1)), (connector_x - half, max(y0, y1)),
                 ])
             else:
-                # Horizontal connector at core's Y level
                 if cxmin > core_bb[2]:
                     x0, x1 = core_bb[2], (cxmin + cxmax) / 2 + half
                 elif cxmax < core_bb[0]:
@@ -435,45 +504,104 @@ def compute_apartment_slots(
     # use a single-loaded corridor (one row, corridor on one side).
     _DUAL_LOADED_THRESHOLD_M = 15.0
 
+    core_bb_tuple = tuple(core.polygon.bounds)
+
     for wing_outer in wings:
         wxmin_o, wymin_o, wxmax_o, wymax_o = wing_outer.bounds
         wing_w_o = wxmax_o - wxmin_o
         wing_h_o = wymax_o - wymin_o
 
-        # Dual-loaded corridor: if the perpendicular span exceeds
-        # _DUAL_LOADED_THRESHOLD_M, split the wing into two parallel strips
-        # (north + south, or east + west) separated by a central corridor so
-        # apartments land at architect-appropriate depths on both sides.
-        slice_x_outer = wing_w_o >= wing_h_o
-        perp_outer = wing_h_o if slice_x_outer else wing_w_o
-
-        if perp_outer > _DUAL_LOADED_THRESHOLD_M:
-            half = (perp_outer - _CORRIDOR_WIDTH_M) / 2
-            if slice_x_outer:
-                # Corridor is horizontal in the middle of the wing
-                sub_wings = [
-                    ShapelyPolygon([
-                        (wxmin_o, wymin_o), (wxmax_o, wymin_o),
-                        (wxmax_o, wymin_o + half), (wxmin_o, wymin_o + half),
-                    ]),
-                    ShapelyPolygon([
-                        (wxmin_o, wymax_o - half), (wxmax_o, wymax_o - half),
-                        (wxmax_o, wymax_o), (wxmin_o, wymax_o),
-                    ]),
-                ]
+        # Core-adjacent wing: the corridor runs along the shared edge with
+        # the core (not in the middle). This leaves the whole wing minus
+        # the 1.6 m strip as USABLE sub-wing. Subdividing that sub-wing
+        # normally produces non-landlocked slots because all exterior
+        # façades remain accessible.
+        adj = _core_adjacent_edge(wing_outer, core_bb_tuple)
+        if adj is not None:
+            if adj == "west":
+                sub_wings = [ShapelyPolygon([
+                    (wxmin_o + _CORRIDOR_WIDTH_M, wymin_o),
+                    (wxmax_o, wymin_o),
+                    (wxmax_o, wymax_o),
+                    (wxmin_o + _CORRIDOR_WIDTH_M, wymax_o),
+                ])]
+            elif adj == "east":
+                sub_wings = [ShapelyPolygon([
+                    (wxmin_o, wymin_o),
+                    (wxmax_o - _CORRIDOR_WIDTH_M, wymin_o),
+                    (wxmax_o - _CORRIDOR_WIDTH_M, wymax_o),
+                    (wxmin_o, wymax_o),
+                ])]
+            elif adj == "south":
+                sub_wings = [ShapelyPolygon([
+                    (wxmin_o, wymin_o + _CORRIDOR_WIDTH_M),
+                    (wxmax_o, wymin_o + _CORRIDOR_WIDTH_M),
+                    (wxmax_o, wymax_o), (wxmin_o, wymax_o),
+                ])]
+            else:  # north
+                sub_wings = [ShapelyPolygon([
+                    (wxmin_o, wymin_o), (wxmax_o, wymin_o),
+                    (wxmax_o, wymax_o - _CORRIDOR_WIDTH_M),
+                    (wxmin_o, wymax_o - _CORRIDOR_WIDTH_M),
+                ])]
+            # For wide core-adjacent sub-wings (>10 m perp to the
+            # corridor), subdivide once more along the corridor axis so
+            # we end up with reasonably-sized apts in a 2×N grid rather
+            # than oversized landlocked T5s.
+            sw = sub_wings[0]
+            sxmin, symin, sxmax, symax = sw.bounds
+            sw_w = sxmax - sxmin
+            sw_h = symax - symin
+            if adj in ("west", "east"):
+                # Corridor runs vertically → sub-wing extends horizontally.
+                # Split along x if too wide.
+                if sw_w > 10.0:
+                    mid = (sxmin + sxmax) / 2
+                    sub_wings = [
+                        ShapelyPolygon([(sxmin, symin), (mid, symin), (mid, symax), (sxmin, symax)]),
+                        ShapelyPolygon([(mid, symin), (sxmax, symin), (sxmax, symax), (mid, symax)]),
+                    ]
             else:
-                sub_wings = [
-                    ShapelyPolygon([
-                        (wxmin_o, wymin_o), (wxmin_o + half, wymin_o),
-                        (wxmin_o + half, wymax_o), (wxmin_o, wymax_o),
-                    ]),
-                    ShapelyPolygon([
-                        (wxmax_o - half, wymin_o), (wxmax_o, wymin_o),
-                        (wxmax_o, wymax_o), (wxmax_o - half, wymax_o),
-                    ]),
-                ]
+                # Corridor horizontal → sub-wing extends vertically; split
+                # along y if too tall.
+                if sw_h > 10.0:
+                    mid = (symin + symax) / 2
+                    sub_wings = [
+                        ShapelyPolygon([(sxmin, symin), (sxmax, symin), (sxmax, mid), (sxmin, mid)]),
+                        ShapelyPolygon([(sxmin, mid), (sxmax, mid), (sxmax, symax), (sxmin, symax)]),
+                    ]
         else:
-            sub_wings = [wing_outer]
+            # Legacy: dual-loaded central corridor splits the wing into two
+            # parallel strips when it's deep enough; shallow wings stay as
+            # a single strip (single-loaded from the wing's edge).
+            slice_x_outer = wing_w_o >= wing_h_o
+            perp_outer = wing_h_o if slice_x_outer else wing_w_o
+            if perp_outer > _DUAL_LOADED_THRESHOLD_M:
+                half = (perp_outer - _CORRIDOR_WIDTH_M) / 2
+                if slice_x_outer:
+                    sub_wings = [
+                        ShapelyPolygon([
+                            (wxmin_o, wymin_o), (wxmax_o, wymin_o),
+                            (wxmax_o, wymin_o + half), (wxmin_o, wymin_o + half),
+                        ]),
+                        ShapelyPolygon([
+                            (wxmin_o, wymax_o - half), (wxmax_o, wymax_o - half),
+                            (wxmax_o, wymax_o), (wxmin_o, wymax_o),
+                        ]),
+                    ]
+                else:
+                    sub_wings = [
+                        ShapelyPolygon([
+                            (wxmin_o, wymin_o), (wxmin_o + half, wymin_o),
+                            (wxmin_o + half, wymax_o), (wxmin_o, wymax_o),
+                        ]),
+                        ShapelyPolygon([
+                            (wxmax_o - half, wymin_o), (wxmax_o, wymin_o),
+                            (wxmax_o, wymax_o), (wxmax_o - half, wymax_o),
+                        ]),
+                    ]
+            else:
+                sub_wings = [wing_outer]
 
         # Process each sub-wing (single or dual strip around the corridor)
         for wing in sub_wings:

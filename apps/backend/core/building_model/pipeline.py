@@ -536,13 +536,16 @@ def _emit_wing_corridors(
 ) -> list[Circulation]:
     """Emit one corridor per wing of the footprint.
 
-    Each wing is a rectangle (from the same decomposition used by the
-    solver). The corridor runs along the wing's longer axis, centered on
-    its shorter axis → it lies exactly between the two rows of apts in a
-    dual-loaded layout, touching every apt.
+    Two corridor modes:
+    - Core-adjacent wing (edge flush with core): corridor runs along the
+      SHARED edge → connects to the core directly, no cross-wing
+      connector needed. All the wing's apts stay on the other side of
+      the corridor, with exterior façades preserved.
+    - Legacy central corridor: dual-loaded when the perpendicular span
+      is large enough; otherwise single-loaded (apt opens on wing edge).
     """
     from shapely.geometry import Polygon as ShapelyPoly
-    from core.building_model.solver import _decompose_into_wings
+    from core.building_model.solver import _core_adjacent_edge, _decompose_into_wings
 
     corridors: list[Circulation] = []
     if not cells:
@@ -559,6 +562,44 @@ def _emit_wing_corridors(
         wxmin, wymin, wxmax, wymax = wing.bounds
         ww = wxmax - wxmin
         wh = wymax - wymin
+
+        # Core-adjacent wing: put the corridor along the shared edge.
+        adj = _core_adjacent_edge(wing, tuple(core_bb))
+        if adj is not None:
+            if adj == "west":
+                corridor_poly = ShapelyPoly([
+                    (wxmin, wymin), (wxmin + _CORRIDOR_WIDTH_M, wymin),
+                    (wxmin + _CORRIDOR_WIDTH_M, wymax), (wxmin, wymax),
+                ]).intersection(footprint)
+            elif adj == "east":
+                corridor_poly = ShapelyPoly([
+                    (wxmax - _CORRIDOR_WIDTH_M, wymin), (wxmax, wymin),
+                    (wxmax, wymax), (wxmax - _CORRIDOR_WIDTH_M, wymax),
+                ]).intersection(footprint)
+            elif adj == "south":
+                corridor_poly = ShapelyPoly([
+                    (wxmin, wymin), (wxmax, wymin),
+                    (wxmax, wymin + _CORRIDOR_WIDTH_M), (wxmin, wymin + _CORRIDOR_WIDTH_M),
+                ]).intersection(footprint)
+            else:  # north
+                corridor_poly = ShapelyPoly([
+                    (wxmin, wymax - _CORRIDOR_WIDTH_M), (wxmax, wymax - _CORRIDOR_WIDTH_M),
+                    (wxmax, wymax), (wxmin, wymax),
+                ]).intersection(footprint)
+            corridor_poly = corridor_poly.difference(core.polygon)
+            if corridor_poly.is_empty:
+                continue
+            if corridor_poly.geom_type == "MultiPolygon":
+                corridor_poly = max(corridor_poly.geoms, key=lambda g: g.area)
+            coords = list(corridor_poly.exterior.coords)[:-1]
+            corridors.append(Circulation(
+                id=f"couloir_w{i}_R{niveau_idx}",
+                polygon_xy=coords,
+                surface_m2=corridor_poly.area,
+                largeur_min_cm=int(_CORRIDOR_WIDTH_M * 100),
+            ))
+            continue
+
         # Only dual-loaded wings get a dedicated inner corridor
         if min(ww, wh) < DUAL_THRESHOLD:
             continue
