@@ -43,10 +43,29 @@ class BilanProgramme(BaseModel):
     nb_parkings_ss_sol: int = Field(ge=0, default=0)
     nb_parkings_exterieurs: int = Field(ge=0, default=0)
     duree_chantier_mois: int = Field(ge=1, le=60, default=18)
+    # LLS quota required by the local PLU for this project. Varies by
+    # commune (Nogent-sur-Marne = 0.30, default 0.25 for SRU-subject
+    # communes, 0.0 if no obligation). Used to emit a blocking warning
+    # when the actual social share falls below this threshold.
+    lls_quota_minimum: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Quota LLS imposé par le PLU local (0.30 pour Nogent)",
+    )
 
     @property
     def shab_total_m2(self) -> float:
         return self.shab_libre_m2 + self.shab_social_m2 + self.shab_commerce_m2
+
+    @property
+    def shab_habitable_m2(self) -> float:
+        """SHAB habitable (logement libre + social), hors commerce."""
+        return self.shab_libre_m2 + self.shab_social_m2
+
+    @property
+    def pct_social_reel(self) -> float:
+        """Part de la SHAB habitable qui est sociale."""
+        total = self.shab_habitable_m2
+        return self.shab_social_m2 / total if total else 0.0
 
 
 class BilanInputs(BaseModel):
@@ -617,6 +636,18 @@ def compute_bilan(
         warnings.append(
             "Rendement plan SHAB/SDP < 80 % — inefficace, revoir le plan"
         )
+    # LLS quota : quand la commune impose un plancher (ex. Nogent 30 %),
+    # vérifier que la part sociale réelle du programme le respecte.
+    if programme.lls_quota_minimum > 0:
+        actual = programme.pct_social_reel
+        if actual < programme.lls_quota_minimum - 1e-4:
+            required_m2 = programme.lls_quota_minimum * programme.shab_habitable_m2
+            missing_m2 = required_m2 - programme.shab_social_m2
+            warnings.append(
+                f"Part LLS {actual:.1%} < quota PLU {programme.lls_quota_minimum:.0%} — "
+                f"manque {missing_m2:.0f} m² SHAB sociale pour respecter la contrainte "
+                "(risque de refus du permis ou annulation du DPC)."
+            )
 
     return BilanResult(
         programme=programme,
@@ -653,6 +684,7 @@ def programme_from_building_model(
     shab_commerce_m2: float = 0.0,
     nb_parkings_ss_sol: int | None = None,
     duree_chantier_mois: int = 18,
+    lls_quota_minimum: float = 0.0,
 ) -> BilanProgramme:
     """Derive a BilanProgramme from a BuildingModel.
 
@@ -703,4 +735,5 @@ def programme_from_building_model(
         nb_parkings_ss_sol=nb_pk_calc,
         nb_parkings_exterieurs=0,
         duree_chantier_mois=duree_chantier_mois,
+        lls_quota_minimum=lls_quota_minimum,
     )

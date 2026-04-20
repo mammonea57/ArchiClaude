@@ -170,3 +170,34 @@ def test_bankable_margin_no_warning(nogent_programme, nogent_inputs):
     b = compute_bilan(nogent_programme, nogent_inputs, option_label="opt1")
     assert b.marge_pct_ht >= 0.12
     assert not any("NON FINAN" in w.upper() for w in b.warnings)
+
+
+def test_lls_quota_warning_below_minimum(nogent_programme, nogent_inputs):
+    """Nogent → 30 % LLS exigé ; avec seulement 1441/4803 = 30 % exactement
+    on est à la limite ; si on descend à 20 % un warning doit apparaître."""
+    p = nogent_programme.model_copy(update={
+        "lls_quota_minimum": 0.30,
+        "shab_libre_m2": 4000.0,
+        "shab_social_m2": 800.0,  # 800 / 4800 = 16.7 %
+    })
+    b = compute_bilan(p, nogent_inputs)
+    assert any("quota PLU" in w and "LLS" in w for w in b.warnings)
+
+
+def test_lls_quota_ok_no_warning(nogent_programme, nogent_inputs):
+    """Nogent Opt1 réel : 1441 social / 4803 total = 30,0 % → respecte 30 %."""
+    p = nogent_programme.model_copy(update={"lls_quota_minimum": 0.30})
+    b = compute_bilan(p, nogent_inputs)
+    assert p.pct_social_reel >= 0.30 - 1e-4
+    assert not any("quota PLU" in w for w in b.warnings)
+
+
+def test_lls_quota_zero_disables_check(nogent_programme, nogent_inputs):
+    """Sans quota PLU imposé, aucun warning LLS même si social = 0 %."""
+    p = nogent_programme.model_copy(update={
+        "lls_quota_minimum": 0.0,
+        "shab_libre_m2": 4803.71,
+        "shab_social_m2": 0.0,
+    })
+    b = compute_bilan(p, nogent_inputs)
+    assert not any("quota PLU" in w for w in b.warnings)

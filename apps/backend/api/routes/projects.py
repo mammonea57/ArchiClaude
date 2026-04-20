@@ -94,16 +94,108 @@ async def analyze_project(
 ) -> AnalyzeJobResponse:
     """Trigger feasibility analysis for a project.
 
-    v1: Returns a placeholder job_id. Actual ARQ dispatch is wired when
-    Redis is available in the deployment environment.
+    v1 synchronous: runs the BuildingModel generation directly against
+    the project's brief (with sensible fallbacks when the brief is
+    minimal), persists the resulting BM, and flips the project status
+    to "analyzed". The job_id is still returned so the frontend polling
+    code keeps working.
     """
-    # Validate project_id is a plausible UUID format (non-existent IDs are
-    # acceptable in v1 since ARQ dispatch is stubbed).
     if not project_id:
         raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        pid = uuid.UUID(project_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Project not found") from None
+
+    project = await session.get(ProjectRow, pid)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Defer heavy imports so this route stays cheap to import at startup.
+    from core.building_model.pipeline import (
+        GenerationInputs,
+        generate_building_model,
+    )
+    from core.feasibility.schemas import Brief
+    from core.plu.schemas import NumericRules
+    from db.models.building_models import BuildingModelRow
+
+    brief = project.brief or {}
+    mix_raw = brief.get("mix_typologique") or {"T2": 0.4, "T3": 0.4, "T4": 0.2}
+    inputs = GenerationInputs(
+        project_id=pid,
+        parcelle_geojson=brief.get(
+            "parcelle_geojson",
+            {"type": "Polygon", "coordinates": [[
+                [0, 0], [20, 0], [20, 18], [0, 18], [0, 0],
+            ]]},
+        ),
+        parcelle_surface_m2=brief.get("parcelle_surface_m2", 360.0),
+        voirie_orientations=brief.get("voirie_orientations", ["sud"]),
+        north_angle_deg=0.0,
+        plu_rules=NumericRules(
+            emprise_max_pct=brief.get("emprise_max_pct", 60.0),
+            hauteur_max_m=brief.get("hauteur_max_m", 18.0),
+            pleine_terre_min_pct=20.0,
+            retrait_voirie_m=None,
+            retrait_limite_m=4.0,
+            stationnement_pct=100.0,
+            hauteur_max_niveaux=brief.get("hauteur_max_niveaux", 5),
+        ),
+        zone_plu=brief.get("zone_plu", "UA"),
+        brief=Brief(
+            destination=brief.get("destination", "logement_collectif"),
+            cible_nb_logements=brief.get("cible_nb_logements", 12),
+            cible_sdp_m2=brief.get("cible_sdp_m2", 900),
+            mix_typologique=mix_raw,
+        ),
+        footprint_recommande_geojson=brief.get(
+            "footprint_recommande_geojson",
+            {"type": "Polygon", "coordinates": [[
+                [2, 2], [16, 2], [16, 14], [2, 14], [2, 2],
+            ]]},
+        ),
+        niveaux_recommandes=brief.get("niveaux_recommandes", 4),
+        hauteur_recommandee_m=brief.get("hauteur_recommandee_m", 12.0),
+        emprise_pct_recommandee=brief.get("emprise_pct_recommandee", 50.0),
+    )
+
+    try:
+        bm = await generate_building_model(inputs, session=session)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Analysis failed: {exc}",
+        ) from exc
+
+    # Persist a new BM version for this project.
+    next_version = ((
+        await session.execute(
+            select(BuildingModelRow.version)
+            .where(BuildingModelRow.project_id == pid)
+            .order_by(BuildingModelRow.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none() or 0) + 1
+    bm_row = BuildingModelRow(
+        project_id=pid,
+        version=next_version,
+        model_json=bm.model_dump(mode="json"),
+        conformite_check=(
+            bm.conformite_check.model_dump(mode="json")
+            if bm.conformite_check
+            else None
+        ),
+        source="auto",
+    )
+    session.add(bm_row)
+    # Flip project status to "analyzed" so the frontend shows the KPIs.
+    project.status = "analyzed"
+    project.updated_at = datetime.now(UTC)
+    await session.commit()
 
     job_id = str(uuid.uuid4())
-    return AnalyzeJobResponse(job_id=job_id, status="queued")
+    return AnalyzeJobResponse(job_id=job_id, status="completed")
 
 
 @router.get("/{project_id}/analyze/status", response_model=AnalyzeStatusResponse)
