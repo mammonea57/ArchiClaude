@@ -101,7 +101,8 @@ export function NiveauPlan({
         <PalierLayer key={circ.id} circulation={circ} scale={scale} project={project} />
       ))}
 
-      {/* Core (escalier + ascenseur) */}
+      {/* Core (escalier + ascenseur) — flight axis matches the main
+          corridor so the stairs flow naturally into circulation */}
       {corePosition && (
         <CoreLayer
           position={corePosition}
@@ -109,6 +110,7 @@ export function NiveauPlan({
           hasAscenseur={hasAscenseur}
           scale={scale}
           project={project}
+          flightAxis={deduceFlightAxis(corePosition, circulations)}
         />
       )}
 
@@ -689,93 +691,199 @@ function PalierLayer({ circulation, scale, project }: {
   );
 }
 
+function deduceFlightAxis(
+  corePosition: [number, number],
+  circulations: BuildingModelCirculation[],
+): "horizontal" | "vertical" {
+  // The flight axis is the axis along which the stair RUN extends, so that
+  // people walking down the corridor enter the stairs heading in the same
+  // direction. We look at the nearest corridor's aspect ratio.
+  const [cxM, cyM] = corePosition;
+  let best: BuildingModelCirculation | null = null;
+  let bestD = Infinity;
+  for (const c of circulations) {
+    if (!c.polygon_xy || c.polygon_xy.length < 3) continue;
+    const xs = c.polygon_xy.map((p) => p[0]);
+    const ys = c.polygon_xy.map((p) => p[1]);
+    const midX = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const midY = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const d = (midX - cxM) ** 2 + (midY - cyM) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      best = c;
+    }
+  }
+  if (!best) return "horizontal";
+  const xs = best.polygon_xy.map((p) => p[0]);
+  const ys = best.polygon_xy.map((p) => p[1]);
+  const w = Math.max(...xs) - Math.min(...xs);
+  const h = Math.max(...ys) - Math.min(...ys);
+  // Long axis of corridor → flight axis of stairs (same direction).
+  return w >= h ? "horizontal" : "vertical";
+}
+
+
 function CoreLayer({
-  position, surfaceM2, hasAscenseur, scale, project,
+  position,
+  surfaceM2,
+  hasAscenseur,
+  scale,
+  project,
+  flightAxis = "horizontal",
 }: {
   position: [number, number];
   surfaceM2: number;
   hasAscenseur: boolean;
   scale: number;
   project: (c: Coord) => Coord;
+  flightAxis?: "horizontal" | "vertical";
 }) {
   const side = Math.sqrt(surfaceM2);
   const [cxM, cyM] = position;
-  // Decompose core: half = stairs, half = elevator shaft
-  const halfW = side / 2;
-  const stairsX0 = cxM - side / 2;
-  const stairsY0 = cyM - side / 2;
-  const [sx, sy] = project([stairsX0, stairsY0]);
-  const [sx2, sy2] = project([cxM, cyM + side / 2]);
-  const stairW = Math.abs(sx2 - sx);
-  const stairH = Math.abs(sy2 - sy);
-  const [lx, ly] = project([cxM + halfW / 2, cyM]);
-  const [elx, ely] = project([cxM + halfW - 0.5, cyM]);
+  const [sx, sy] = project([cxM - side / 2, cyM - side / 2]);
+  const [sx2, sy2] = project([cxM + side / 2, cyM + side / 2]);
+  const fullW = Math.abs(sx2 - sx);
+  const fullH = Math.abs(sy2 - sy);
+  const [elx, ely] = project([cxM, cyM]);
+
+  const NB_TREADS = 11;
+  const isHorizontal = flightAxis === "horizontal";
+
+  // Layout: stairs occupy ~55% of the core along the flight axis, elevator
+  // the remaining 45%. Stairs sit on the side AWAY from palier entry (the
+  // corridor is visually aligned with the stair flight).
+  const stairFrac = 0.55;
+  const elevFrac = 0.45;
+
+  let stairRect: { x: number; y: number; w: number; h: number };
+  let elevRect: { x: number; y: number; w: number; h: number };
+  if (isHorizontal) {
+    stairRect = { x: sx, y: sy, w: fullW * stairFrac, h: fullH };
+    elevRect = {
+      x: sx + fullW * stairFrac,
+      y: sy + fullH * 0.15,
+      w: fullW * elevFrac * 0.85,
+      h: fullH * 0.7,
+    };
+  } else {
+    stairRect = { x: sx, y: sy, w: fullW, h: fullH * stairFrac };
+    elevRect = {
+      x: sx + fullW * 0.15,
+      y: sy + fullH * stairFrac,
+      w: fullW * 0.7,
+      h: fullH * elevFrac * 0.85,
+    };
+  }
 
   return (
     <g style={{ pointerEvents: "none" }}>
       {/* Stairs rectangle */}
       <rect
-        x={sx}
-        y={sy}
-        width={stairW}
-        height={stairH}
+        x={stairRect.x}
+        y={stairRect.y}
+        width={stairRect.w}
+        height={stairRect.h}
         fill="#e2e8f0"
         stroke="#0f172a"
         strokeWidth={1.4}
       />
-      {/* Stair tread lines */}
-      {Array.from({ length: 11 }).map((_, i) => {
-        const fraction = (i + 0.5) / 11;
+      {/* Stair tread lines — perpendicular to the flight axis */}
+      {Array.from({ length: NB_TREADS }).map((_, i) => {
+        const frac = (i + 0.5) / NB_TREADS;
+        if (isHorizontal) {
+          const x = stairRect.x + stairRect.w * frac;
+          return (
+            <line
+              key={i}
+              x1={x}
+              y1={stairRect.y + 4}
+              x2={x}
+              y2={stairRect.y + stairRect.h - 4}
+              stroke="#475569"
+              strokeWidth={0.5}
+            />
+          );
+        }
+        const y = stairRect.y + stairRect.h * frac;
         return (
           <line
             key={i}
-            x1={sx + stairW * 0.45 * fraction}
-            y1={sy + 4}
-            x2={sx + stairW * 0.45 * fraction}
-            y2={sy + stairH - 4}
+            x1={stairRect.x + 4}
+            y1={y}
+            x2={stairRect.x + stairRect.w - 4}
+            y2={y}
             stroke="#475569"
             strokeWidth={0.5}
           />
         );
       })}
-      {/* Diagonal arrow up */}
-      <path
-        d={`M ${sx + 6} ${sy + stairH - 6} L ${sx + stairW * 0.45 - 2} ${sy + 10}`}
-        stroke="#0f172a"
-        strokeWidth={0.8}
-        markerEnd="url(#arrow-n)"
-      />
-      <text x={sx + 4} y={sy + stairH - 10} fontSize={8} fill="#475569">UP</text>
+      {/* Diagonal UP arrow along flight axis */}
+      {isHorizontal ? (
+        <path
+          d={`M ${stairRect.x + 6} ${stairRect.y + stairRect.h - 6} L ${stairRect.x + stairRect.w - 6} ${stairRect.y + 10}`}
+          stroke="#0f172a"
+          strokeWidth={0.8}
+          markerEnd="url(#arrow-n)"
+        />
+      ) : (
+        <path
+          d={`M ${stairRect.x + stairRect.w - 6} ${stairRect.y + stairRect.h - 6} L ${stairRect.x + 10} ${stairRect.y + 6}`}
+          stroke="#0f172a"
+          strokeWidth={0.8}
+          markerEnd="url(#arrow-n)"
+        />
+      )}
+      <text
+        x={stairRect.x + 4}
+        y={stairRect.y + stairRect.h - 10}
+        fontSize={8}
+        fill="#475569"
+      >
+        UP
+      </text>
 
-      {/* Elevator (right half) */}
+      {/* Elevator (the other half of the core) */}
       {hasAscenseur && (
         <g>
           <rect
-            x={sx + stairW * 0.5}
-            y={sy + stairH * 0.25}
-            width={stairW * 0.45}
-            height={stairH * 0.5}
+            x={elevRect.x}
+            y={elevRect.y}
+            width={elevRect.w}
+            height={elevRect.h}
             fill="#f8fafc"
             stroke="#0f172a"
             strokeWidth={1.2}
           />
           <line
-            x1={sx + stairW * 0.5 + 2}
-            y1={sy + stairH * 0.5}
-            x2={sx + stairW * 0.5 + stairW * 0.45 - 2}
-            y2={sy + stairH * 0.5}
+            x1={elevRect.x + 2}
+            y1={elevRect.y + elevRect.h / 2}
+            x2={elevRect.x + elevRect.w - 2}
+            y2={elevRect.y + elevRect.h / 2}
             stroke="#475569"
             strokeWidth={0.5}
             strokeDasharray="2 2"
           />
-          <text x={elx} y={ely + 3} textAnchor="middle" fontSize={8} fontWeight={700} fill="#334155">
+          <text
+            x={elevRect.x + elevRect.w / 2}
+            y={elevRect.y + elevRect.h / 2 + 3}
+            textAnchor="middle"
+            fontSize={8}
+            fontWeight={700}
+            fill="#334155"
+          >
             ASC
           </text>
         </g>
       )}
 
-      {/* "Escalier" label */}
-      <text x={sx + stairW * 0.22} y={sy + stairH + 12} textAnchor="middle" fontSize={8.5} fill="#475569">
+      {/* "Escalier" label — placed below the stair rectangle */}
+      <text
+        x={stairRect.x + stairRect.w / 2}
+        y={stairRect.y + stairRect.h + 12}
+        textAnchor="middle"
+        fontSize={8.5}
+        fill="#475569"
+      >
         escalier
       </text>
     </g>
