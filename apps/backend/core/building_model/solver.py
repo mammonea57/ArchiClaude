@@ -154,30 +154,59 @@ def _compute_circulation_network(
 
         # Core-adjacent corridor: place along the shared edge so it
         # directly touches the core (no connector cutting through apts).
+        # When the sub-wing is wide enough to be subdivided (2 columns),
+        # we ALSO add a secondary cross-corridor so the OUTER column of
+        # apts has direct circulation access (otherwise they'd only be
+        # reachable by crossing the inner column).
         adj = _core_adjacent_edge(wing, core_bb)
         if adj is not None:
             if adj == "west":
-                # corridor runs vertically at wing's west edge
                 corridor = ShapelyPolygon([
                     (wxmin, wymin), (wxmin + corridor_width, wymin),
                     (wxmin + corridor_width, wymax), (wxmin, wymax),
                 ])
+                sub_perp = ww - corridor_width  # remaining perp across the wing
+                secondary_axis = "horizontal"
             elif adj == "east":
                 corridor = ShapelyPolygon([
                     (wxmax - corridor_width, wymin), (wxmax, wymin),
                     (wxmax, wymax), (wxmax - corridor_width, wymax),
                 ])
+                sub_perp = ww - corridor_width
+                secondary_axis = "horizontal"
             elif adj == "south":
                 corridor = ShapelyPolygon([
                     (wxmin, wymin), (wxmax, wymin),
                     (wxmax, wymin + corridor_width), (wxmin, wymin + corridor_width),
                 ])
+                sub_perp = wh - corridor_width
+                secondary_axis = "vertical"
             else:  # north
                 corridor = ShapelyPolygon([
                     (wxmin, wymax - corridor_width), (wxmax, wymax - corridor_width),
                     (wxmax, wymax), (wxmin, wymax),
                 ])
+                sub_perp = wh - corridor_width
+                secondary_axis = "vertical"
             polys.append(corridor.intersection(footprint))
+            # Add the secondary cross-corridor when the sub-wing is wide
+            # enough to be split in two columns.
+            if sub_perp > 10.0:
+                if secondary_axis == "horizontal":
+                    # Secondary runs horizontally across the sub-wing
+                    # (perpendicular to the main vertical corridor).
+                    cy_mid_sec = (wymin + wymax) / 2
+                    secondary = ShapelyPolygon([
+                        (wxmin, cy_mid_sec - half), (wxmax, cy_mid_sec - half),
+                        (wxmax, cy_mid_sec + half), (wxmin, cy_mid_sec + half),
+                    ])
+                else:
+                    cx_mid_sec = (wxmin + wxmax) / 2
+                    secondary = ShapelyPolygon([
+                        (cx_mid_sec - half, wymin), (cx_mid_sec + half, wymin),
+                        (cx_mid_sec + half, wymax), (cx_mid_sec - half, wymax),
+                    ])
+                polys.append(secondary.intersection(footprint))
             continue
 
         # Fallback: central corridor + connector to core (legacy path for
@@ -518,58 +547,76 @@ def compute_apartment_slots(
         # façades remain accessible.
         adj = _core_adjacent_edge(wing_outer, core_bb_tuple)
         if adj is not None:
+            # For wide sub-wings (> 10 m perpendicular to main corridor),
+            # we add a SECONDARY cross-corridor splitting the sub-wing
+            # into 4 quadrants, so every apt has direct corridor access.
             if adj == "west":
-                sub_wings = [ShapelyPolygon([
-                    (wxmin_o + _CORRIDOR_WIDTH_M, wymin_o),
-                    (wxmax_o, wymin_o),
-                    (wxmax_o, wymax_o),
-                    (wxmin_o + _CORRIDOR_WIDTH_M, wymax_o),
-                ])]
+                base = (wxmin_o + _CORRIDOR_WIDTH_M, wymin_o, wxmax_o, wymax_o)
+                sub_perp = base[2] - base[0]  # horizontal extent
+                sec_axis = "horizontal"
             elif adj == "east":
-                sub_wings = [ShapelyPolygon([
-                    (wxmin_o, wymin_o),
-                    (wxmax_o - _CORRIDOR_WIDTH_M, wymin_o),
-                    (wxmax_o - _CORRIDOR_WIDTH_M, wymax_o),
-                    (wxmin_o, wymax_o),
-                ])]
+                base = (wxmin_o, wymin_o, wxmax_o - _CORRIDOR_WIDTH_M, wymax_o)
+                sub_perp = base[2] - base[0]
+                sec_axis = "horizontal"
             elif adj == "south":
-                sub_wings = [ShapelyPolygon([
-                    (wxmin_o, wymin_o + _CORRIDOR_WIDTH_M),
-                    (wxmax_o, wymin_o + _CORRIDOR_WIDTH_M),
-                    (wxmax_o, wymax_o), (wxmin_o, wymax_o),
-                ])]
+                base = (wxmin_o, wymin_o + _CORRIDOR_WIDTH_M, wxmax_o, wymax_o)
+                sub_perp = base[3] - base[1]
+                sec_axis = "vertical"
             else:  # north
-                sub_wings = [ShapelyPolygon([
-                    (wxmin_o, wymin_o), (wxmax_o, wymin_o),
-                    (wxmax_o, wymax_o - _CORRIDOR_WIDTH_M),
-                    (wxmin_o, wymax_o - _CORRIDOR_WIDTH_M),
-                ])]
-            # For wide core-adjacent sub-wings (>10 m perp to the
-            # corridor), subdivide once more along the corridor axis so
-            # we end up with reasonably-sized apts in a 2×N grid rather
-            # than oversized landlocked T5s.
-            sw = sub_wings[0]
-            sxmin, symin, sxmax, symax = sw.bounds
-            sw_w = sxmax - sxmin
-            sw_h = symax - symin
-            if adj in ("west", "east"):
-                # Corridor runs vertically → sub-wing extends horizontally.
-                # Split along x if too wide.
-                if sw_w > 10.0:
-                    mid = (sxmin + sxmax) / 2
+                base = (wxmin_o, wymin_o, wxmax_o, wymax_o - _CORRIDOR_WIDTH_M)
+                sub_perp = base[3] - base[1]
+                sec_axis = "vertical"
+
+            bxmin, bymin, bxmax, bymax = base
+            has_secondary = sub_perp > 10.0
+            if has_secondary:
+                if sec_axis == "horizontal":
+                    # Secondary runs horizontally; the sub-wing splits
+                    # into 4 quadrants: NW/NE above, SW/SE below the
+                    # secondary. Each sub-wing's inner edge sits AT the
+                    # secondary corridor so an apt's wall is on it.
+                    cy_mid_sec = (bymin + bymax) / 2
+                    south_s = (bxmin, bymin, bxmax, cy_mid_sec - _CORRIDOR_WIDTH_M / 2)
+                    north_s = (bxmin, cy_mid_sec + _CORRIDOR_WIDTH_M / 2, bxmax, bymax)
+                    # Each of south_s / north_s split further along x
+                    mid_x = (bxmin + bxmax) / 2
                     sub_wings = [
-                        ShapelyPolygon([(sxmin, symin), (mid, symin), (mid, symax), (sxmin, symax)]),
-                        ShapelyPolygon([(mid, symin), (sxmax, symin), (sxmax, symax), (mid, symax)]),
+                        ShapelyPolygon([
+                            (south_s[0], south_s[1]), (mid_x, south_s[1]),
+                            (mid_x, south_s[3]), (south_s[0], south_s[3]),
+                        ]),
+                        ShapelyPolygon([
+                            (mid_x, south_s[1]), (south_s[2], south_s[1]),
+                            (south_s[2], south_s[3]), (mid_x, south_s[3]),
+                        ]),
+                        ShapelyPolygon([
+                            (north_s[0], north_s[1]), (mid_x, north_s[1]),
+                            (mid_x, north_s[3]), (north_s[0], north_s[3]),
+                        ]),
+                        ShapelyPolygon([
+                            (mid_x, north_s[1]), (north_s[2], north_s[1]),
+                            (north_s[2], north_s[3]), (mid_x, north_s[3]),
+                        ]),
+                    ]
+                else:
+                    cx_mid_sec = (bxmin + bxmax) / 2
+                    west_s = (bxmin, bymin, cx_mid_sec - _CORRIDOR_WIDTH_M / 2, bymax)
+                    east_s = (cx_mid_sec + _CORRIDOR_WIDTH_M / 2, bymin, bxmax, bymax)
+                    mid_y = (bymin + bymax) / 2
+                    sub_wings = [
+                        ShapelyPolygon([(west_s[0], west_s[1]), (west_s[2], west_s[1]),
+                                        (west_s[2], mid_y), (west_s[0], mid_y)]),
+                        ShapelyPolygon([(west_s[0], mid_y), (west_s[2], mid_y),
+                                        (west_s[2], west_s[3]), (west_s[0], west_s[3])]),
+                        ShapelyPolygon([(east_s[0], east_s[1]), (east_s[2], east_s[1]),
+                                        (east_s[2], mid_y), (east_s[0], mid_y)]),
+                        ShapelyPolygon([(east_s[0], mid_y), (east_s[2], mid_y),
+                                        (east_s[2], east_s[3]), (east_s[0], east_s[3])]),
                     ]
             else:
-                # Corridor horizontal → sub-wing extends vertically; split
-                # along y if too tall.
-                if sw_h > 10.0:
-                    mid = (symin + symax) / 2
-                    sub_wings = [
-                        ShapelyPolygon([(sxmin, symin), (sxmax, symin), (sxmax, mid), (sxmin, mid)]),
-                        ShapelyPolygon([(sxmin, mid), (sxmax, mid), (sxmax, symax), (sxmin, symax)]),
-                    ]
+                sub_wings = [ShapelyPolygon([
+                    (bxmin, bymin), (bxmax, bymin), (bxmax, bymax), (bxmin, bymax),
+                ])]
         else:
             # Legacy: dual-loaded central corridor splits the wing into two
             # parallel strips when it's deep enough; shallow wings stay as

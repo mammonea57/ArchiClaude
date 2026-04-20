@@ -563,33 +563,66 @@ def _emit_wing_corridors(
         ww = wxmax - wxmin
         wh = wymax - wymin
 
-        # Core-adjacent wing: put the corridor along the shared edge.
+        # Core-adjacent wing: put the corridor along the shared edge,
+        # plus a secondary cross-corridor if the sub-wing is wide
+        # enough to host a 2×N grid of apts (so every apt has direct
+        # corridor access, not just the inner column).
         adj = _core_adjacent_edge(wing, tuple(core_bb))
         if adj is not None:
             if adj == "west":
-                corridor_poly = ShapelyPoly([
+                main = ShapelyPoly([
                     (wxmin, wymin), (wxmin + _CORRIDOR_WIDTH_M, wymin),
                     (wxmin + _CORRIDOR_WIDTH_M, wymax), (wxmin, wymax),
-                ]).intersection(footprint)
+                ])
+                sub_perp = ww - _CORRIDOR_WIDTH_M
+                sec_axis = "horizontal"
             elif adj == "east":
-                corridor_poly = ShapelyPoly([
+                main = ShapelyPoly([
                     (wxmax - _CORRIDOR_WIDTH_M, wymin), (wxmax, wymin),
                     (wxmax, wymax), (wxmax - _CORRIDOR_WIDTH_M, wymax),
-                ]).intersection(footprint)
+                ])
+                sub_perp = ww - _CORRIDOR_WIDTH_M
+                sec_axis = "horizontal"
             elif adj == "south":
-                corridor_poly = ShapelyPoly([
+                main = ShapelyPoly([
                     (wxmin, wymin), (wxmax, wymin),
                     (wxmax, wymin + _CORRIDOR_WIDTH_M), (wxmin, wymin + _CORRIDOR_WIDTH_M),
-                ]).intersection(footprint)
-            else:  # north
-                corridor_poly = ShapelyPoly([
+                ])
+                sub_perp = wh - _CORRIDOR_WIDTH_M
+                sec_axis = "vertical"
+            else:
+                main = ShapelyPoly([
                     (wxmin, wymax - _CORRIDOR_WIDTH_M), (wxmax, wymax - _CORRIDOR_WIDTH_M),
                     (wxmax, wymax), (wxmin, wymax),
-                ]).intersection(footprint)
-            corridor_poly = corridor_poly.difference(core.polygon)
+                ])
+                sub_perp = wh - _CORRIDOR_WIDTH_M
+                sec_axis = "vertical"
+
+            # Secondary corridor — run across the wing if needed
+            if sub_perp > 10.0:
+                if sec_axis == "horizontal":
+                    cy_mid_sec = (wymin + wymax) / 2
+                    secondary = ShapelyPoly([
+                        (wxmin, cy_mid_sec - half), (wxmax, cy_mid_sec - half),
+                        (wxmax, cy_mid_sec + half), (wxmin, cy_mid_sec + half),
+                    ])
+                else:
+                    cx_mid_sec = (wxmin + wxmax) / 2
+                    secondary = ShapelyPoly([
+                        (cx_mid_sec - half, wymin), (cx_mid_sec + half, wymin),
+                        (cx_mid_sec + half, wymax), (cx_mid_sec - half, wymax),
+                    ])
+                combined = main.union(secondary)
+            else:
+                combined = main
+
+            corridor_poly = combined.intersection(footprint).difference(core.polygon)
             if corridor_poly.is_empty:
                 continue
             if corridor_poly.geom_type == "MultiPolygon":
+                # Emit the largest sub-polygon as the couloir; smaller
+                # disconnected pieces would be pockets of circulation.
+                # But here the T-shape should be connected.
                 corridor_poly = max(corridor_poly.geoms, key=lambda g: g.area)
             coords = list(corridor_poly.exterior.coords)[:-1]
             corridors.append(Circulation(
