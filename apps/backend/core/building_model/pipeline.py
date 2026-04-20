@@ -453,19 +453,30 @@ def _fill_pockets_with_apts(
         if best_d > 1.5:
             continue
 
+        # Infer orientations of the pocket slot from the footprint boundary,
+        # same criterion the solver uses for regular slots. Drop the pocket
+        # if it turns out to be landlocked (no exterior façade) — we don't
+        # want to emit an unsellable apartment just to fill empty space.
+        from core.building_model.solver import _infer_orientations
+        rect_poly = ShapelyPoly([
+            (rxmin, rymin), (rxmax, rymin),
+            (rxmax, rymax), (rxmin, rymax),
+        ])
+        pocket_orients = _infer_orientations(rect_poly, footprint, voirie_side)
+        if not pocket_orients:
+            continue
+
         slot_id = f"pocket_R{niveau_idx}_{p_idx}"
         try:
             rooms, _, _, actual_palier = generate_apartment(
                 slot_bounds=(rxmin, rymin, rxmax, rymax),
                 typologie=typo,
-                orientations=[],
+                orientations=pocket_orients,
                 slot_id=slot_id,
                 template_id="pocket_infill",
             )
         except Exception:
             continue
-        # Override palier_side with the one we inferred from the adjacent
-        # circulation (generate_apartment picks based on orientations)
         walls, openings = build_walls_and_openings(
             rooms,
             (rxmin, rymin, rxmax, rymax),
@@ -481,7 +492,7 @@ def _fill_pockets_with_apts(
             surface_m2=sum(r.surface_m2 for r in rooms),
             polygon_xy=[(rxmin, rymin), (rxmax, rymin),
                         (rxmax, rymax), (rxmin, rymax)],
-            orientation=[],
+            orientation=pocket_orients,
             template_id="pocket_infill",
             rooms=rooms,
             walls=walls,
