@@ -820,18 +820,40 @@ async def generate_building_model(
         ]
         circulations.extend(_emit_wing_corridors(idx, core, footprint, cells_for_niveau))
 
-        # RDC only: add an ENTRY HALL that touches the voirie-facing wall so
-        # the main door opens into circulation (never into an apt wall). The
-        # hall runs from the voirie wall to the nearest corridor / core.
+        # RDC: no dedicated entry hall. Instead we rely on an existing
+        # wing corridor that naturally reaches the voirie wall (e.g.
+        # couloir_w0 whose south end touches y=voirie in an L-shape).
+        # Dropping the hall recovers the apt slots the hall used to carve.
+        # The frontend MainEntrance picks whichever circulation reaches
+        # voirie and places the door at that corridor's x-midpoint.
         if is_rdc:
-            entry_hall = _build_entry_hall(
-                footprint, core, circulations, voirie_side=voirie,
-            )
-            if entry_hall is not None:
-                circulations.append(entry_hall)
-                # The hall overlaps one or more apt rectangles — carve it out
-                # of every cellule so nothing stays under the lobby.
-                _carve_circulations_from_cells(cells_for_niveau, [entry_hall])
+            # Ensure at least one existing corridor actually touches the
+            # voirie wall. If none does (rectangular footprint with the
+            # corridor centred), fall back to the old hall so the door
+            # still opens into circulation.
+            from shapely.geometry import Polygon as ShapelyPoly
+            fxmin, fymin, fxmax, fymax = footprint.bounds
+            voirie_threshold = 0.35
+            def _reaches_voirie(c):
+                if len(c.polygon_xy) < 3:
+                    return False
+                xs = [p[0] for p in c.polygon_xy]
+                ys = [p[1] for p in c.polygon_xy]
+                if voirie == "sud":
+                    return abs(min(ys) - fymin) < voirie_threshold
+                if voirie == "nord":
+                    return abs(max(ys) - fymax) < voirie_threshold
+                if voirie == "ouest":
+                    return abs(min(xs) - fxmin) < voirie_threshold
+                return abs(max(xs) - fxmax) < voirie_threshold
+            if not any(_reaches_voirie(c) for c in circulations):
+                # No natural corridor reaches voirie — keep the hall fallback
+                entry_hall = _build_entry_hall(
+                    footprint, core, circulations, voirie_side=voirie,
+                )
+                if entry_hall is not None:
+                    circulations.append(entry_hall)
+                    _carve_circulations_from_cells(cells_for_niveau, [entry_hall])
 
         # Densify: any empty pocket ≥ 40 m² that sits against a circulation
         # becomes a new apartment. Without this step, carving leaves wasted
