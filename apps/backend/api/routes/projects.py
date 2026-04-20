@@ -244,69 +244,146 @@ async def analyze_project(
             detail={"step": step, "message": message},
         )
 
-    # --- Step 1: geocode the project address + validate ---------------------
-    address = project.name
-    try:
-        results = await geocode(address, limit=3)
-    except Exception as exc:  # noqa: BLE001
-        _fail_422("geocoding.fetch", f"BAN geocoding failed: {exc}")
-    if not results:
-        _fail_422(
-            "geocoding.no_result",
-            f"Adresse introuvable via BAN : « {address} ». "
-            "Vérifie le nom du projet — il doit être une adresse postale complète.",
-        )
-    geo = results[0]
-    try:
-        run_checks_or_raise("Geocoding", validate_geocoding(
-            label=geo.label, score=geo.score, lat=geo.lat, lng=geo.lng,
-            postcode=geo.postcode, citycode=geo.citycode,
-        ))
-    except ValidationError as ve:
-        _fail_422(ve.step, ve.message)
+    # --- Step 1-2: resolve the project's terrain --------------------------
+    # PRIORITY 1: the frontend has already selected parcels on the map and
+    # attached them to the brief. Multiple parcels = explicit fusion intent,
+    # we union them with shapely. No geocoding needed in this path.
+    # PRIORITY 2 (fallback, legacy): geocode the project's name to find an
+    # address → cadastre IGN → single parcel.
+    from shapely.ops import unary_union
+    selected_parcels_raw = brief_dict.get("parcelles_selectionnees") or []
 
-    # --- Step 2: fetch the cadastral parcel + validate ----------------------
-    # BAN typically returns a point on the street — not always inside the
-    # parcel. Try the geocoded point first, then progressively offset 5, 10,
-    # 15 m in the 4 cardinals, then the diagonals. ≈ 1 deg lat ≈ 111 km so
-    # 5 m ≈ 4.5e-5 deg; we use ±6e-5 as our first offset (~7 m).
-    offsets_deg: list[tuple[float, float]] = [
-        (0.0, 0.0),
-        (6e-5, 0.0), (-6e-5, 0.0), (0.0, 6e-5), (0.0, -6e-5),
-        (1.2e-4, 0.0), (-1.2e-4, 0.0), (0.0, 1.2e-4), (0.0, -1.2e-4),
-        (6e-5, 6e-5), (-6e-5, 6e-5), (6e-5, -6e-5), (-6e-5, -6e-5),
-        (1.8e-4, 0.0), (-1.8e-4, 0.0), (0.0, 1.8e-4), (0.0, -1.8e-4),
-    ]
-    parcelle = None
-    tried_points: list[tuple[float, float]] = []
-    for dlat, dlng in offsets_deg:
-        try_lat = geo.lat + dlat
-        try_lng = geo.lng + dlng
-        tried_points.append((try_lat, try_lng))
+    class _GeoStub:
+        label = ""; score = 1.0; lat = 0.0; lng = 0.0
+        postcode = None; citycode = None; city = None
+    geo = _GeoStub()
+
+    if selected_parcels_raw:
+        # Collate geometries + shared commune. When multiple parcels are
+        # selected we FUSE them (unary_union) into a single polygon. If the
+        # result is a MultiPolygon (non-adjacent parcels), keep the largest
+        # but surface a warning so the user can fix the selection.
+        geoms = []
+        contenance_sum = 0
+        first_meta = None
+        for rp in selected_parcels_raw:
+            g = rp.get("geometry")
+            if not isinstance(g, dict) or not g.get("coordinates"):
+                continue
+            try:
+                geoms.append(shapely_shape(g))
+            except Exception:
+                continue
+            if rp.get("contenance_m2"):
+                contenance_sum += int(rp["contenance_m2"])
+            if first_meta is None:
+                first_meta = rp
+        if not geoms:
+            _fail_422(
+                "cadastre.no_parcel",
+                "Aucune parcelle valide dans la sélection (geometries manquantes ou invalides).",
+            )
+        fused = unary_union(geoms)
+        fusion_warning = None
+        if fused.geom_type == "MultiPolygon":
+            # Parcels aren't adjacent — keep largest but warn.
+            parts = sorted(fused.geoms, key=lambda g: -g.area)
+            largest = parts[0]
+            others_area = sum(p.area for p in parts[1:])
+            fusion_warning = (
+                f"Parcelles sélectionnées non-adjacentes : seule la plus grande "
+                f"({largest.area:.0f} m²) est prise en compte, {others_area:.0f} m² "
+                "ignorés. Vérifie la contiguïté de tes parcelles."
+            )
+            fused = largest
+        terrain_geojson = mapping(fused)
+        computed_area = polygon_area_m2(fused)
+        # The frontend passed shapely-fetched geometries — we can skip the
+        # cadastre validation "contenance" check since we don't have a
+        # unified cadastral contenance for the fusion. We still validate
+        # geometry + min surface.
         try:
-            parcelle = await fetch_parcelle_at_point(lat=try_lat, lng=try_lng)
+            run_checks_or_raise("Cadastre", validate_cadastre(
+                geometry=terrain_geojson,
+                contenance_m2=contenance_sum if contenance_sum > 0 else None,
+                computed_area_m2=computed_area,
+                max_delta_pct=0.25,  # tolerate more slack on fusion sum
+            ))
+        except ValidationError as ve:
+            _fail_422(ve.step, ve.message)
+        terrain_surface_m2 = float(contenance_sum or computed_area)
+        # Commune comes from the first parcel's metadata (they must share
+        # a commune — if not, warn rather than fail).
+        if first_meta:
+            geo.city = first_meta.get("commune") or ""
+        # Try to extract postcode/citycode by geocoding the project name
+        # (best-effort, used for PLU + SRU lookup).
+        try:
+            grs = await geocode(project.name, limit=1)
+            if grs:
+                geo.citycode = grs[0].citycode
+                geo.postcode = grs[0].postcode
+                if not geo.city:
+                    geo.city = grs[0].city
+                geo.label = grs[0].label
+                geo.lat = grs[0].lat
+                geo.lng = grs[0].lng
+        except Exception:
+            pass  # PLU fallback will still work with commune name alone
+    else:
+        # Legacy path: geocode the project name and fetch a single cadastral
+        # parcel at that point (with offset retries).
+        try:
+            results = await geocode(project.name, limit=3)
         except Exception as exc:  # noqa: BLE001
-            _fail_422("cadastre.fetch", f"Cadastre IGN fetch failed: {exc}")
-        if parcelle is not None and parcelle.geometry:
-            break
-    if parcelle is None:
-        _fail_422(
-            "cadastre.no_parcel",
-            f"Aucune parcelle cadastrale trouvée à proximité de "
-            f"({geo.lat:.5f}, {geo.lng:.5f}) pour « {geo.label} » "
-            f"(essayé {len(tried_points)} points dans un rayon de ~20 m).",
-        )
-    terrain_geojson = parcelle.geometry
-    computed_area = polygon_area_m2(shapely_shape(terrain_geojson))
-    try:
-        run_checks_or_raise("Cadastre", validate_cadastre(
-            geometry=terrain_geojson,
-            contenance_m2=parcelle.contenance_m2,
-            computed_area_m2=computed_area,
-        ))
-    except ValidationError as ve:
-        _fail_422(ve.step, ve.message)
-    terrain_surface_m2 = float(parcelle.contenance_m2 or computed_area)
+            _fail_422("geocoding.fetch", f"BAN geocoding failed: {exc}")
+        if not results:
+            _fail_422(
+                "geocoding.no_result",
+                f"Adresse introuvable via BAN : « {project.name} ». "
+                "Sélectionne les parcelles sur la carte ou vérifie l'adresse du projet.",
+            )
+        geo = results[0]
+        try:
+            run_checks_or_raise("Geocoding", validate_geocoding(
+                label=geo.label, score=geo.score, lat=geo.lat, lng=geo.lng,
+                postcode=geo.postcode, citycode=geo.citycode,
+            ))
+        except ValidationError as ve:
+            _fail_422(ve.step, ve.message)
+        offsets_deg: list[tuple[float, float]] = [
+            (0.0, 0.0),
+            (6e-5, 0.0), (-6e-5, 0.0), (0.0, 6e-5), (0.0, -6e-5),
+            (1.2e-4, 0.0), (-1.2e-4, 0.0), (0.0, 1.2e-4), (0.0, -1.2e-4),
+            (6e-5, 6e-5), (-6e-5, 6e-5), (6e-5, -6e-5), (-6e-5, -6e-5),
+            (1.8e-4, 0.0), (-1.8e-4, 0.0), (0.0, 1.8e-4), (0.0, -1.8e-4),
+        ]
+        parcelle = None
+        for dlat, dlng in offsets_deg:
+            try:
+                parcelle = await fetch_parcelle_at_point(lat=geo.lat + dlat, lng=geo.lng + dlng)
+            except Exception as exc:  # noqa: BLE001
+                _fail_422("cadastre.fetch", f"Cadastre IGN fetch failed: {exc}")
+            if parcelle is not None and parcelle.geometry:
+                break
+        if parcelle is None:
+            _fail_422(
+                "cadastre.no_parcel",
+                f"Aucune parcelle cadastrale trouvée à proximité de « {geo.label} ». "
+                "Sélectionne directement les parcelles sur la carte.",
+            )
+        terrain_geojson = parcelle.geometry
+        computed_area = polygon_area_m2(shapely_shape(terrain_geojson))
+        try:
+            run_checks_or_raise("Cadastre", validate_cadastre(
+                geometry=terrain_geojson,
+                contenance_m2=parcelle.contenance_m2,
+                computed_area_m2=computed_area,
+            ))
+        except ValidationError as ve:
+            _fail_422(ve.step, ve.message)
+        terrain_surface_m2 = float(parcelle.contenance_m2 or computed_area)
+        fusion_warning = None
 
     # --- Step 3: PLU rules per commune + validate ---------------------------
     plu_rules = _default_plu_rules_for_commune(geo.city, geo.postcode)
@@ -442,10 +519,23 @@ async def analyze_project(
     session.add(bm_row)
     project.status = "analyzed"
     project.updated_at = datetime.now(UTC)
-    # Record the geocoded / cadastral findings back into the brief so the
-    # bilan and other routes can reuse them without re-fetching.
+    # Record the resolved findings back into the brief so the bilan and
+    # other routes can reuse them without re-fetching. Keep only a compact
+    # summary of the selected parcels (refs + contenance) — the full
+    # geometries live on disk in the BM row.
+    selected_summary = [
+        {
+            "section": rp.get("section"),
+            "numero": rp.get("numero"),
+            "code_insee": rp.get("code_insee"),
+            "commune": rp.get("commune"),
+            "contenance_m2": rp.get("contenance_m2"),
+        }
+        for rp in selected_parcels_raw
+    ]
     project.brief = {
         **brief_dict,
+        "parcelles_selectionnees_refs": selected_summary,
         "address_resolved": geo.label,
         "commune": geo.city,
         "codeinsee": geo.citycode,
@@ -456,7 +546,11 @@ async def analyze_project(
         "nb_logements_max": feas.nb_logements_max,
         "nb_niveaux_max": feas.nb_niveaux,
         "emprise_pct_real": emprise_pct_real,
+        "fusion_warning": fusion_warning,
+        "n_parcelles_fusees": len(selected_parcels_raw),
     }
+    # Remove the raw geometries from the brief to keep the DB row small.
+    project.brief.pop("parcelles_selectionnees", None)
     await session.commit()
 
     job_id = str(uuid.uuid4())

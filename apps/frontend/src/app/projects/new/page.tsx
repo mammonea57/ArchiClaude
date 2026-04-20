@@ -107,9 +107,25 @@ export default function NewProjectPage() {
         ? (selectedResult.label.length > 80 ? selectedResult.label.slice(0, 80) : selectedResult.label)
         : `Projet ${selectedParcels.length} parcelles`;
 
+      // Attach the selected parcels to the brief so the backend's
+      // analyze endpoint fuses them (shapely unary_union) instead of
+      // re-fetching a single parcel via the address geocoder. Multiple
+      // selected parcels = explicit fusion intent.
+      const briefWithParcels = {
+        ...brief,
+        parcelles_selectionnees: selectedParcels.map((p) => ({
+          section: p.section,
+          numero: p.numero,
+          code_insee: p.code_insee,
+          commune: p.commune,
+          contenance_m2: p.contenance_m2,
+          geometry: p.geometry,
+        })),
+      };
+
       const project = await apiFetch<CreateProjectResponse>("/projects", {
         method: "POST",
-        body: JSON.stringify({ name: projectName, brief }),
+        body: JSON.stringify({ name: projectName, brief: briefWithParcels }),
       });
 
       await apiFetch<AnalyzeResponse>(`/projects/${project.id}/analyze`, {
