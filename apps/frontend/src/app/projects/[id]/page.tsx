@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FeasibilityDashboard, type KPI } from "@/components/panels/FeasibilityDashboard";
 import { ServitudesList, type Alert } from "@/components/panels/ServitudesList";
-import { ArrowLeft, FileText, LayoutGrid } from "lucide-react";
+import { ArrowLeft, Calculator, FileText, LayoutGrid } from "lucide-react";
 import type { Project, BuildingModelRow, BuildingModelPayload } from "@/lib/types";
 
 function statusLabel(status: Project["status"]): string {
@@ -174,6 +174,12 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
                     <Button variant="outline" className="gap-2 font-medium">
                       <LayoutGrid className="h-4 w-4" />
                       Plans
+                    </Button>
+                  </Link>
+                  <Link href={`/projects/${id}/bilan`}>
+                    <Button variant="outline" className="gap-2 font-medium">
+                      <Calculator className="h-4 w-4" />
+                      Bilan
                     </Button>
                   </Link>
                   <Link href={`/projects/${id}/report`}>

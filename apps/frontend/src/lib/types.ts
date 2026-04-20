@@ -165,3 +165,79 @@ export interface BuildingModelRow {
   source: string;
   dirty: boolean;
 }
+
+// --- Bilan promoteur (GET /projects/{id}/feasibility/bilan) ---
+
+export interface BilanPoste {
+  libelle: string;
+  base: number;
+  taux_ou_unitaire: number | string;
+  montant_ht: number;
+  tva_pct: number;
+  montant_tva: number;
+  montant_ttc: number;
+}
+
+export interface BilanChapitre {
+  nom: string;
+  postes: BilanPoste[];
+  total_ht: number;
+  total_tva: number;
+  total_ttc: number;
+  pct_depenses_ht: number;
+}
+
+export interface BilanRecettes {
+  libre_surface_m2: number;
+  libre_prix_ht_m2: number;
+  libre_ht: number;
+  libre_ttc: number;
+  social_surface_m2: number;
+  social_prix_ht_m2: number;
+  social_ht: number;
+  social_ttc: number;
+  commerce_surface_m2: number;
+  commerce_prix_ht_m2: number;
+  commerce_ht: number;
+  commerce_ttc: number;
+  total_ht: number;
+  total_ttc: number;
+  prix_m2_shab_moyen_ht: number;
+}
+
+export interface BilanProgramme {
+  terrain_m2: number;
+  ces: number;
+  sdp_m2: number;
+  rendement_plan_shab_sur_sdp: number;
+  shab_libre_m2: number;
+  shab_social_m2: number;
+  shab_commerce_m2: number;
+  nb_parkings_ss_sol: number;
+  nb_parkings_exterieurs: number;
+  duree_chantier_mois: number;
+}
+
+export interface BilanResult {
+  programme: BilanProgramme;
+  recettes: BilanRecettes;
+  foncier: BilanChapitre;
+  travaux: BilanChapitre;
+  honoraires: BilanChapitre;
+  assurances: BilanChapitre;
+  commercialisation: BilanChapitre;
+  gestion_financiere: BilanChapitre;
+  imprevus: BilanChapitre;
+  depenses_total_ht: number;
+  depenses_total_ttc: number;
+  tva_sur_ventes: number;
+  tva_deductible: number;
+  tva_residuelle: number;
+  marge_ht: number;
+  marge_ttc: number;
+  marge_pct_ht: number;
+  marge_pct_ttc: number;
+  charge_fonciere_max_ht: number;
+  warnings: string[];
+  option_label: string;
+}
