@@ -935,36 +935,56 @@ function MainEntrance({
   const hall = reaching.find((c) => (c.id ?? "").toLowerCase().startsWith("hall_"));
   const perpIsX = voirieSide === "sud" || voirieSide === "nord";
   const coreKey = perpIsX ? cxM : cyM;
-  const midAlongPerp = (c: BuildingModelCirculation) => {
-    const vals = c.polygon_xy.map((p) => (perpIsX ? p[0] : p[1]));
+  // The door must land INSIDE the corridor at the voirie edge. Using the
+  // full polygon bbox can be misleading when the corridor is T-shaped
+  // (narrow at voirie, wider further in for a connector). We therefore
+  // take only the vertices actually sitting on the voirie wall and
+  // midpoint THOSE — the resulting x is guaranteed to be inside the
+  // polygon's voirie strip.
+  const boundaryEps = 0.4;
+  const midAtVoirie = (c: BuildingModelCirculation): number | null => {
+    const pts = c.polygon_xy.filter((p) => {
+      if (voirieSide === "sud") return Math.abs(p[1] - box.miny) < boundaryEps;
+      if (voirieSide === "nord") return Math.abs(p[1] - box.maxy) < boundaryEps;
+      if (voirieSide === "ouest") return Math.abs(p[0] - box.minx) < boundaryEps;
+      return Math.abs(p[0] - box.maxx) < boundaryEps;
+    });
+    if (pts.length < 2) return null;
+    const vals = pts.map((p) => (perpIsX ? p[0] : p[1]));
     return (Math.min(...vals) + Math.max(...vals)) / 2;
   };
   let chosen: BuildingModelCirculation | null = hall ?? null;
   if (!chosen && reaching.length > 0) {
-    chosen = [...reaching].sort(
-      (a, b) => Math.abs(midAlongPerp(a) - coreKey) - Math.abs(midAlongPerp(b) - coreKey),
-    )[0];
+    const sortable = reaching
+      .map((c) => ({ c, mid: midAtVoirie(c) }))
+      .filter((e): e is { c: BuildingModelCirculation; mid: number } => e.mid !== null);
+    if (sortable.length > 0) {
+      sortable.sort((a, b) => Math.abs(a.mid - coreKey) - Math.abs(b.mid - coreKey));
+      chosen = sortable[0].c;
+    }
   }
+
+  const chosenMid = chosen ? midAtVoirie(chosen) : null;
 
   if (voirieSide === "sud") {
     doorMy = box.miny;
     arrowDy = -1;
-    doorMx = chosen ? midAlongPerp(chosen) : cxM;
+    doorMx = chosenMid ?? cxM;
   } else if (voirieSide === "nord") {
     doorMy = box.maxy;
     arrowDy = 1;
-    doorMx = chosen ? midAlongPerp(chosen) : cxM;
+    doorMx = chosenMid ?? cxM;
   } else if (voirieSide === "est") {
     doorMx = box.maxx;
     arrowDx = 1;
     arrowDy = 0;
-    doorMy = chosen ? midAlongPerp(chosen) : cyM;
+    doorMy = chosenMid ?? cyM;
   } else {
     // ouest
     doorMx = box.minx;
     arrowDx = -1;
     arrowDy = 0;
-    doorMy = chosen ? midAlongPerp(chosen) : cyM;
+    doorMy = chosenMid ?? cyM;
   }
 
   const [dx, dy] = project([doorMx, doorMy]);
