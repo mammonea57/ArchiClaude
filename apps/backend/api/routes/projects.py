@@ -283,19 +283,43 @@ async def analyze_project(
                 "cadastre.no_parcel",
                 "Aucune parcelle valide dans la sélection (geometries manquantes ou invalides).",
             )
+        # Strict union first. If it's already a single polygon, we're done.
         fused = unary_union(geoms)
         fusion_warning = None
         if fused.geom_type == "MultiPolygon":
-            # Parcels aren't adjacent — keep largest but warn.
-            parts = sorted(fused.geoms, key=lambda g: -g.area)
-            largest = parts[0]
-            others_area = sum(p.area for p in parts[1:])
-            fusion_warning = (
-                f"Parcelles sélectionnées non-adjacentes : seule la plus grande "
-                f"({largest.area:.0f} m²) est prise en compte, {others_area:.0f} m² "
-                "ignorés. Vérifie la contiguïté de tes parcelles."
-            )
-            fused = largest
+            # Parcels look non-adjacent — but the IGN cadastre sometimes
+            # has a thin gap (trottoir, petit passage, alignement) between
+            # otherwise-contiguous parcels. Retry with a 2 m buffer so
+            # parcels separated by ≤ 2 m count as one operation.
+            from shapely.geometry import mapping as _map  # local alias
+            # Reproject to a metric CRS for a meaningful buffer.
+            from core.geo.surface import _reproject as _rp
+            geoms_l93 = [_rp(g, "EPSG:4326", "EPSG:2154") for g in geoms]
+            buffered = [g.buffer(2.0) for g in geoms_l93]
+            merged_l93 = unary_union(buffered)
+            if merged_l93.geom_type == "Polygon":
+                # Shrink back by 2 m to recover a clean outline close to
+                # the original parcels' union without the buffer padding.
+                outline_l93 = merged_l93.buffer(-2.0)
+                if not outline_l93.is_empty:
+                    outline_wgs = _rp(outline_l93, "EPSG:2154", "EPSG:4326")
+                    fused = outline_wgs
+                    fusion_warning = (
+                        f"{len(selected_parcels_raw)} parcelles fusionnées "
+                        "avec tolérance 2 m (trottoir/passage entre elles)."
+                    )
+            if fused.geom_type == "MultiPolygon":
+                parts = sorted(fused.geoms, key=lambda g: -g.area)
+                largest = parts[0]
+                others_area = sum(p.area for p in parts[1:])
+                fusion_warning = (
+                    f"Parcelles sélectionnées non-adjacentes même avec "
+                    f"tolérance 2 m : seule la plus grande "
+                    f"({largest.area:.0f} m²) est prise en compte, "
+                    f"{others_area:.0f} m² ignorés. "
+                    "Vérifie ta sélection sur la carte."
+                )
+                fused = largest
         terrain_geojson = mapping(fused)
         computed_area = polygon_area_m2(fused)
         # The frontend passed shapely-fetched geometries — we can skip the
