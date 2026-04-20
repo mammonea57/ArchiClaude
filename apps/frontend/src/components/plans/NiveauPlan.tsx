@@ -928,37 +928,54 @@ function MainEntrance({
     return false;
   };
 
-  const reaching = circulations.filter((c) => touches(c, voirieSide));
-  if (reaching.length > 0) {
-    // Among the circulations reaching voirie, prefer the lobby (id
-    // starting with "hall_") — we add one on RDC precisely to hit the
-    // voirie wall at the core's axis. Otherwise pick the one whose
-    // perpendicular midpoint is closest to the core so the door lands
-    // aligned with the stairs, not at an arbitrary corridor end that
-    // happens to touch voirie via a connector.
-    const hall = reaching.find((c) =>
-      (c.id ?? "").toLowerCase().startsWith("hall_"),
-    );
-    const perpAxis = voirieSide === "sud" || voirieSide === "nord" ? "x" : "y";
-    const coreKey = perpAxis === "x" ? cxM : cyM;
-    const sortKey = (c: BuildingModelCirculation) => {
-      const coords = c.polygon_xy.map((p) => (perpAxis === "x" ? p[0] : p[1]));
-      const mid = (Math.min(...coords) + Math.max(...coords)) / 2;
-      return Math.abs(mid - coreKey);
-    };
-    const ci = hall ?? [...reaching].sort((a, b) => sortKey(a) - sortKey(b))[0];
-    const xs = ci.polygon_xy.map((p) => p[0]);
-    const ys = ci.polygon_xy.map((p) => p[1]);
-    if (voirieSide === "sud")      { doorMx = (Math.min(...xs) + Math.max(...xs)) / 2; doorMy = box.miny; arrowDy = -1; }
-    else if (voirieSide === "nord") { doorMx = (Math.min(...xs) + Math.max(...xs)) / 2; doorMy = box.maxy; arrowDy = 1; }
-    else if (voirieSide === "est")  { doorMy = (Math.min(...ys) + Math.max(...ys)) / 2; doorMx = box.maxx; arrowDx = 1; arrowDy = 0; }
-    else                            { doorMy = (Math.min(...ys) + Math.max(...ys)) / 2; doorMx = box.minx; arrowDx = -1; arrowDy = 0; }
+  // The main door always lands at the core's projection onto the voirie
+  // wall — this guarantees visual alignment with the stairs regardless of
+  // whether the BM has a dedicated hall circulation. If a lobby exists
+  // (hall_ prefix), use its exact mid-x (identical by design) for jitter
+  // resistance; otherwise fall back to the core's own cx/cy.
+  const hall = circulations.find((c) =>
+    (c.id ?? "").toLowerCase().startsWith("hall_") &&
+    touches(c, voirieSide),
+  );
+  if (voirieSide === "sud") {
+    doorMy = box.miny;
+    arrowDy = -1;
+    if (hall) {
+      const hxs = hall.polygon_xy.map((p) => p[0]);
+      doorMx = (Math.min(...hxs) + Math.max(...hxs)) / 2;
+    } else {
+      doorMx = cxM;
+    }
+  } else if (voirieSide === "nord") {
+    doorMy = box.maxy;
+    arrowDy = 1;
+    if (hall) {
+      const hxs = hall.polygon_xy.map((p) => p[0]);
+      doorMx = (Math.min(...hxs) + Math.max(...hxs)) / 2;
+    } else {
+      doorMx = cxM;
+    }
+  } else if (voirieSide === "est") {
+    doorMx = box.maxx;
+    arrowDx = 1;
+    arrowDy = 0;
+    if (hall) {
+      const hys = hall.polygon_xy.map((p) => p[1]);
+      doorMy = (Math.min(...hys) + Math.max(...hys)) / 2;
+    } else {
+      doorMy = cyM;
+    }
   } else {
-    // Fallback: align with core (old behaviour)
-    if (voirieSide === "sud") { doorMy = box.miny; arrowDy = -1; }
-    else if (voirieSide === "nord") { doorMy = box.maxy; arrowDy = 1; }
-    else if (voirieSide === "est") { doorMx = box.maxx; arrowDx = 1; arrowDy = 0; }
-    else { doorMx = box.minx; arrowDx = -1; arrowDy = 0; }
+    // ouest
+    doorMx = box.minx;
+    arrowDx = -1;
+    arrowDy = 0;
+    if (hall) {
+      const hys = hall.polygon_xy.map((p) => p[1]);
+      doorMy = (Math.min(...hys) + Math.max(...hys)) / 2;
+    } else {
+      doorMy = cyM;
+    }
   }
 
   const [dx, dy] = project([doorMx, doorMy]);
