@@ -2,7 +2,7 @@
 
 import { use, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Download, Expand, X } from "lucide-react";
+import { ArrowLeft, Download, Expand } from "lucide-react";
 import { useBuildingModel } from "@/lib/hooks/useBuildingModel";
 import { useFeasibility } from "@/lib/hooks/useFeasibility";
 import { NiveauPlan } from "@/components/plans/NiveauPlan";
@@ -10,7 +10,7 @@ import { PlanMasse } from "@/components/plans/PlanMasse";
 import { CoupeElevation } from "@/components/plans/CoupeElevation";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
-  Dialog, DialogContent, DialogTitle, DialogClose,
+  Dialog, DialogContent, DialogTitle,
 } from "@/components/ui/dialog";
 import type { BuildingModelNiveau } from "@/lib/types";
 
@@ -236,7 +236,7 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
         <DialogContent
           className="max-w-[95vw] w-[95vw] max-h-[95vh] p-0 overflow-hidden"
         >
-          <div className="flex items-center justify-between px-6 py-3 border-b border-slate-100 bg-white">
+          <div className="flex items-center px-6 py-3 border-b border-slate-100 bg-white">
             <DialogTitle className="text-base font-semibold">
               {openNiveau ? `Plan ${openNiveau.code}` : "Plan"}
               {openNiveau && (
@@ -245,9 +245,8 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
                 </span>
               )}
             </DialogTitle>
-            <DialogClose className="p-1.5 rounded hover:bg-slate-100">
-              <X className="h-4 w-4" />
-            </DialogClose>
+            {/* DialogContent already renders a built-in close button in the
+                top-right — adding another here would show two crosses. */}
           </div>
           <div className="overflow-auto max-h-[calc(95vh-56px)] bg-slate-50 p-6 flex justify-center">
             {openNiveau && buildingModel && (

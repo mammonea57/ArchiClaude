@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from sqlalchemy import select
 
 from api.deps import CurrentUserDep
@@ -85,6 +85,29 @@ async def get_project(
         brief=row.brief,
         status=row.status,
     )
+
+
+@router.delete("/{project_id}")
+async def delete_project(
+    project_id: str,
+    session: SessionDep,
+) -> Response:
+    """Permanently delete a project and all its related rows.
+
+    FKs on dependent tables (building_models, pcmi_dossiers, pcmi6_renders,
+    project_status_history, project_versions) use ``ondelete="CASCADE"``
+    so deleting the parent row cascades automatically.
+    """
+    try:
+        pid = uuid.UUID(project_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Project not found") from None
+    project = await session.get(ProjectRow, pid)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    await session.delete(project)
+    await session.commit()
+    return Response(status_code=204)
 
 
 @router.post("/{project_id}/analyze", status_code=202, response_model=AnalyzeJobResponse)

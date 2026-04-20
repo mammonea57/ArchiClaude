@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { use } from "react";
+import { use, useState } from "react";
 import { useFeasibility } from "@/lib/hooks/useFeasibility";
 import { useBuildingModel } from "@/lib/hooks/useBuildingModel";
+import { apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FeasibilityDashboard, type KPI } from "@/components/panels/FeasibilityDashboard";
 import { ServitudesList, type Alert } from "@/components/panels/ServitudesList";
-import { ArrowLeft, Calculator, FileText, LayoutGrid } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, Calculator, FileText, LayoutGrid, Play, Loader2, Trash2 } from "lucide-react";
 import type { Project, BuildingModelRow, BuildingModelPayload } from "@/lib/types";
 
 function statusLabel(status: Project["status"]): string {
@@ -108,8 +110,40 @@ function buildAlerts(bm: BuildingModelRow | null): Alert[] {
 
 export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const router = useRouter();
   const { project, loading, error } = useFeasibility(id);
   const { buildingModel, notFound: bmNotFound } = useBuildingModel(id);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function handleAnalyze() {
+    setAnalyzing(true);
+    setActionError(null);
+    try {
+      await apiFetch(`/projects/${id}/analyze`, { method: "POST" });
+      // Reload to show the freshly-generated BM + analyzed status.
+      window.location.reload();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Erreur lors de l'analyse");
+      setAnalyzing(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!confirm("Supprimer ce projet ? Cette action est irréversible et effacera tous les plans et bilans associés.")) {
+      return;
+    }
+    setDeleting(true);
+    setActionError(null);
+    try {
+      await apiFetch(`/projects/${id}`, { method: "DELETE" });
+      router.push("/projects");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Erreur lors de la suppression");
+      setDeleting(false);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -168,32 +202,73 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
                 )}
               </div>
 
-              {project.status === "analyzed" && (
-                <div className="flex gap-2 flex-wrap">
-                  <Link href={`/projects/${id}/plans`}>
-                    <Button variant="outline" className="gap-2 font-medium">
-                      <LayoutGrid className="h-4 w-4" />
-                      Plans
-                    </Button>
-                  </Link>
-                  <Link href={`/projects/${id}/bilan`}>
-                    <Button variant="outline" className="gap-2 font-medium">
-                      <Calculator className="h-4 w-4" />
-                      Bilan
-                    </Button>
-                  </Link>
-                  <Link href={`/projects/${id}/report`}>
-                    <Button
-                      className="gap-2 text-white font-medium"
-                      style={{ backgroundColor: "var(--ac-primary)" }}
-                    >
-                      <FileText className="h-4 w-4" />
-                      Voir le rapport
-                    </Button>
-                  </Link>
-                </div>
-              )}
+              <div className="flex gap-2 flex-wrap">
+                {project.status !== "analyzed" && (
+                  <Button
+                    className="gap-2 text-white font-medium"
+                    onClick={handleAnalyze}
+                    disabled={analyzing}
+                    style={{ backgroundColor: "var(--ac-primary)" }}
+                  >
+                    {analyzing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Analyse en cours…
+                      </>
+                    ) : (
+                      <>
+                        <Play className="h-4 w-4" />
+                        Lancer l&apos;analyse
+                      </>
+                    )}
+                  </Button>
+                )}
+                {project.status === "analyzed" && (
+                  <>
+                    <Link href={`/projects/${id}/plans`}>
+                      <Button variant="outline" className="gap-2 font-medium">
+                        <LayoutGrid className="h-4 w-4" />
+                        Plans
+                      </Button>
+                    </Link>
+                    <Link href={`/projects/${id}/bilan`}>
+                      <Button variant="outline" className="gap-2 font-medium">
+                        <Calculator className="h-4 w-4" />
+                        Bilan
+                      </Button>
+                    </Link>
+                    <Link href={`/projects/${id}/report`}>
+                      <Button
+                        className="gap-2 text-white font-medium"
+                        style={{ backgroundColor: "var(--ac-primary)" }}
+                      >
+                        <FileText className="h-4 w-4" />
+                        Voir le rapport
+                      </Button>
+                    </Link>
+                  </>
+                )}
+                <Button
+                  variant="outline"
+                  className="gap-2 font-medium"
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  style={{ color: "#b91c1c", borderColor: "#fca5a5" }}
+                >
+                  {deleting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  Supprimer
+                </Button>
+              </div>
             </div>
+            {actionError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {actionError}
+              </div>
+            )}
 
             {/* KPI Dashboard */}
             {project.status === "analyzed" ? (
