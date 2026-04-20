@@ -66,56 +66,27 @@ _CORRIDOR_WIDTH_M = 1.6
 def _mix_for_floor(
     base_mix: dict[str, float], floor_idx: int, nb_floors: int,
 ) -> dict["Typologie", float]:
-    """Vary the typology mix floor-by-floor — DISCRETE buckets.
+    """Return the typology mix for a given floor.
 
-    Real residential buildings stack distinct floor types:
-      - RDC      : T2 dominant (smaller, easier to sell / rent)
-      - R+1..2   : T3 dominant (family standard, balanced market)
-      - R+3..n-2 : T4 dominant (larger family, higher price/m²)
-      - Top floor: T5 / duplex (premium, views, rooftop setbacks)
+    2026-04 simplification: use the brief's base_mix IDENTICALLY on
+    every floor. The previous per-floor bucket system (RDC=T2 dominant,
+    top=T5 dominant, etc.) caused floors to have 0 apts when their
+    bucket produced slots either too small to survive hall carving
+    (RDC, T2 under 40 m² threshold) or too large to fit the wing
+    depth (top, T5 needing ≥ 10 m depth).
 
-    Each floor thus shows a distinct visual + commercial character.
-    The TOTAL across floors still approximates the brief's base_mix via
-    the count balance between floor types.
+    Architectural variation per floor (penthouse vs RDC commercial)
+    is a feature to re-introduce later once the base case is stable.
     """
-    # Which mix bucket does this floor belong to?
-    if nb_floors <= 1:
-        bucket = "standard"
-    elif floor_idx == 0:
-        bucket = "rdc"
-    elif floor_idx == nb_floors - 1:
-        bucket = "top"
-    elif floor_idx <= (nb_floors - 1) // 3:
-        bucket = "low"
-    elif floor_idx >= 2 * (nb_floors - 1) // 3:
-        bucket = "high"
-    else:
-        bucket = "mid"
-
-    # Bucket → target mix (covers T2 → T5)
-    buckets: dict[str, dict[Typologie, float]] = {
-        "rdc":       {Typologie.T2: 0.55, Typologie.T3: 0.45},
-        "low":       {Typologie.T2: 0.30, Typologie.T3: 0.60, Typologie.T4: 0.10},
-        "mid":       {Typologie.T3: 0.60, Typologie.T4: 0.40},
-        "high":      {Typologie.T3: 0.25, Typologie.T4: 0.55, Typologie.T5: 0.20},
-        "top":       {Typologie.T4: 0.40, Typologie.T5: 0.60},
-        "standard":  {Typologie(k): v for k, v in base_mix.items()},
-    }
-    result = buckets[bucket]
-    # Keep only typologies present in the original brief (don't invent)
-    allowed = {Typologie(k) for k, v in base_mix.items() if v > 0}
-    if allowed:
-        filtered = {t: v for t, v in result.items() if t in allowed}
-        if filtered:
-            result = filtered
-        else:
-            # No overlap — fall back to the brief mix unchanged
-            result = {Typologie(k): v for k, v in base_mix.items()}
-    # Renormalise
+    _ = floor_idx, nb_floors  # unused in the simplified version
+    result = {Typologie(k): v for k, v in base_mix.items() if v > 0}
+    if not result:
+        result = {
+            Typologie.T2: 0.25, Typologie.T3: 0.35,
+            Typologie.T4: 0.25, Typologie.T5: 0.15,
+        }
     total = sum(result.values())
-    if total > 0:
-        result = {k: v / total for k, v in result.items()}
-    return result
+    return {k: v / total for k, v in result.items()}
 
 
 def _relocate_entries_to_corridor(

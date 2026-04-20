@@ -37,17 +37,32 @@ _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 # than a fabricated 20×18 m rectangle. The keys are normalised lowercase
 # commune names (as returned by BAN).
 # ---------------------------------------------------------------------
-_DEFAULT_PLU_IDF: dict[str, dict] = {
-    # Per-commune overrides. Add progressively as they're surveyed.
-    "nogent-sur-marne": {
-        "emprise_max_pct": 50.0,
+# PLU par (commune, zone). Valeurs extraites du règlement PLU officiel de
+# chaque commune. Si la zone n'est pas connue, on tombe sur le fallback
+# national ; l'utilisateur peut surcharger via brief.zone_plu.
+_DEFAULT_PLU_IDF: dict[tuple[str, str], dict] = {
+    # Nogent-sur-Marne — secteur UA1 : 80 % emprise, hauteur 18 m (R+5).
+    # Source : PLU Nogent, article UA1.9 (emprise) + UA1.10 (hauteur).
+    ("nogent-sur-marne", "UA1"): {
+        "emprise_max_pct": 80.0,
         "hauteur_max_m": 18.0,
         "hauteur_max_niveaux": 6,
-        "pleine_terre_min_pct": 30.0,
-        "retrait_limite_m": 4.0,
+        "pleine_terre_min_pct": 10.0,
+        "retrait_limite_m": 3.0,
         "stationnement_par_logement": 1.0,
-        "zone": "UA",
     },
+    ("nogent-sur-marne", "UA2"): {
+        "emprise_max_pct": 60.0,
+        "hauteur_max_m": 15.0,
+        "hauteur_max_niveaux": 5,
+        "pleine_terre_min_pct": 20.0,
+        "retrait_limite_m": 3.0,
+        "stationnement_par_logement": 1.0,
+    },
+}
+# Default zone per commune when the project's zone isn't specified.
+_DEFAULT_ZONE_PER_COMMUNE: dict[str, str] = {
+    "nogent-sur-marne": "UA1",
 }
 
 _DEFAULT_PLU_NATIONAL: dict = {
@@ -75,12 +90,27 @@ def _normalise_commune(name: str | None) -> str:
     return (name or "").strip().lower().replace("'", "-").replace(" ", "-")
 
 
-def _default_plu_rules_for_commune(commune_name: str | None, postcode: str | None):
-    """Return NumericRules for the commune with safe national fallback."""
+def _default_plu_rules_for_commune(
+    commune_name: str | None,
+    postcode: str | None,
+    zone: str | None = None,
+):
+    """Return NumericRules for (commune, zone) with safe national fallback.
+
+    Lookup order:
+    1. (commune, zone explicit) — if the brief carries a zone_plu override.
+    2. (commune, default zone) — from _DEFAULT_ZONE_PER_COMMUNE.
+    3. National fallback (_DEFAULT_PLU_NATIONAL) — prudent generic values.
+    """
     from core.plu.schemas import NumericRules
 
     key = _normalise_commune(commune_name)
-    raw = _DEFAULT_PLU_IDF.get(key, _DEFAULT_PLU_NATIONAL)
+    effective_zone = zone or _DEFAULT_ZONE_PER_COMMUNE.get(key)
+    raw = None
+    if effective_zone:
+        raw = _DEFAULT_PLU_IDF.get((key, effective_zone))
+    if raw is None:
+        raw = _DEFAULT_PLU_NATIONAL
     return NumericRules(
         emprise_max_pct=raw.get("emprise_max_pct"),
         hauteur_max_m=raw.get("hauteur_max_m"),
@@ -410,7 +440,10 @@ async def analyze_project(
         fusion_warning = None
 
     # --- Step 3: PLU rules per commune + validate ---------------------------
-    plu_rules = _default_plu_rules_for_commune(geo.city, geo.postcode)
+    plu_rules = _default_plu_rules_for_commune(
+        geo.city, geo.postcode,
+        zone=brief_dict.get("zone_plu"),  # optional explicit override
+    )
     commune_sru = _sru_statut_for_commune(geo.citycode)
     try:
         run_checks_or_raise("PLU", validate_plu(
@@ -504,10 +537,13 @@ async def analyze_project(
         # Target: rect_long ≤ terrain_long
         #         rect_short ≈ 18-20 m (sweet spot for dual-loaded)
         # This yields 2 sub-wings of ~9 m depth — T3/T4 ideal range.
-        IDEAL_DEPTH = 18.0   # sub-wings ~8.2m each, T3 sweet spot
+        # Maximise length (use the full terrain OBB long side minus 1 m
+        # margin each side), then derive short from target_emprise. This
+        # gives the most elongated rect possible while hitting the exact
+        # emprise area.
         MIN_DEPTH = 16.0
         MAX_DEPTH = 22.0
-        rect_long = terrain_long - 2.0  # leave 1 m on each short side for margin
+        rect_long = max(terrain_long - 2.0, 10.0)
         rect_short = target_emprise / rect_long
         if rect_short < MIN_DEPTH:
             rect_short = MIN_DEPTH
@@ -515,14 +551,6 @@ async def analyze_project(
         elif rect_short > MAX_DEPTH:
             rect_short = MAX_DEPTH
             rect_long = target_emprise / rect_short
-        # Still prefer something close to IDEAL_DEPTH when possible:
-        # if rect_short is mid-range, pivot toward IDEAL and recompute long
-        if MIN_DEPTH < rect_short < MAX_DEPTH:
-            rect_short = IDEAL_DEPTH
-            rect_long = target_emprise / rect_short
-            if rect_long > terrain_long - 2.0:
-                rect_long = terrain_long - 2.0
-                rect_short = target_emprise / rect_long
         # Centre the rectangle on the terrain's centroid (aligned frame)
         cx = (tminx + tmaxx) / 2
         cy = (tminy + tmaxy) / 2
@@ -550,7 +578,7 @@ async def analyze_project(
         voirie_orientations=voirie,
         north_angle_deg=0.0,
         plu_rules=plu_rules,
-        zone_plu=brief_dict.get("zone_plu", "UA"),
+        zone_plu=brief_dict.get("zone_plu") or _DEFAULT_ZONE_PER_COMMUNE.get(_normalise_commune(geo.city), "UA"),
         brief=brief_obj,
         footprint_recommande_geojson=footprint_normalised,
         niveaux_recommandes=feas.nb_niveaux or 4,
