@@ -597,18 +597,25 @@ def compute_bilan(
     non_foncier_ht = depenses_total_ht - foncier.total_ht
     charge_fonciere_max_ht = recettes.total_ht - non_foncier_ht
 
+    # Seuil bancaire dur : les banques refusent de financer une opération
+    # dont la marge HT est < 12 %. En dessous → opération non finançable.
+    BANK_MIN_MARGE_HT = 0.12
     warnings: list[str] = []
-    if marge_pct_ht < 0.08:
+    if marge_pct_ht < BANK_MIN_MARGE_HT:
+        gap_eur = (BANK_MIN_MARGE_HT * recettes.total_ht) - marge_ht
         warnings.append(
-            f"Marge HT {marge_pct_ht:.1%} < 8% — opération à risque pour un promoteur"
+            f"Marge HT {marge_pct_ht:.1%} < 12 % — NON FINANÇABLE par les banques. "
+            f"Manque {gap_eur:,.0f} € pour atteindre le seuil bancaire (12 %)."
+            .replace(",", " ")
         )
     if marge_pct_ht > 0.30:
         warnings.append(
-            f"Marge HT {marge_pct_ht:.1%} > 30% — vérifier les prix de vente"
+            f"Marge HT {marge_pct_ht:.1%} > 30 % — vérifier les prix de vente "
+            "(surestimation probable)"
         )
     if programme.shab_total_m2 / programme.sdp_m2 < 0.80:
         warnings.append(
-            "Rendement plan SHAB/SDP < 80% — inefficace, revoir le plan"
+            "Rendement plan SHAB/SDP < 80 % — inefficace, revoir le plan"
         )
 
     return BilanResult(

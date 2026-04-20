@@ -27,18 +27,20 @@ function fmtM2(n: number): string {
 }
 
 function MargeBadge({ pct }: { pct: number }) {
-  const isGood = pct >= 0.12;
-  const isWarn = pct >= 0.08 && pct < 0.12;
-  const bg = isGood ? "#dcfce7" : isWarn ? "#fef3c7" : "#fee2e2";
-  const color = isGood ? "#15803d" : isWarn ? "#a16207" : "#b91c1c";
-  const Icon = isGood ? TrendingUp : TrendingDown;
+  // Seuil bancaire : 12 % minimum, sinon opération non finançable.
+  const isBankable = pct >= 0.12;
+  const bg = isBankable ? "#dcfce7" : "#fee2e2";
+  const color = isBankable ? "#15803d" : "#b91c1c";
+  const Icon = isBankable ? TrendingUp : TrendingDown;
   return (
     <div
       className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold"
       style={{ backgroundColor: bg, color }}
+      title={isBankable ? "Finançable par les banques" : "Non finançable — marge < 12 %"}
     >
       <Icon className="h-3.5 w-3.5" />
       Marge HT {fmtPct(pct)}
+      {!isBankable && <span className="ml-1 text-xs font-normal">(seuil 12 %)</span>}
     </div>
   );
 }

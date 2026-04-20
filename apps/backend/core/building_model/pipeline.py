@@ -121,10 +121,21 @@ def _mix_for_floor(
 def _relocate_entries_to_corridor(
     cells: list[Cellule], circulations: list[Circulation],
 ) -> None:
-    """Replace each apt's porte_entree with one on the wall closest to a
-    circulation polygon. Called after the solver + adapter so it uses the
-    real placed geometry."""
-    from core.building_model.schemas import Opening, OpeningType, Wall, WallType
+    """Place each apt's porte_entree on the wall of the ENTREE room
+    that faces the nearest corridor.
+
+    The door must land INSIDE the apt's entrée room — never on a bathroom
+    or bedroom wall. We find the ENTREE room's bbox, identify which of its
+    sides is closest to a circulation polygon, and place the door at the
+    midpoint of that side.
+    """
+    from core.building_model.schemas import (
+        Opening,
+        OpeningType,
+        RoomType,
+        Wall,
+        WallType,
+    )
     from shapely.geometry import Polygon as ShapelyPoly
 
     if not circulations:
@@ -140,35 +151,48 @@ def _relocate_entries_to_corridor(
         if apt.type != CelluleType.LOGEMENT or not apt.polygon_xy:
             continue
         apt_poly = ShapelyPoly(apt.polygon_xy)
-        # Find closest circulation polygon to this apt
         closest = min(circ_polys, key=lambda p: p.distance(apt_poly))
-        # Compute the apt's bbox sides and see which one is closest to the
-        # circulation
-        xs = [p[0] for p in apt.polygon_xy]
-        ys = [p[1] for p in apt.polygon_xy]
-        minx, miny, maxx, maxy = min(xs), min(ys), max(xs), max(ys)
-        # Test each side's midpoint distance to closest circulation
+
+        # Prefer the ENTREE room's bbox. If missing, fall back to the apt
+        # bbox (keeps backward-compatible behaviour for apts without an
+        # explicit entrée — e.g. small studios).
+        entree = next(
+            (r for r in apt.rooms if r.type == RoomType.ENTREE and r.polygon_xy),
+            None,
+        )
+        if entree is not None:
+            xs_r = [p[0] for p in entree.polygon_xy]
+            ys_r = [p[1] for p in entree.polygon_xy]
+        else:
+            xs_r = [p[0] for p in apt.polygon_xy]
+            ys_r = [p[1] for p in apt.polygon_xy]
+        r_minx, r_miny, r_maxx, r_maxy = min(xs_r), min(ys_r), max(xs_r), max(ys_r)
+
+        # Test each side of the entree room against the closest circulation
         from shapely.geometry import Point
         sides = {
-            "sud":   Point((minx + maxx) / 2, miny),
-            "nord":  Point((minx + maxx) / 2, maxy),
-            "ouest": Point(minx, (miny + maxy) / 2),
-            "est":   Point(maxx, (miny + maxy) / 2),
+            "sud":   Point((r_minx + r_maxx) / 2, r_miny),
+            "nord":  Point((r_minx + r_maxx) / 2, r_maxy),
+            "ouest": Point(r_minx, (r_miny + r_maxy) / 2),
+            "est":   Point(r_maxx, (r_miny + r_maxy) / 2),
         }
         best_side = min(sides.keys(), key=lambda s: sides[s].distance(closest))
 
         # Remove existing porte_entree(s)
-        apt.openings = [op for op in apt.openings if op.type != OpeningType.PORTE_ENTREE]
+        apt.openings = [
+            op for op in apt.openings if op.type != OpeningType.PORTE_ENTREE
+        ]
 
-        # Build/find the wall on that side
+        # Build a wall along the ENTREE room's corridor-facing side. The door
+        # will live on this wall, guaranteed to be inside the entrée room.
         if best_side == "sud":
-            p0, p1 = (minx, miny), (maxx, miny)
+            p0, p1 = (r_minx, r_miny), (r_maxx, r_miny)
         elif best_side == "nord":
-            p0, p1 = (minx, maxy), (maxx, maxy)
+            p0, p1 = (r_minx, r_maxy), (r_maxx, r_maxy)
         elif best_side == "ouest":
-            p0, p1 = (minx, miny), (minx, maxy)
-        else:
-            p0, p1 = (maxx, miny), (maxx, maxy)
+            p0, p1 = (r_minx, r_miny), (r_minx, r_maxy)
+        else:  # est
+            p0, p1 = (r_maxx, r_miny), (r_maxx, r_maxy)
 
         wall_id = f"{apt.id}_w_corridor"
         apt.walls.append(Wall(
@@ -179,7 +203,9 @@ def _relocate_entries_to_corridor(
             hauteur_cm=260,
             materiau="beton_banche",
         ))
-        wall_len_cm = int(((p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2) ** 0.5 * 100)
+        wall_len_cm = int(
+            ((p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2) ** 0.5 * 100
+        )
         apt.openings.append(Opening(
             id=f"{apt.id}_op_entree",
             type=OpeningType.PORTE_ENTREE,
@@ -190,6 +216,129 @@ def _relocate_entries_to_corridor(
             allege_cm=None,
             swing="interior_right",
         ))
+
+
+_ENTRY_HALL_WIDTH_M = 3.0   # lobby visible depth
+_ENTRY_HALL_DEPTH_M = 4.0   # hall reaches in from voirie wall
+
+
+def _build_entry_hall(
+    footprint,
+    core,
+    circulations: list[Circulation],
+    *,
+    voirie_side: str,
+) -> Circulation | None:
+    """Build a lobby polygon that touches the voirie-facing wall.
+
+    The hall is a ~3 m × 4 m rectangle placed against the voirie edge of the
+    footprint, aligned with the core on the perpendicular axis. It is then
+    extended to reach the core + the nearest corridor so the main door always
+    opens into an unbroken circulation network.
+    """
+    from shapely.geometry import Polygon as ShapelyPoly
+
+    if footprint.is_empty:
+        return None
+    fxmin, fymin, fxmax, fymax = footprint.bounds
+    core_cx, core_cy = core.position_xy
+    half_w = _ENTRY_HALL_WIDTH_M / 2
+
+    # 1. Initial hall rectangle sitting against the voirie wall
+    if voirie_side == "sud":
+        hall = ShapelyPoly([
+            (core_cx - half_w, fymin),
+            (core_cx + half_w, fymin),
+            (core_cx + half_w, fymin + _ENTRY_HALL_DEPTH_M),
+            (core_cx - half_w, fymin + _ENTRY_HALL_DEPTH_M),
+        ])
+        # Extend towards the core if core is further north than the initial hall
+        extend_to = max(core_cy, fymin + _ENTRY_HALL_DEPTH_M)
+        hall = ShapelyPoly([
+            (core_cx - half_w, fymin),
+            (core_cx + half_w, fymin),
+            (core_cx + half_w, extend_to),
+            (core_cx - half_w, extend_to),
+        ])
+    elif voirie_side == "nord":
+        extend_to = min(core_cy, fymax - _ENTRY_HALL_DEPTH_M)
+        hall = ShapelyPoly([
+            (core_cx - half_w, extend_to),
+            (core_cx + half_w, extend_to),
+            (core_cx + half_w, fymax),
+            (core_cx - half_w, fymax),
+        ])
+    elif voirie_side == "est":
+        extend_to = min(core_cx, fxmax - _ENTRY_HALL_DEPTH_M)
+        hall = ShapelyPoly([
+            (extend_to, core_cy - half_w),
+            (fxmax, core_cy - half_w),
+            (fxmax, core_cy + half_w),
+            (extend_to, core_cy + half_w),
+        ])
+    else:  # ouest
+        extend_to = max(core_cx, fxmin + _ENTRY_HALL_DEPTH_M)
+        hall = ShapelyPoly([
+            (fxmin, core_cy - half_w),
+            (extend_to, core_cy - half_w),
+            (extend_to, core_cy + half_w),
+            (fxmin, core_cy + half_w),
+        ])
+
+    hall = hall.intersection(footprint)
+    if hall.is_empty:
+        return None
+    # Merge with the core so the hall reaches the stairs block
+    hall = hall.union(core.polygon.buffer(0.02))
+    hall = hall.difference(core.polygon)
+    if hall.geom_type == "MultiPolygon":
+        hall = max(hall.geoms, key=lambda g: g.area)
+    if hall.is_empty or hall.area < 2.0:
+        return None
+
+    _ = circulations  # could later be used to bridge to an existing corridor
+    coords = list(hall.exterior.coords)[:-1]
+    return Circulation(
+        id="hall_entree_RDC",
+        polygon_xy=coords,
+        surface_m2=hall.area,
+        largeur_min_cm=int(_ENTRY_HALL_WIDTH_M * 100),
+    )
+
+
+def _carve_circulations_from_cells(
+    cells: list[Cellule],
+    new_circulations: list[Circulation],
+) -> None:
+    """Subtract every circulation polygon from every apt polygon in place.
+
+    Apts whose area shrinks below 20 m² are dropped (lobby ate them).
+    """
+    from shapely.geometry import Polygon as ShapelyPoly
+
+    circ_polys = [
+        ShapelyPoly(c.polygon_xy) for c in new_circulations if len(c.polygon_xy) >= 3
+    ]
+    if not circ_polys:
+        return
+    survivors: list[Cellule] = []
+    for apt in cells:
+        if not apt.polygon_xy or len(apt.polygon_xy) < 3:
+            survivors.append(apt)
+            continue
+        poly = ShapelyPoly(apt.polygon_xy)
+        for cp in circ_polys:
+            poly = poly.difference(cp)
+        if poly.is_empty or poly.area < 20.0:
+            # Dropped — lobby ate the whole apt; solver will just have one
+            # fewer logement on RDC, which is fine.
+            continue
+        if poly.geom_type == "MultiPolygon":
+            poly = max(poly.geoms, key=lambda g: g.area)
+        apt.polygon_xy = list(poly.exterior.coords)[:-1]
+        apt.surface_m2 = poly.area
+        survivors.append(apt)
+    cells[:] = survivors
 
 
 def _emit_wing_corridors(
@@ -405,6 +554,19 @@ async def generate_building_model(
             ),
         ]
         circulations.extend(_emit_wing_corridors(idx, core, footprint, cells_for_niveau))
+
+        # RDC only: add an ENTRY HALL that touches the voirie-facing wall so
+        # the main door opens into circulation (never into an apt wall). The
+        # hall runs from the voirie wall to the nearest corridor / core.
+        if is_rdc:
+            entry_hall = _build_entry_hall(
+                footprint, core, circulations, voirie_side=voirie,
+            )
+            if entry_hall is not None:
+                circulations.append(entry_hall)
+                # The hall overlaps one or more apt rectangles — carve it out
+                # of every cellule so nothing stays under the lobby.
+                _carve_circulations_from_cells(cells_for_niveau, [entry_hall])
 
         # Relocate every apt's porte_entree onto the wall CLOSEST to a
         # circulation polygon. This guarantees entries open onto corridors,

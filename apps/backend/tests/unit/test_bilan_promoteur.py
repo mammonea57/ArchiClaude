@@ -157,7 +157,16 @@ def test_charge_fonciere_coherent(nogent_programme, nogent_inputs):
     assert b.charge_fonciere_max_ht > b.foncier.total_ht
 
 
-def test_warnings_on_negative_margin(nogent_programme, nogent_inputs):
+def test_warnings_on_non_bankable_margin(nogent_programme, nogent_inputs):
+    """Marge < 12 % → opération non finançable, warning explicite avec gap €."""
     inp = nogent_inputs.model_copy(update={"prix_vente_ht_libre_eur_m2_shab": 3000.0})
     b = compute_bilan(nogent_programme, inp)
-    assert any("risque" in w.lower() for w in b.warnings)
+    assert b.marge_pct_ht < 0.12
+    assert any("NON FINAN" in w.upper() for w in b.warnings)
+
+
+def test_bankable_margin_no_warning(nogent_programme, nogent_inputs):
+    """Nogent Opt1 est à 15,18 % > 12 % donc PAS de warning non-finançable."""
+    b = compute_bilan(nogent_programme, nogent_inputs, option_label="opt1")
+    assert b.marge_pct_ht >= 0.12
+    assert not any("NON FINAN" in w.upper() for w in b.warnings)
