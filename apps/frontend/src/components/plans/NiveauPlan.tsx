@@ -1109,29 +1109,30 @@ function CoreLayer({
   onSelectCoreSide?: (el: "escalier" | "ascenseur" | "palier", side: "nord" | "sud" | "est" | "ouest") => void;
   selectedCoreSide?: { el: "escalier" | "ascenseur" | "palier"; side: string } | null;
 }) {
-  // Layout convention (user spec, maximises usable space + exterior views):
-  //   Top 62 % : escalier (left 58 %) + ASC (right 42 %)
-  //   Bottom 38 % : palier strip (landing that connects to the corridor
-  //                  AND to the voirie-facing hall)
-  // This replaces the previous "whole core = palier with stairs inside"
-  // rendering so the palier is actually a distinct landing zone at the
-  // south of the core (adjacent to the hall) and the stairs/ASC sit on
-  // the north side.
+  // Layout convention — 3 distinct blocks with visible gaps (no touching
+  // edges, no "gros patté"):
+  //   South strip : palier (28 % height, 92 % width centered)
+  //   North top-left : escalier (60 % height, 46 % width)
+  //   North top-right : ASC (52 % height, 40 % width)
+  // Inter-block gaps ≥ 0.06 s so walls read separately in the render.
   const side = Math.sqrt(surfaceM2);
   const [cxM, cyM] = position;
 
-  // Element sizes in world meters (consistent across plans)
-  const STAIR_W_M = side * 0.58;
-  const STAIR_H_M = side * 0.62;
-  const ASC_W_M = side * 0.42;
-  const ASC_H_M = side * 0.40;
-  const PAL_W_M = side;
-  const PAL_H_M = side * 0.38;
+  // Element sizes in world meters — each strictly smaller than its zone so
+  // a gap appears between blocks.
+  const STAIR_W_M = side * 0.46;
+  const STAIR_H_M = side * 0.60;
+  const ASC_W_M = side * 0.40;
+  const ASC_H_M = side * 0.52;
+  const PAL_W_M = side * 0.92;
+  const PAL_H_M = side * 0.28;
 
-  // Default centers relative to core center (match legacy layout)
-  const defStairC: [number, number] = [cxM - side * 0.21, cyM + side * 0.19];
-  const defAscC: [number, number] = [cxM + side * 0.29, cyM + side * 0.19];
-  const defPalC: [number, number] = [cxM, cyM - side * 0.19];
+  // Default centers: palier at south, escalier top-left, ASC top-right.
+  // Gap between palier↔(escalier|ASC) = 0.06 s  (y-axis).
+  // Gap between escalier↔ASC          = 0.06 s  (x-axis).
+  const defStairC: [number, number] = [cxM - side * 0.24, cyM + side * 0.17];
+  const defAscC: [number, number] = [cxM + side * 0.27, cyM + side * 0.21];
+  const defPalC: [number, number] = [cxM, cyM - side * 0.34];
 
   const stairC = escalierCenter ?? defStairC;
   const ascC = ascCenter ?? defAscC;
