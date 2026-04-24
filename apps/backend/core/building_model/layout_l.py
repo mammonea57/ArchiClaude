@@ -322,13 +322,16 @@ def slice_quadrant_into_apts(
     if depth <= 0 or long_len <= 0:
         return []
 
-    # Target apt width along the long axis
-    target_width = max(_MIN_APT_WIDTH_M, target_surface / max(depth, 1.0))
-    # Number of apts that fit
-    n_apts = max(1, int(long_len / target_width))
+    # Number of apts = round(total area / target surface).
+    # This matches the quadrant's real capacity better than width-based
+    # counting: a 91 m² quadrant targeted at T2 (48 m²) gets 2 slots
+    # (~45 m² each), not 1 oversized slot that would be rejected by the
+    # template adapter.
+    total_area = long_len * depth
+    n_apts = max(1, round(total_area / target_surface))
     actual_width = long_len / n_apts
-    # Drop if slivers
-    if actual_width < _MIN_APT_WIDTH_M:
+    # Slivers: if rounding produced sub-minimum width, reduce count
+    if actual_width < _MIN_APT_WIDTH_M and n_apts > 1:
         n_apts = max(1, int(long_len / _MIN_APT_WIDTH_M))
         actual_width = long_len / n_apts
 
