@@ -39,6 +39,7 @@ class TemplateAdapter:
 
     def _fit_using_layout_generator(
         self, slot: ApartmentSlot, template: Template, footprint=None,
+        parcelle=None, other_cells_polys=None,
     ) -> FitResult:
         """Use the architectural layout generator instead of the grid template.
 
@@ -64,6 +65,8 @@ class TemplateAdapter:
             rooms, slot.polygon.bounds, palier_side, slot.id,
             orientations=slot.orientations,
             footprint=footprint,
+            parcelle=parcelle,
+            other_cells_polys=other_cells_polys,
         )
 
         # Assign label_fr from the generator (already set) and re-label any
@@ -86,7 +89,10 @@ class TemplateAdapter:
         )
         return FitResult(success=True, apartment=apartment, stretch_x=1.0, stretch_y=1.0)
 
-    def fit_to_slot(self, template: Template, slot: ApartmentSlot, footprint=None) -> FitResult:
+    def fit_to_slot(
+        self, template: Template, slot: ApartmentSlot, footprint=None,
+        parcelle=None, other_cells_polys=None,
+    ) -> FitResult:
         # 1. Check slot dimensions compatibility
         minx, miny, maxx, maxy = slot.polygon.bounds
         slot_width = maxx - minx
@@ -114,7 +120,10 @@ class TemplateAdapter:
         if slot.target_typologie in (
             Typologie.T2, Typologie.T3, Typologie.T4, Typologie.T5
         ):
-            return self._fit_using_layout_generator(slot, template, footprint=footprint)
+            return self._fit_using_layout_generator(
+                slot, template, footprint=footprint,
+                parcelle=parcelle, other_cells_polys=other_cells_polys,
+            )
 
         # Determine the template grid shape from bounds_cells, then size cells so
         # rooms tile the slot exactly (no gap, no overflow).

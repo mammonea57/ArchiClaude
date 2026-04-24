@@ -76,15 +76,34 @@ export function BalconsJardinsLayer({
       if (len < 0.5) continue;
       const fbb = bboxOf(footprint);
       if (!fbb) continue;
-      const fcx = (fbb.minx + fbb.maxx) / 2;
-      const fcy = (fbb.miny + fbb.maxy) / 2;
       const mid: Coord = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
       const n1: Coord = [-dy / len, dx / len];
       const n2: Coord = [dy / len, -dx / len];
-      const outward: Coord = (
-        (n1[0] * (mid[0] - fcx) + n1[1] * (mid[1] - fcy))
-        >= (n2[0] * (mid[0] - fcx) + n2[1] * (mid[1] - fcy))
-      ) ? n1 : n2;
+      // Outward normal = the side that is OUTSIDE the footprint.
+      // For L-shaped (or generally non-convex) footprints, the centroid
+      // heuristic fails at the reflex corner (e.g. Nogent L-notch: apt 5's
+      // north wall at y=15 has the centroid slightly NORTH of the wall,
+      // but the outward side is also north — the centroid heuristic would
+      // put the jardin south, inside apt 5 itself). Testing a small probe
+      // point on each side against the footprint is robust for any shape.
+      const probe = 0.2;
+      const p1: Coord = [mid[0] + n1[0] * probe, mid[1] + n1[1] * probe];
+      const p2: Coord = [mid[0] + n2[0] * probe, mid[1] + n2[1] * probe];
+      const p1Inside = pointInPolygon(p1, footprint);
+      const p2Inside = pointInPolygon(p2, footprint);
+      let outward: Coord;
+      if (p1Inside && !p2Inside) outward = n2;
+      else if (p2Inside && !p1Inside) outward = n1;
+      else {
+        // Both sides ambiguous (probes land on boundary) — fall back to
+        // centroid heuristic.
+        const fcx = (fbb.minx + fbb.maxx) / 2;
+        const fcy = (fbb.miny + fbb.maxy) / 2;
+        outward = (
+          (n1[0] * (mid[0] - fcx) + n1[1] * (mid[1] - fcy))
+          >= (n2[0] * (mid[0] - fcx) + n2[1] * (mid[1] - fcy))
+        ) ? n1 : n2;
+      }
 
       extrusions.push({
         cellId: cell.id,
@@ -95,16 +114,96 @@ export function BalconsJardinsLayer({
     }
   }
 
-  // Build display geometry per extrusion (trapezoidal strip attached to wall).
-  const strips = extrusions.map((ex) => {
+  // Build initial strip geometry per extrusion.
+  type StripRaw = {
+    ex: typeof extrusions[number];
+    bbox: { minx: number; miny: number; maxx: number; maxy: number };
+  };
+  const rawStrips: StripRaw[] = extrusions.map((ex) => {
     const a1: Coord = [ex.a[0] + ex.outward[0] * ex.depth, ex.a[1] + ex.outward[1] * ex.depth];
     const b1: Coord = [ex.b[0] + ex.outward[0] * ex.depth, ex.b[1] + ex.outward[1] * ex.depth];
+    const bbox = {
+      minx: Math.min(ex.a[0], ex.b[0], a1[0], b1[0]),
+      miny: Math.min(ex.a[1], ex.b[1], a1[1], b1[1]),
+      maxx: Math.max(ex.a[0], ex.b[0], a1[0], b1[0]),
+      maxy: Math.max(ex.a[1], ex.b[1], a1[1], b1[1]),
+    };
+    return { ex, bbox };
+  });
+
+  // Clip each strip's along-wall extent to avoid overlapping with any other
+  // strip's bbox. Handles the L-notch case where apt 5's north-extruded
+  // jardin and apt 3's west-extruded jardin would otherwise both claim the
+  // reflex-corner quadrant. Each strip shrinks along its wall direction until
+  // its bbox no longer intersects its neighbour's bbox (a hedge separator is
+  // then drawn at the wall's trimmed endpoint).
+  const TOLC = 0.15;
+  const strips = rawStrips.map((rs) => {
+    const { ex } = rs;
+    let aCur: Coord = ex.a;
+    let bCur: Coord = ex.b;
+    const horizontalWall = Math.abs(ex.b[1] - ex.a[1]) < TOLC;
+    const verticalWall = Math.abs(ex.b[0] - ex.a[0]) < TOLC;
+    if (horizontalWall || verticalWall) {
+      for (const other of rawStrips) {
+        if (other.ex.cellId === ex.cellId) continue;
+        // Compute current strip bbox (may have shrunk from earlier iterations).
+        const curA1: Coord = [aCur[0] + ex.outward[0] * ex.depth, aCur[1] + ex.outward[1] * ex.depth];
+        const curB1: Coord = [bCur[0] + ex.outward[0] * ex.depth, bCur[1] + ex.outward[1] * ex.depth];
+        const minx = Math.min(aCur[0], bCur[0], curA1[0], curB1[0]);
+        const miny = Math.min(aCur[1], bCur[1], curA1[1], curB1[1]);
+        const maxx = Math.max(aCur[0], bCur[0], curA1[0], curB1[0]);
+        const maxy = Math.max(aCur[1], bCur[1], curA1[1], curB1[1]);
+        const ob = other.bbox;
+        // Must actually overlap in both axes to need clipping.
+        if (maxx <= ob.minx + TOLC || minx >= ob.maxx - TOLC) continue;
+        if (maxy <= ob.miny + TOLC || miny >= ob.maxy - TOLC) continue;
+        // Shrink along the wall direction to exit the overlap.
+        if (horizontalWall) {
+          const y0 = aCur[1];
+          const aX0 = Math.min(aCur[0], bCur[0]);
+          const aX1 = Math.max(aCur[0], bCur[0]);
+          const leftLen = Math.max(0, ob.minx - aX0);
+          const rightLen = Math.max(0, aX1 - ob.maxx);
+          if (leftLen >= rightLen && leftLen > 0.3) {
+            aCur = [aX0, y0]; bCur = [ob.minx, y0];
+          } else if (rightLen > 0.3) {
+            aCur = [ob.maxx, y0]; bCur = [aX1, y0];
+          } else {
+            aCur = [aX0, y0]; bCur = [aX0, y0]; // collapse
+            break;
+          }
+        } else {
+          const x0 = aCur[0];
+          const aY0 = Math.min(aCur[1], bCur[1]);
+          const aY1 = Math.max(aCur[1], bCur[1]);
+          const lowLen = Math.max(0, ob.miny - aY0);
+          const highLen = Math.max(0, aY1 - ob.maxy);
+          if (lowLen >= highLen && lowLen > 0.3) {
+            aCur = [x0, aY0]; bCur = [x0, ob.miny];
+          } else if (highLen > 0.3) {
+            aCur = [x0, ob.maxy]; bCur = [x0, aY1];
+          } else {
+            aCur = [x0, aY0]; bCur = [x0, aY0];
+            break;
+          }
+        }
+      }
+    }
+    const a1: Coord = [aCur[0] + ex.outward[0] * ex.depth, aCur[1] + ex.outward[1] * ex.depth];
+    const b1: Coord = [bCur[0] + ex.outward[0] * ex.depth, bCur[1] + ex.outward[1] * ex.depth];
     return {
       ...ex,
-      poly: [ex.a, ex.b, b1, a1] as Coord[],
+      a: aCur,
+      b: bCur,
+      poly: [aCur, bCur, b1, a1] as Coord[],
       outerA: a1,
       outerB: b1,
     };
+  }).filter((s) => {
+    const dx = s.b[0] - s.a[0];
+    const dy = s.b[1] - s.a[1];
+    return Math.hypot(dx, dy) > 0.4; // drop degenerate strips
   });
 
   const toPath = (pts: Coord[]): string => {
@@ -265,6 +364,26 @@ export function BalconsJardinsLayer({
       {parcelle?.length === -1 ? null : null}
     </g>
   );
+}
+
+/**
+ * Ray-casting point-in-polygon test. Returns true if `p` lies strictly
+ * inside `poly`. Used to disambiguate the outward normal of a wall
+ * against non-convex footprints (L, U, T shapes) where the bbox-centroid
+ * heuristic misfires at reflex corners.
+ */
+function pointInPolygon(p: Coord, poly: Coord[]): boolean {
+  if (poly.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], yi = poly[i][1];
+    const xj = poly[j][0], yj = poly[j][1];
+    const intersect =
+      ((yi > p[1]) !== (yj > p[1])) &&
+      (p[0] < ((xj - xi) * (p[1] - yi)) / ((yj - yi) || 1e-9) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }
 
 function isOnPerimeter(wallCoords: Coord[], footprint: Coord[]): boolean {

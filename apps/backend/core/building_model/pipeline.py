@@ -315,6 +315,7 @@ def _fill_pockets_with_apts(
     cells: list[Cellule],
     circulations: list[Circulation],
     voirie_side: str,
+    parcelle=None,
 ) -> list[Cellule]:
     """Detect empty pockets ≥ 40 m² left after carving and turn them
     into new apartments, densifying the floor.
@@ -449,6 +450,14 @@ def _fill_pockets_with_apts(
             )
         except Exception:
             continue
+        # Build list of polygons of neighbour apts + pocket apts already
+        # emitted, so the jardin-depth ranker inside the wall-openings
+        # builder can avoid extruding into their territory.
+        _neighbour_polys_pocket = [
+            ShapelyPoly(c.polygon_xy) for c in cells if len(c.polygon_xy) >= 3
+        ] + [
+            ShapelyPoly(c.polygon_xy) for c in new_cells if len(c.polygon_xy) >= 3
+        ]
         walls, openings = build_walls_and_openings(
             rooms,
             (rxmin, rymin, rxmax, rymax),
@@ -456,6 +465,8 @@ def _fill_pockets_with_apts(
             slot_id,
             orientations=pocket_orients,
             footprint=footprint,
+            parcelle=parcelle,
+            other_cells_polys=_neighbour_polys_pocket,
         )
         _ = actual_palier
 
@@ -792,6 +803,16 @@ async def generate_building_model(
     adapter = TemplateAdapter()
     niveaux: list[Niveau] = []
 
+    # Build a parcelle shape once for downstream jardin-depth ranking.
+    # Falls back to None if the input geojson is malformed; the layout
+    # generator already handles a missing parcelle by using a generous
+    # buffer around the footprint as proxy.
+    parcelle_shape = None
+    try:
+        parcelle_shape = shape(inputs.parcelle_geojson) if inputs.parcelle_geojson else None
+    except Exception:
+        parcelle_shape = None
+
     for idx in range(inputs.niveaux_recommandes):
         # Per-floor mix: ground floors favour smaller typos, top floors
         # skew larger. Each floor thus shows a distinct typology mix while
@@ -879,7 +900,19 @@ async def generate_building_model(
                 # Attach the corridor-facing side so generate_apartment
                 # orients the layout (entree on palier side).
                 slot.palier_side_hint = _palier_side_for(slot)  # type: ignore[attr-defined]
-                fit = adapter.fit_to_slot(sel.template, slot, footprint=footprint)
+                # Neighbour apt polygons already placed on this floor — the
+                # layout generator uses them to discount jardin extrusions
+                # that would intrude into another apt's territory.
+                _neighbour_polys = [
+                    _ShapelyPoly(c.polygon_xy)
+                    for c in cells_for_niveau
+                    if len(c.polygon_xy) >= 3
+                ]
+                fit = adapter.fit_to_slot(
+                    sel.template, slot, footprint=footprint,
+                    parcelle=parcelle_shape,
+                    other_cells_polys=_neighbour_polys,
+                )
                 if fit.success and fit.apartment is not None:
                     # Reclassify typologie using the ACTUAL apartment surface
                     # (room sum can differ from slot poly area). Enforces the
@@ -958,6 +991,7 @@ async def generate_building_model(
         try:
             pocket_cells = _fill_pockets_with_apts(
                 idx, footprint, cells_for_niveau, circulations, voirie_side=voirie,
+                parcelle=parcelle_shape,
             )
             cells_for_niveau.extend(pocket_cells)
         except Exception:
