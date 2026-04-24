@@ -94,10 +94,17 @@ def test_place_core_at_elbow_size_and_position():
     core_poly = place_core_at_elbow(d, core_surface_m2=22.0)
     # Surface within ±5%
     assert 20.9 <= core_poly.area <= 23.1
-    # Centered on elbow (14.4, 7.5)
-    cx, cy = core_poly.centroid.x, core_poly.centroid.y
-    assert abs(cx - d.elbow[0]) < 0.3
-    assert abs(cy - d.elbow[1]) < 0.3
+    # Rectangular core aligned with connector: 3m wide × ~7.3m long
+    cx0, cy0, cx1, cy1 = core_poly.bounds
+    width = cx1 - cx0
+    length = cy1 - cy0
+    assert abs(width - 3.0) < 0.1, f"core width should be 3m, got {width}"
+    assert 7.0 <= length <= 8.0, f"core length should be ~7.3m, got {length}"
+    # x-center aligned with connector (d.elbow[0] = cx_leg = 14.4)
+    assert abs((cx0 + cx1) / 2 - d.elbow[0]) < 0.3
+    # y-range touches cy_bar (leg above → core extends from cy_bar upward)
+    cy_bar = d.elbow[1]
+    assert abs(cy0 - cy_bar) < 0.3, f"core y0 should start at cy_bar={cy_bar}, got {cy0}"
     # Core lies inside footprint
     assert footprint.buffer(0.1).contains(core_poly)
 
@@ -108,7 +115,7 @@ def test_compute_l_quadrants_five_rects():
         (6.9, 32.4), (6.9, 15), (0, 15),
     ])
     d = decompose_l(footprint)
-    quadrants = compute_l_quadrants(d, corridor_width=1.6)
+    quadrants = compute_l_quadrants(d, footprint, corridor_width=1.6)
     assert len(quadrants) == 5
     names = {q.name for q in quadrants}
     assert names == {"south_bar", "nw_bar", "ne_bar", "leg_west", "leg_east"}
@@ -135,7 +142,7 @@ def test_slice_south_bar_into_T2_gives_3_apts():
         (6.9, 32.4), (6.9, 15), (0, 15),
     ])
     d = decompose_l(footprint)
-    quads = compute_l_quadrants(d, corridor_width=1.6)
+    quads = compute_l_quadrants(d, footprint, corridor_width=1.6)
     south = next(q for q in quads if q.name == "south_bar")
     slots = slice_quadrant_into_apts(
         south, target_typo=Typologie.T2, target_surface=48.0,
@@ -153,7 +160,7 @@ def test_slice_leg_east_into_T3():
         (6.9, 32.4), (6.9, 15), (0, 15),
     ])
     d = decompose_l(footprint)
-    quads = compute_l_quadrants(d, corridor_width=1.6)
+    quads = compute_l_quadrants(d, footprint, corridor_width=1.6)
     le = next(q for q in quads if q.name == "leg_east")
     slots = slice_quadrant_into_apts(
         le, target_typo=Typologie.T3, target_surface=58.0,
@@ -176,9 +183,12 @@ def test_compute_l_layout_nogent_style_footprint():
         core_surface_m2=22.0,
         corridor_width=1.6,
     )
-    # Core at elbow
+    # Core aligned with connector: x-center at cx_leg=14.4; rectangular
+    # 3m × ~7.3m extending upward from cy_bar=7.5 into the connector zone.
     assert abs(result.core.centroid.x - 14.4) < 0.5
-    assert abs(result.core.centroid.y - 7.5) < 0.5
+    cx0, cy0, cx1, cy1 = result.core.bounds
+    assert abs((cx1 - cx0) - 3.0) < 0.1
+    assert abs(cy0 - 7.5) < 0.3  # starts at cy_bar
     # Corridor is a single connected polygon
     assert result.corridor.geom_type == "Polygon"
     # Apartment count: target 10/niveau
@@ -191,3 +201,19 @@ def test_compute_l_layout_nogent_style_footprint():
     for s in result.slots:
         overlap = s.polygon.intersection(occupied).area
         assert overlap < 0.5, f"slot {s.id} overlaps circulation"
+
+
+def test_ne_bar_facade_excludes_interior_north():
+    """Regression: ne_bar's north edge is shared with leg (interior), not exterior."""
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    d = decompose_l(footprint)
+    quads = compute_l_quadrants(d, footprint, corridor_width=1.6)
+    ne = next(q for q in quads if q.name == "ne_bar")
+    # ne_bar is at x∈[15.2, 21.9], y∈[8.3, 15]. The north edge (y=15) is
+    # shared with leg (leg x∈[6.9, 21.9] for y∈[15, 32.4]), so it's INTERIOR.
+    # Only "est" (x=21.9 = footprint east edge) is exterior.
+    assert "nord" not in ne.facade_sides, f"ne_bar north is interior, not facade: got {ne.facade_sides}"
+    assert "est" in ne.facade_sides, f"ne_bar east must be exterior facade: got {ne.facade_sides}"

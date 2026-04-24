@@ -179,24 +179,42 @@ def build_l_corridor(
 def place_core_at_elbow(
     d: LDecomposition, core_surface_m2: float,
 ) -> ShapelyPolygon:
-    """Place the core (stairs + lift + shafts) at the corridor elbow.
+    """Place the core (stairs + lift + shafts) aligned along the connector.
 
-    Square core centred on the elbow. If the elbow is too close to bar
-    or leg edges for the square to fit inside the footprint, the core is
-    shifted inward minimally to keep it inside.
+    The core is a 3m-wide rectangle (perpendicular to the connector axis)
+    extending along the vertical connector zone between bar centerline
+    and leg base. This keeps the core INSIDE the connector strip — which
+    is already corridor/circulation — instead of eating into adjacent
+    apartment zones as a square centred on the elbow would.
+
+    - Width (x-direction) = 3.0 m, centred on cx_leg (the leg axis).
+    - Length (y-direction) = core_surface_m2 / 3.0 m, running from
+      cy_bar into the connector zone (upward if leg is above bar,
+      downward if leg is below).
     """
-    side = core_surface_m2 ** 0.5
-    cx, cy = d.elbow
+    CORE_WIDTH = 3.0
+    length = core_surface_m2 / CORE_WIDTH
+    cx_leg, cy_bar = d.elbow
     bx0, by0, bx1, by1 = d.bar.bounds
-    lx0, ly0, lx1, ly1 = d.leg.bounds
+    ly0 = d.leg.bounds[1]
+    ly1 = d.leg.bounds[3]
 
-    # Clamp to keep core inside bar (since elbow is in bar for inner-corner-NW)
-    # For inner-corner orientations where elbow is in leg, clamp to leg instead.
-    # Elbow is always in bar when the L was decomposed with bar = full-width arm.
-    cx = max(bx0 + side / 2, min(bx1 - side / 2, cx))
-    cy = max(by0 + side / 2, min(by1 - side / 2, cy))
+    # Clamp x-center so the 3m-wide core fits inside the bar
+    x_center = max(bx0 + CORE_WIDTH / 2, min(bx1 - CORE_WIDTH / 2, cx_leg))
+    x0 = x_center - CORE_WIDTH / 2
+    x1 = x_center + CORE_WIDTH / 2
 
-    return shp_box(cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2)
+    # Leg above bar (inner-corner NW or NE) → extend upward from cy_bar
+    # Leg below bar (inner-corner SW or SE) → extend downward from cy_bar
+    leg_above = ly0 > by1 - 0.5
+    if leg_above:
+        y0 = cy_bar
+        y1 = cy_bar + length
+    else:
+        y0 = cy_bar - length
+        y1 = cy_bar
+
+    return shp_box(x0, y0, x1, y1)
 
 
 @dataclass(frozen=True)
@@ -217,8 +235,40 @@ class LQuadrant:
     facade_sides: tuple[str, ...]
 
 
+def _compute_exterior_facades(
+    rect: ShapelyPolygon, footprint: ShapelyPolygon,
+) -> tuple[str, ...]:
+    """For an axis-aligned rectangle, return which of its 4 edges
+    (sud/nord/ouest/est) coincide with the footprint's EXTERIOR boundary.
+
+    Interior edges (shared with other quadrants of the same footprint) are
+    excluded. A probe 0.3m outside an edge must lie outside the footprint
+    for that edge to be exterior.
+    """
+    from shapely.geometry import Point
+    qx0, qy0, qx1, qy1 = rect.bounds
+    sides: list[str] = []
+    PROBE = 0.3
+    fp_buf = footprint.buffer(0.1)
+    # sud: probe below
+    if not fp_buf.contains(Point((qx0 + qx1) / 2, qy0 - PROBE)):
+        sides.append("sud")
+    # nord: probe above
+    if not fp_buf.contains(Point((qx0 + qx1) / 2, qy1 + PROBE)):
+        sides.append("nord")
+    # ouest: probe left
+    if not fp_buf.contains(Point(qx0 - PROBE, (qy0 + qy1) / 2)):
+        sides.append("ouest")
+    # est: probe right
+    if not fp_buf.contains(Point(qx1 + PROBE, (qy0 + qy1) / 2)):
+        sides.append("est")
+    return tuple(sides)
+
+
 def compute_l_quadrants(
-    d: LDecomposition, corridor_width: float = 1.6,
+    d: LDecomposition,
+    footprint: ShapelyPolygon,
+    corridor_width: float = 1.6,
 ) -> list[LQuadrant]:
     """Return the 5 rectangular apartment zones around the L-corridor.
 
@@ -232,6 +282,12 @@ def compute_l_quadrants(
     - ne_bar: bar above corridor, east of leg x (small corner)
     - leg_west: leg west of leg corridor
     - leg_east: leg east of leg corridor
+
+    Facade sides are computed per-quadrant against the footprint exterior:
+    an edge counts as a facade only if a probe 0.3m outside it falls
+    outside the footprint. This correctly excludes interior boundaries
+    shared with other quadrants (e.g. ne_bar's north edge, which is
+    shared with the leg above it).
     """
     half = corridor_width / 2
     bx0, by0, bx1, by1 = d.bar.bounds
@@ -269,20 +325,23 @@ def compute_l_quadrants(
     leg_west_rect = shp_box(lx0, ly0, cx_leg - half, ly1)
     leg_east_rect = shp_box(cx_leg + half, ly0, lx1, ly1)
 
-    # Facade sides (based on bbox orientation — the owner's polygon
-    # tells us which sides touch the outside). For inner-corner-NW:
-    # south_bar touches "sud", leg_east touches "est", etc. The dispatcher
-    # is responsible for translating to voirie/jardin labels upstream.
+    # Facade sides are computed against the FOOTPRINT exterior, not
+    # hardcoded per quadrant name. An edge of the quadrant rectangle is
+    # a facade only if probing 0.3m outside it falls outside the footprint.
+    # This correctly excludes interior edges shared with other quadrants
+    # (e.g. ne_bar's north edge is shared with leg above it, so it's
+    # INTERIOR, not a facade).
     quadrants: list[LQuadrant] = []
     # Suppress zero-area rects (when leg_w ≤ corridor_width etc.)
-    for name, rect, axis, sides in [
-        ("south_bar", south_rect, "horizontal", ("sud",)),
-        ("nw_bar", nw_rect, "horizontal", ("ouest", "nord")),
-        ("ne_bar", ne_rect, "horizontal", ("est", "nord")),
-        ("leg_west", leg_west_rect, "vertical", ("ouest",)),
-        ("leg_east", leg_east_rect, "vertical", ("est",)),
+    for name, rect, axis in [
+        ("south_bar", south_rect, "horizontal"),
+        ("nw_bar", nw_rect, "horizontal"),
+        ("ne_bar", ne_rect, "horizontal"),
+        ("leg_west", leg_west_rect, "vertical"),
+        ("leg_east", leg_east_rect, "vertical"),
     ]:
         if rect.area > 1.0:  # drop slivers
+            sides = _compute_exterior_facades(rect, footprint)
             quadrants.append(LQuadrant(name=name, rect=rect, long_axis=axis, facade_sides=sides))
     return quadrants
 
@@ -384,7 +443,7 @@ def compute_l_layout(
 
     corridor = build_l_corridor(d, corridor_width=corridor_width)
     core = place_core_at_elbow(d, core_surface_m2=core_surface_m2)
-    quadrants = compute_l_quadrants(d, corridor_width=corridor_width)
+    quadrants = compute_l_quadrants(d, footprint, corridor_width=corridor_width)
 
     # Assign typology per quadrant based on mix and quadrant size.
     # South bar (large, facing voirie) → T2 priority for units count.
