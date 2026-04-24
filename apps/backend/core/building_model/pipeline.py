@@ -535,6 +535,33 @@ def _emit_wing_corridors(
     - Non-adjacent wing, single-loaded (perp < 15 m): corridor along the
       edge CLOSEST to the core, so the connector is minimal.
     """
+    # Topology-aware short-circuit. L footprints get a single
+    # continuous corridor emitted from the L handler, matching what the
+    # solver used to clip apt slots. For other topologies fall through
+    # to the legacy wing-par-wing emission below.
+    from core.building_model.layout_dispatcher import classify_footprint_topology
+    from core.building_model.layout_l import build_l_corridor, decompose_l
+    from core.building_model.schemas import Circulation
+
+    if classify_footprint_topology(footprint) == "L":
+        d = decompose_l(footprint)
+        if d is not None:
+            l_corridor = build_l_corridor(d, corridor_width=_CORRIDOR_WIDTH_M)
+            # Do NOT subtract core here: the L corridor physically passes
+            # through the elbow where the core sits, and subtracting would
+            # shatter the corridor into disjoint arms. The core is rendered
+            # separately as its own niveau element, overlaid on top.
+            if not l_corridor.is_empty:
+                if l_corridor.geom_type == "MultiPolygon":
+                    l_corridor = max(l_corridor.geoms, key=lambda g: g.area)
+                coords = list(l_corridor.exterior.coords)[:-1]
+                return [Circulation(
+                    id=f"couloir_L_R{niveau_idx}",
+                    polygon_xy=coords,
+                    surface_m2=l_corridor.area,
+                    largeur_min_cm=int(_CORRIDOR_WIDTH_M * 100),
+                )]
+
     from shapely.geometry import Polygon as ShapelyPoly
     from core.building_model.solver import _core_adjacent_edge, _decompose_into_wings
 

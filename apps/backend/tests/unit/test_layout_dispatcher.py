@@ -73,3 +73,25 @@ def test_circulation_network_on_l_uses_dispatcher_corridor():
     nxmin, nymin, nxmax, nymax = network.bounds
     assert nxmin < 1.0, "corridor must reach bar west end"
     assert nymax > 31.0, "corridor must reach leg north end"
+
+
+def test_pipeline_emit_l_corridor_is_single_circulation():
+    from shapely.geometry import Polygon
+    from core.building_model.solver import build_modular_grid, place_core
+    from core.building_model.pipeline import _emit_wing_corridors
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    grid = build_modular_grid(footprint, cell_size_m=3.0)
+    core = place_core(grid, core_surface_m2=22.0)
+    circulations = _emit_wing_corridors(0, core, footprint, [])
+    # Expect exactly one Circulation for the L corridor
+    couloirs = [c for c in circulations if c.id.startswith("couloir_")]
+    assert len(couloirs) == 1
+    # Its polygon spans both arms
+    from shapely.geometry import Polygon as SP
+    poly = SP(couloirs[0].polygon_xy)
+    bx0, by0, bx1, by1 = poly.bounds
+    assert bx0 < 1.0  # reaches bar west end
+    assert by1 > 31.0  # reaches leg north end
