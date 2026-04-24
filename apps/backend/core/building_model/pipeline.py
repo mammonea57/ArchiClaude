@@ -454,6 +454,8 @@ def _fill_pockets_with_apts(
             (rxmin, rymin, rxmax, rymax),
             palier_side,  # type: ignore[arg-type]
             slot_id,
+            orientations=pocket_orients,
+            footprint=footprint,
         )
         _ = actual_palier
 
@@ -877,7 +879,7 @@ async def generate_building_model(
                 # Attach the corridor-facing side so generate_apartment
                 # orients the layout (entree on palier side).
                 slot.palier_side_hint = _palier_side_for(slot)  # type: ignore[attr-defined]
-                fit = adapter.fit_to_slot(sel.template, slot)
+                fit = adapter.fit_to_slot(sel.template, slot, footprint=footprint)
                 if fit.success and fit.apartment is not None:
                     # Reclassify typologie using the ACTUAL apartment surface
                     # (room sum can differ from slot poly area). Enforces the

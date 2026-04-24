@@ -479,6 +479,7 @@ def build_walls_and_openings(
     palier_side: PalierSide,
     slot_id: str,
     orientations: list[str] | None = None,
+    footprint=None,
 ) -> tuple[list[Wall], list[Opening]]:
     """Given placed rooms, derive perimeter + partition walls and openings.
 
@@ -710,6 +711,34 @@ def build_walls_and_openings(
     # Exterior sides only — never place a window on a wall that faces a
     # corridor / another apt (those sides are NOT in ``orientations``).
     exterior_set = set(orientations or []) if orientations else None
+
+    # Pre-compute the fraction of each slot side that lies on the footprint
+    # perimeter. A "fully exterior" side (fraction ≈ 1) is preferable for the
+    # séjour porte-fenêtre over a "partially exterior" side, because a clean
+    # full-width perimeter wall yields a clean jardin extrusion downstream
+    # (frontend BalconsJardinsLayer) without intruding into neighbour apts.
+    perimeter_frac: dict[str, float] = {"sud": 1.0, "nord": 1.0, "ouest": 1.0, "est": 1.0}
+    if footprint is not None:
+        try:
+            from shapely.geometry import LineString as _LS
+            sides_segs = {
+                "sud":   _LS([(minx, miny), (maxx, miny)]),
+                "nord":  _LS([(minx, maxy), (maxx, maxy)]),
+                "ouest": _LS([(minx, miny), (minx, maxy)]),
+                "est":   _LS([(maxx, miny), (maxx, maxy)]),
+            }
+            fp_boundary = footprint.boundary.buffer(0.15)
+            for s_name, seg in sides_segs.items():
+                if seg.length <= 0:
+                    perimeter_frac[s_name] = 0.0
+                    continue
+                inter = seg.intersection(fp_boundary)
+                perimeter_frac[s_name] = (
+                    inter.length / seg.length if hasattr(inter, "length") else 0.0
+                )
+        except Exception:
+            pass
+
     for room in rooms:
         if room.type not in living_types:
             continue
@@ -725,7 +754,23 @@ def build_walls_and_openings(
         if not candidates:
             continue
         preferred = OPPOSITE[palier_side]
-        side = preferred if preferred in candidates else candidates[0]
+        # Prefer a side that is FULLY on the footprint perimeter. This
+        # matters for pocket-infill apts whose slot bbox extends past
+        # the footprint on one side (e.g. the leg+bar joint of an L) —
+        # the partially-exterior side would emit a porte-fenêtre that
+        # opens into an adjacent apartment's territory.
+        FULL_THRESHOLD = 0.98
+        full_candidates = [
+            s for s in candidates if perimeter_frac.get(s, 1.0) >= FULL_THRESHOLD
+        ]
+        pool = full_candidates if full_candidates else candidates
+        if preferred in pool:
+            side = preferred
+        else:
+            # Pick the side with the highest perimeter fraction; ties broken
+            # by the original priority order (sud → ouest → est → nord).
+            priority = {"sud": 0, "ouest": 1, "est": 2, "nord": 3}
+            side = max(pool, key=lambda s: (perimeter_frac.get(s, 0.0), -priority[s]))
         wall = _wall_for_side(side)
         wcoords = wall.geometry["coords"]
         wall_len = ((wcoords[1][0] - wcoords[0][0]) ** 2 + (wcoords[1][1] - wcoords[0][1]) ** 2) ** 0.5

@@ -58,7 +58,18 @@ export function BalconsJardinsLayer({
       if (!hasPorteFen) continue;
 
       // Outward normal (perpendicular to wall, pointing away from footprint centroid)
-      const [a, b] = coords;
+      let [a, b] = coords;
+      // Clip the wall segment to the portion that lies on the footprint
+      // perimeter. Pocket-infill apartments may have a wall whose endpoints
+      // extend past the footprint boundary on one end (e.g. an L-elbow);
+      // extruding a jardin from the FULL wall would intrude into the
+      // neighbour apt. Clipping the segment to its exterior sub-range yields
+      // a clean strip aligned to the actual perimeter.
+      const clipped = clipSegmentToPerimeter(a, b, footprint);
+      if (clipped) {
+        a = clipped[0];
+        b = clipped[1];
+      }
       const dx = b[0] - a[0];
       const dy = b[1] - a[1];
       const len = Math.hypot(dx, dy);
@@ -276,6 +287,70 @@ function isOnPerimeter(wallCoords: Coord[], footprint: Coord[]): boolean {
     if (Math.hypot(mx - qx, my - qy) < TOL) return true;
   }
   return false;
+}
+
+/**
+ * Clip an axis-aligned wall segment (a,b) to the sub-range that overlaps
+ * a colinear segment of the footprint perimeter. Returns null if the
+ * segment is not axis-aligned or no perimeter overlap is found.
+ *
+ * Rationale: for pocket-infill apartments whose slot bbox extends past
+ * the footprint boundary at one end (e.g. an L-elbow joint), the wall
+ * spans both perimeter and interior portions. The jardin/balcon strip
+ * must be limited to the exterior portion, otherwise it intrudes into
+ * the neighbour apartment's footprint.
+ */
+function clipSegmentToPerimeter(
+  a: Coord, b: Coord, footprint: Coord[],
+): [Coord, Coord] | null {
+  if (footprint.length < 3) return null;
+  const TOL = 0.3;
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const horizontal = Math.abs(dy) < TOL;
+  const vertical = Math.abs(dx) < TOL;
+  if (!horizontal && !vertical) return null;
+
+  // For each footprint edge that is colinear with the wall, compute the
+  // overlap range and union with the running clip.
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i < footprint.length; i++) {
+    const fa = footprint[i];
+    const fb = footprint[(i + 1) % footprint.length];
+    const fdx = fb[0] - fa[0];
+    const fdy = fb[1] - fa[1];
+    const fHoriz = Math.abs(fdy) < TOL;
+    const fVert = Math.abs(fdx) < TOL;
+    if (horizontal && fHoriz && Math.abs(fa[1] - a[1]) < TOL) {
+      const aLo = Math.min(a[0], b[0]);
+      const aHi = Math.max(a[0], b[0]);
+      const fLo = Math.min(fa[0], fb[0]);
+      const fHi = Math.max(fa[0], fb[0]);
+      const oLo = Math.max(aLo, fLo);
+      const oHi = Math.min(aHi, fHi);
+      if (oHi - oLo > TOL) {
+        lo = Math.min(lo, oLo);
+        hi = Math.max(hi, oHi);
+      }
+    } else if (vertical && fVert && Math.abs(fa[0] - a[0]) < TOL) {
+      const aLo = Math.min(a[1], b[1]);
+      const aHi = Math.max(a[1], b[1]);
+      const fLo = Math.min(fa[1], fb[1]);
+      const fHi = Math.max(fa[1], fb[1]);
+      const oLo = Math.max(aLo, fLo);
+      const oHi = Math.min(aHi, fHi);
+      if (oHi - oLo > TOL) {
+        lo = Math.min(lo, oLo);
+        hi = Math.max(hi, oHi);
+      }
+    }
+  }
+  if (!isFinite(lo) || !isFinite(hi) || hi - lo < TOL) return null;
+  if (horizontal) {
+    return [[lo, a[1]] as Coord, [hi, a[1]] as Coord];
+  }
+  return [[a[0], lo] as Coord, [a[0], hi] as Coord];
 }
 
 // Silence unused parameter warnings
