@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import box as shp_box
+from shapely.ops import unary_union
 
 
 @dataclass(frozen=True)
@@ -128,3 +129,48 @@ def decompose_l(footprint: ShapelyPolygon) -> LDecomposition | None:
     return LDecomposition(
         bar=bar, leg=leg, reflex=(rx, ry), elbow=(cx_leg, cy_bar),
     )
+
+
+def build_l_corridor(
+    d: LDecomposition, corridor_width: float = 1.6,
+) -> ShapelyPolygon:
+    """Build the continuous L-shaped corridor.
+
+    Geometry (for inner-corner-NW orientation):
+    - Horizontal strip in bar at y=cy_bar, spanning full bar width
+    - Vertical strip in leg at x=cx_leg, spanning full leg height
+    - Connector strip inside bar from leg.y_min down to cy_bar, at x=cx_leg,
+      so the bar corridor and leg corridor meet physically
+
+    The connector is always needed because the leg (after L decomposition)
+    starts at y = bar.y_max, while the bar corridor runs at y = cy_bar
+    (middle of bar). Without the connector the two strips would be parallel
+    with a gap of (bar height / 2). The connector closes that gap inside
+    the bar material.
+    """
+    half = corridor_width / 2
+    bx0, by0, bx1, by1 = d.bar.bounds
+    lx0, ly0, lx1, ly1 = d.leg.bounds
+    cx_leg, cy_bar = d.elbow
+
+    # Bar horizontal strip (full bar width at cy_bar)
+    bar_strip = shp_box(bx0, cy_bar - half, bx1, cy_bar + half)
+
+    # Leg vertical strip (full leg height at cx_leg)
+    leg_strip = shp_box(cx_leg - half, ly0, cx_leg + half, ly1)
+
+    # Connector inside bar: from leg's base (ly0) down to cy_bar, at x=cx_leg.
+    # If leg starts above bar centerline (inner corner NW/NE) this is a
+    # downward segment; if leg starts below (inner corner SW/SE) it's upward.
+    if ly0 > cy_bar:
+        conn_y0, conn_y1 = cy_bar, ly0
+    else:
+        conn_y0, conn_y1 = ly1, cy_bar
+    connector = shp_box(cx_leg - half, conn_y0, cx_leg + half, conn_y1)
+
+    corridor = unary_union([bar_strip, leg_strip, connector])
+    # Ensure result is Polygon (should be after union of overlapping rects)
+    if corridor.geom_type != "Polygon":
+        # Fallback: pick largest
+        corridor = max(corridor.geoms, key=lambda g: g.area)
+    return corridor

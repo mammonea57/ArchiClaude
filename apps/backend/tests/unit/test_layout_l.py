@@ -2,7 +2,7 @@ import math
 
 from shapely.geometry import Polygon
 
-from core.building_model.layout_l import decompose_l, LDecomposition
+from core.building_model.layout_l import build_l_corridor, decompose_l, LDecomposition
 
 
 def test_decompose_l_inner_corner_nw():
@@ -52,3 +52,34 @@ def test_decompose_l_rotated_all_four_orientations():
         # Elbow must lie inside the footprint
         from shapely.geometry import Point
         assert rotated.buffer(0.2).contains(Point(d.elbow))
+
+
+def test_build_l_corridor_is_single_connected_polygon():
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    d = decompose_l(footprint)
+    corridor = build_l_corridor(d, corridor_width=1.6)
+    # Single polygon (not MultiPolygon) → corridor is continuous
+    assert corridor.geom_type == "Polygon"
+    # Corridor area ≈ (bar width × 1.6) + (leg height × 1.6) − junction overlap
+    # Bar: 21.9 × 1.6 = 35.04. Leg strip in bar: (15 − 7.5 − 0.8) × 1.6 ≈ 6.7 × 1.6 = 10.72
+    # Leg above bar: 17.4 × 1.6 = 27.84. Total ≈ 35.04 + 10.72 + 27.84 ≈ 73.6 m²
+    # Minus overlap at junction (1.6 × 1.6 = 2.56) → ~71 m²
+    assert 60.0 < corridor.area < 90.0
+    # Corridor must lie inside footprint (with small tolerance for rounding)
+    assert footprint.buffer(0.1).contains(corridor.buffer(-0.05))
+
+
+def test_build_l_corridor_touches_both_arm_ends():
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    d = decompose_l(footprint)
+    corridor = build_l_corridor(d, corridor_width=1.6)
+    cxmin, cymin, cxmax, cymax = corridor.bounds
+    # Corridor spans from bar's west end (x=0) to leg's top (y=32.4)
+    assert abs(cxmin - 0.0) < 0.5
+    assert abs(cymax - 32.4) < 0.5
