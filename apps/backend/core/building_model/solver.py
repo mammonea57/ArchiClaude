@@ -139,6 +139,20 @@ def _compute_circulation_network(
     """
     from shapely.ops import unary_union
 
+    # Topology-aware short-circuit. If the footprint maps to a known
+    # handler (currently: L), that handler produced a coherent corridor
+    # polygon — use it directly instead of the legacy wing-par-wing
+    # reconstruction (which can't represent a continuous L corridor).
+    # Keep the result in sync with compute_apartment_slots.
+    from core.building_model.layout_dispatcher import classify_footprint_topology
+    from core.building_model.layout_l import build_l_corridor, decompose_l
+
+    if classify_footprint_topology(footprint) == "L":
+        d = decompose_l(footprint)
+        if d is not None:
+            l_corridor = build_l_corridor(d, corridor_width=1.6)
+            return unary_union([core.polygon, l_corridor])
+
     corridor_width = 1.6
     half = corridor_width / 2
     cx, cy = core.position_xy

@@ -53,3 +53,23 @@ def test_dispatch_rect_returns_none():
         core_surface_m2=22.0,
     )
     assert result is None  # rect → caller uses legacy wing-par-wing
+
+
+def test_circulation_network_on_l_uses_dispatcher_corridor():
+    from shapely.geometry import Polygon
+    from core.building_model.solver import (
+        _compute_circulation_network, _decompose_into_wings,
+        build_modular_grid, place_core,
+    )
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    grid = build_modular_grid(footprint, cell_size_m=3.0)
+    core = place_core(grid, core_surface_m2=22.0)
+    wings = _decompose_into_wings(footprint)
+    network = _compute_circulation_network(footprint, wings, core)
+    # Network includes both arms of the L (corridor touches x=0 and y=32.4)
+    nxmin, nymin, nxmax, nymax = network.bounds
+    assert nxmin < 1.0, "corridor must reach bar west end"
+    assert nymax > 31.0, "corridor must reach leg north end"
