@@ -202,8 +202,12 @@ def test_compute_l_layout_nogent_style_footprint():
         assert overlap < 0.5, f"slot {s.id} overlaps circulation"
 
 
-def test_compute_l_layout_ne_bar_is_sacrificed_for_core():
-    """ne_bar zone is NOT sliced into apt slots — it hosts the core."""
+def test_compute_l_layout_no_landlocked_apts():
+    """No apartment slot may have zero exterior façades.
+
+    The landlocked-detection algorithm must sacrifice exactly the
+    landlocked slot for the core, not a slot-by-name-only rule.
+    """
     footprint = Polygon([
         (0, 0), (21.9, 0), (21.9, 32.4),
         (6.9, 32.4), (6.9, 15), (0, 15),
@@ -214,13 +218,18 @@ def test_compute_l_layout_ne_bar_is_sacrificed_for_core():
         core_surface_m2=22.0,
         corridor_width=1.6,
     )
-    # No slot IDs starting with "ne_bar"
-    ne_bar_slots = [s for s in result.slots if "ne_bar" in s.id]
-    assert len(ne_bar_slots) == 0, f"ne_bar should not produce apt slots: found {[s.id for s in ne_bar_slots]}"
-    # Core sits inside ne_bar zone (x in [15.2, 21.9], y in [8.3, 15])
-    core_cx, core_cy = result.core.centroid.x, result.core.centroid.y
-    assert 15.0 <= core_cx <= 21.9, f"core cx {core_cx} should be in ne_bar x range"
-    assert 8.0 <= core_cy <= 15.0, f"core cy {core_cy} should be in ne_bar y range"
+    # Every surviving slot has at least one exterior side.
+    for s in result.slots:
+        assert len(s.orientations) >= 1, (
+            f"slot {s.id} is landlocked (orientations={s.orientations}) "
+            f"at bounds={s.polygon.bounds}"
+        )
+    # Core lies inside footprint and doesn't overlap any slot.
+    assert footprint.buffer(0.1).contains(result.core)
+    for s in result.slots:
+        assert s.polygon.intersection(result.core).area < 0.5, (
+            f"slot {s.id} overlaps core"
+        )
 
 
 def test_ne_bar_facade_excludes_interior_north():

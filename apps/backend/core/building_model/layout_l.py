@@ -454,6 +454,175 @@ class LLayoutResult:
     decomposition: LDecomposition
 
 
+def _place_core_in_landlocked_slot(
+    slot: ApartmentSlot,
+    corridor: ShapelyPolygon,
+    core_surface_m2: float,
+) -> tuple[ShapelyPolygon, ShapelyPolygon | None]:
+    """Place the core inside a landlocked apartment slot, touching the corridor.
+
+    Returns (core_polygon, remainder_polygon_or_None).
+
+    Logic: find which side of the slot the corridor sits on; place a 3m-wide
+    core band on the slot side CLOSEST to the corridor elbow (i.e. the side
+    that shares the corridor boundary). The remainder is the rest of the
+    slot, to be merged with an adjacent apt.
+    """
+    CORE_WIDTH = 3.0
+    sx0, sy0, sx1, sy1 = slot.polygon.bounds
+    slot_w = sx1 - sx0
+    slot_h = sy1 - sy0
+
+    # Which side of the slot does the corridor touch?
+    # Probe 0.3m outside each edge; if the corridor is there, that's the
+    # corridor-adjacent side.
+    from shapely.geometry import Point as _Pt
+    PROBE = 0.3
+    corr_buf = corridor.buffer(0.2)
+    adj_sides: list[str] = []
+    if corr_buf.contains(_Pt((sx0 + sx1) / 2, sy0 - PROBE)):
+        adj_sides.append("south")
+    if corr_buf.contains(_Pt((sx0 + sx1) / 2, sy1 + PROBE)):
+        adj_sides.append("north")
+    if corr_buf.contains(_Pt(sx0 - PROBE, (sy0 + sy1) / 2)):
+        adj_sides.append("west")
+    if corr_buf.contains(_Pt(sx1 + PROBE, (sy0 + sy1) / 2)):
+        adj_sides.append("east")
+
+    # Core orientation:
+    # - if corridor adjacent on south or north (horizontal corridor), core
+    #   runs vertically (full slot height, 3m wide band on east or west)
+    # - if adjacent on east or west (vertical corridor), core runs
+    #   horizontally (full slot width, 3m tall band on north or south)
+    # Prefer the east side for horizontal corridor (closer to the elbow
+    # for inner-corner-NW L), and the south side for vertical corridor.
+    has_horiz = "south" in adj_sides or "north" in adj_sides
+    has_vert = "east" in adj_sides or "west" in adj_sides
+
+    if has_horiz and slot_h >= 4.0:
+        # Corridor on a horizontal side. Core is a 3m-wide vertical band.
+        # Place on east side (closer to leg corridor in inner-NW L).
+        core_w = min(CORE_WIDTH, max(0.1, slot_w))
+        core_l = min(core_surface_m2 / CORE_WIDTH, slot_h)
+        cx1 = sx1
+        cx0 = cx1 - core_w
+        # Core band runs full slot height (touches the corridor side).
+        cy0 = sy0
+        cy1 = sy0 + core_l if core_l < slot_h - 0.1 else sy1
+        # If we don't span full height, snap to the corridor side to stay
+        # adjacent: if corridor is south, keep cy0=sy0. Otherwise cy1=sy1.
+        if "south" in adj_sides:
+            cy0, cy1 = sy0, sy0 + core_l if core_l < slot_h - 0.1 else sy1
+        elif "north" in adj_sides:
+            cy1, cy0 = sy1, sy1 - core_l if core_l < slot_h - 0.1 else sy0
+        core_poly = shp_box(cx0, cy0, cx1, cy1)
+        # Remainder: slot minus core. If core spans full height, remainder
+        # is rectangle (sx0, sy0, cx0, sy1).
+        if abs(cy1 - cy0 - slot_h) < 0.5:
+            remainder = shp_box(sx0, sy0, cx0, sy1) if cx0 > sx0 + 0.1 else None
+        else:
+            # Core is at a corner; remainder is L-shaped — pick dominant piece
+            remainder = slot.polygon.difference(core_poly.buffer(0.01))
+            if remainder.geom_type == "MultiPolygon":
+                remainder = max(remainder.geoms, key=lambda g: g.area)
+            if remainder.is_empty or remainder.area < 1.0:
+                remainder = None
+        return core_poly, remainder
+
+    if has_vert and slot_w >= 4.0:
+        core_l = min(CORE_WIDTH, max(0.1, slot_h))
+        core_w_span = min(core_surface_m2 / CORE_WIDTH, slot_w)
+        cy1 = sy1
+        cy0 = cy1 - core_l
+        # Full width band along a horizontal edge of the slot
+        if "east" in adj_sides:
+            cx1, cx0 = sx1, sx1 - core_w_span
+        else:
+            cx0, cx1 = sx0, sx0 + core_w_span
+        core_poly = shp_box(cx0, cy0, cx1, cy1)
+        remainder = shp_box(sx0, sy0, sx1, cy0) if cy0 > sy0 + 0.1 else None
+        return core_poly, remainder
+
+    # Fallback: place core at east strip (no corridor detected — shouldn't
+    # happen for a landlocked slot, but keep safe).
+    core_w = min(CORE_WIDTH, max(0.1, slot_w))
+    core_poly = shp_box(sx1 - core_w, sy0, sx1, sy1)
+    remainder = shp_box(sx0, sy0, sx1 - core_w, sy1) if sx1 - core_w > sx0 + 0.1 else None
+    return core_poly, remainder
+
+
+def _merge_remainder_with_neighbor(
+    remainder: ShapelyPolygon,
+    slots: list[ApartmentSlot],
+) -> list[ApartmentSlot]:
+    """Attempt to merge `remainder` (leftover from core carve) with an
+    adjacent apt slot. Returns a new slots list.
+
+    Merge rule: the merged shape must be a clean axis-aligned rectangle
+    (same y-range if extending east/west, same x-range if extending
+    north/south). Otherwise discard the remainder.
+    """
+    if remainder is None or remainder.is_empty:
+        return slots
+    rx0, ry0, rx1, ry1 = remainder.bounds
+    TOL = 0.2
+
+    def _bounds(p):
+        return p.bounds
+
+    # Find a neighbor whose edge touches the remainder and whose
+    # perpendicular range matches exactly — merged shape is a rectangle.
+    for i, s in enumerate(slots):
+        sx0, sy0, sx1, sy1 = _bounds(s.polygon)
+        # Neighbor to WEST: its east edge touches remainder's west edge,
+        # same y-range → extend east
+        if abs(sx1 - rx0) < TOL and abs(sy0 - ry0) < TOL and abs(sy1 - ry1) < TOL:
+            new_poly = shp_box(sx0, sy0, rx1, sy1)
+            new_slots = list(slots)
+            new_slots[i] = ApartmentSlot(
+                id=s.id, polygon=new_poly, surface_m2=new_poly.area,
+                target_typologie=s.target_typologie,
+                orientations=s.orientations,
+                position_in_floor=s.position_in_floor,
+            )
+            return new_slots
+        # Neighbor to EAST
+        if abs(sx0 - rx1) < TOL and abs(sy0 - ry0) < TOL and abs(sy1 - ry1) < TOL:
+            new_poly = shp_box(rx0, sy0, sx1, sy1)
+            new_slots = list(slots)
+            new_slots[i] = ApartmentSlot(
+                id=s.id, polygon=new_poly, surface_m2=new_poly.area,
+                target_typologie=s.target_typologie,
+                orientations=s.orientations,
+                position_in_floor=s.position_in_floor,
+            )
+            return new_slots
+        # Neighbor to SOUTH
+        if abs(sy1 - ry0) < TOL and abs(sx0 - rx0) < TOL and abs(sx1 - rx1) < TOL:
+            new_poly = shp_box(sx0, sy0, sx1, ry1)
+            new_slots = list(slots)
+            new_slots[i] = ApartmentSlot(
+                id=s.id, polygon=new_poly, surface_m2=new_poly.area,
+                target_typologie=s.target_typologie,
+                orientations=s.orientations,
+                position_in_floor=s.position_in_floor,
+            )
+            return new_slots
+        # Neighbor to NORTH
+        if abs(sy0 - ry1) < TOL and abs(sx0 - rx0) < TOL and abs(sx1 - rx1) < TOL:
+            new_poly = shp_box(sx0, ry0, sx1, sy1)
+            new_slots = list(slots)
+            new_slots[i] = ApartmentSlot(
+                id=s.id, polygon=new_poly, surface_m2=new_poly.area,
+                target_typologie=s.target_typologie,
+                orientations=s.orientations,
+                position_in_floor=s.position_in_floor,
+            )
+            return new_slots
+    # No clean rectangle merge — discard remainder (wasted space).
+    return slots
+
+
 def compute_l_layout(
     footprint: ShapelyPolygon,
     mix_typologique: dict[Typologie, float],
@@ -463,6 +632,15 @@ def compute_l_layout(
 ) -> LLayoutResult | None:
     """Generate core + L-corridor + apt slots for an L-shaped footprint.
 
+    Algorithm (per-slot landlocked detection, 2026-04-24):
+    1. Slice ALL quadrants (including ne_bar) into slots.
+    2. For each slot, compute its exterior façades against the footprint.
+    3. Find landlocked slots (zero exterior façades). One is sacrificed
+       to host the core.
+    4. Place the core inside the sacrificed slot touching the corridor.
+    5. Merge the leftover piece of the sacrificed slot with its neighbor
+       (if the merged shape is a clean rectangle) or discard it.
+
     Returns None if the footprint is not a clean L (caller should fall
     back to legacy wing-par-wing layout).
     """
@@ -471,25 +649,19 @@ def compute_l_layout(
         return None
 
     corridor = build_l_corridor(d, corridor_width=corridor_width)
-    core = place_core_at_elbow(d, core_surface_m2=core_surface_m2)
     quadrants = compute_l_quadrants(d, footprint, corridor_width=corridor_width)
-    # ne_bar is sacrificed to host the core → don't slice it into apt slots.
-    # This eliminates lateral core intrusion into neighbor apts: the corner
-    # quadrant (poor facade ratio anyway) becomes pure circulation.
-    apt_quadrants = [q for q in quadrants if q.name != "ne_bar"]
 
     # Assign typology per quadrant based on mix and quadrant size.
-    # South bar (large, facing voirie) → T2 priority for units count.
-    # Leg arms (medium) → T3 priority for family apts.
     T2_share = mix_typologique.get(Typologie.T2, 0.0)
     T3_share = mix_typologique.get(Typologie.T3, 0.0)
     total = T2_share + T3_share
     if total <= 0:
         return None
 
+    # Slice ALL quadrants into slots — including ne_bar — so we can test
+    # landlocked-ness per-slot rather than per-quadrant.
     slots: list[ApartmentSlot] = []
-    for q in apt_quadrants:
-        # Bar quadrants (horizontal long axis) → T2 target; leg → T3 target
+    for q in quadrants:
         if q.long_axis == "horizontal":
             typo = Typologie.T2 if T2_share >= T3_share * 0.3 else Typologie.T3
             surface = 48.0 if typo == Typologie.T2 else 58.0
@@ -500,6 +672,58 @@ def compute_l_layout(
             quadrant=q, target_typo=typo, target_surface=surface,
             id_prefix=id_prefix,
         ))
+
+    # Recompute exterior façades PER SLOT (a slot inside ne_bar can have
+    # an east façade even if its sibling in the same quadrant is landlocked).
+    # The per-quadrant orientation list was a coarse approximation.
+    refined_slots: list[ApartmentSlot] = []
+    for s in slots:
+        sides = _compute_exterior_facades(s.polygon, footprint)
+        refined_slots.append(ApartmentSlot(
+            id=s.id, polygon=s.polygon, surface_m2=s.surface_m2,
+            target_typologie=s.target_typologie,
+            orientations=list(sides),
+            position_in_floor=s.position_in_floor,
+        ))
+    slots = refined_slots
+
+    # Identify landlocked slots (zero exterior façades).
+    landlocked = [s for s in slots if len(s.orientations) == 0]
+
+    if landlocked:
+        # Sacrifice the largest landlocked slot (most space for core).
+        sacrificed = max(landlocked, key=lambda s: s.polygon.area)
+        core, remainder = _place_core_in_landlocked_slot(
+            sacrificed, corridor, core_surface_m2,
+        )
+        # Remove the sacrificed slot from the list.
+        slots = [s for s in slots if s.id != sacrificed.id]
+        # Try to merge the remainder with a neighbor (clean rect merge).
+        if remainder is not None and not remainder.is_empty and remainder.area >= 1.0:
+            if remainder.geom_type == "MultiPolygon":
+                remainder = max(remainder.geoms, key=lambda g: g.area)
+            # Rectangularise (take bbox) — remainder should already be a rect.
+            rx0, ry0, rx1, ry1 = remainder.bounds
+            rect_remainder = shp_box(rx0, ry0, rx1, ry1)
+            slots = _merge_remainder_with_neighbor(rect_remainder, slots)
+            # After merging, refresh the merged apt's orientations.
+            refreshed: list[ApartmentSlot] = []
+            for s in slots:
+                sides = _compute_exterior_facades(s.polygon, footprint)
+                refreshed.append(ApartmentSlot(
+                    id=s.id, polygon=s.polygon, surface_m2=s.polygon.area,
+                    target_typologie=s.target_typologie,
+                    orientations=list(sides),
+                    position_in_floor=s.position_in_floor,
+                ))
+            slots = refreshed
+    else:
+        # No landlocked slot → fallback to ne_bar-based core placement.
+        # This preserves behaviour for footprints where every slot already
+        # has a façade (rare for L).
+        core = place_core_at_elbow(d, core_surface_m2=core_surface_m2)
+        # Drop any apt slots overlapping the core.
+        slots = [s for s in slots if s.polygon.intersection(core).area < 1.0]
 
     # Clip any slot that overlaps circulation (safety net)
     occupied = corridor.union(core)
