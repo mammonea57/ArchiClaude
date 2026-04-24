@@ -174,3 +174,26 @@ def build_l_corridor(
         # Fallback: pick largest
         corridor = max(corridor.geoms, key=lambda g: g.area)
     return corridor
+
+
+def place_core_at_elbow(
+    d: LDecomposition, core_surface_m2: float,
+) -> ShapelyPolygon:
+    """Place the core (stairs + lift + shafts) at the corridor elbow.
+
+    Square core centred on the elbow. If the elbow is too close to bar
+    or leg edges for the square to fit inside the footprint, the core is
+    shifted inward minimally to keep it inside.
+    """
+    side = core_surface_m2 ** 0.5
+    cx, cy = d.elbow
+    bx0, by0, bx1, by1 = d.bar.bounds
+    lx0, ly0, lx1, ly1 = d.leg.bounds
+
+    # Clamp to keep core inside bar (since elbow is in bar for inner-corner-NW)
+    # For inner-corner orientations where elbow is in leg, clamp to leg instead.
+    # Elbow is always in bar when the L was decomposed with bar = full-width arm.
+    cx = max(bx0 + side / 2, min(bx1 - side / 2, cx))
+    cy = max(by0 + side / 2, min(by1 - side / 2, cy))
+
+    return shp_box(cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2)

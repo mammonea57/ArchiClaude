@@ -2,7 +2,7 @@ import math
 
 from shapely.geometry import Polygon
 
-from core.building_model.layout_l import build_l_corridor, decompose_l, LDecomposition
+from core.building_model.layout_l import build_l_corridor, decompose_l, LDecomposition, place_core_at_elbow
 
 
 def test_decompose_l_inner_corner_nw():
@@ -83,3 +83,20 @@ def test_build_l_corridor_touches_both_arm_ends():
     # Corridor spans from bar's west end (x=0) to leg's top (y=32.4)
     assert abs(cxmin - 0.0) < 0.5
     assert abs(cymax - 32.4) < 0.5
+
+
+def test_place_core_at_elbow_size_and_position():
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    d = decompose_l(footprint)
+    core_poly = place_core_at_elbow(d, core_surface_m2=22.0)
+    # Surface within ±5%
+    assert 20.9 <= core_poly.area <= 23.1
+    # Centered on elbow (14.4, 7.5)
+    cx, cy = core_poly.centroid.x, core_poly.centroid.y
+    assert abs(cx - d.elbow[0]) < 0.3
+    assert abs(cy - d.elbow[1]) < 0.3
+    # Core lies inside footprint
+    assert footprint.buffer(0.1).contains(core_poly)
