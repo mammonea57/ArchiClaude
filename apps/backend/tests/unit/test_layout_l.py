@@ -122,3 +122,40 @@ def test_compute_l_quadrants_five_rects():
     ex0, ey0, ex1, ey1 = le.rect.bounds
     assert abs(ex1 - ex0 - (21.9 - 14.4 - 0.8)) < 0.2
     assert abs(ey1 - ey0 - 17.4) < 0.2
+
+
+from core.building_model.schemas import Typologie
+from core.building_model.layout_l import slice_quadrant_into_apts
+
+
+def test_slice_south_bar_into_T2_gives_3_apts():
+    # south_bar: 21.9m wide × 6.7m deep = 147 m². 3 T2 target.
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    d = decompose_l(footprint)
+    quads = compute_l_quadrants(d, corridor_width=1.6)
+    south = next(q for q in quads if q.name == "south_bar")
+    slots = slice_quadrant_into_apts(
+        south, target_typo=Typologie.T2, target_surface=48.0,
+    )
+    assert 2 <= len(slots) <= 4
+    # Each slot's polygon lies inside south_bar
+    for s in slots:
+        assert south.rect.buffer(0.1).contains(s.polygon)
+
+
+def test_slice_leg_east_into_T3():
+    # leg_east: 6.7m wide × 17.4m deep = ~117 m². ~2 T3 (58 m² target).
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    d = decompose_l(footprint)
+    quads = compute_l_quadrants(d, corridor_width=1.6)
+    le = next(q for q in quads if q.name == "leg_east")
+    slots = slice_quadrant_into_apts(
+        le, target_typo=Typologie.T3, target_surface=58.0,
+    )
+    assert len(slots) >= 2

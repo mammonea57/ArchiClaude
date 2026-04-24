@@ -285,3 +285,71 @@ def compute_l_quadrants(
         if rect.area > 1.0:  # drop slivers
             quadrants.append(LQuadrant(name=name, rect=rect, long_axis=axis, facade_sides=sides))
     return quadrants
+
+
+from core.building_model.solver import ApartmentSlot
+from core.building_model.schemas import Typologie
+
+
+_MIN_APT_WIDTH_M = 5.5  # below this, apt is unsellable
+
+
+def slice_quadrant_into_apts(
+    quadrant: LQuadrant,
+    target_typo: Typologie,
+    target_surface: float,
+    id_prefix: str = "",
+) -> list[ApartmentSlot]:
+    """Slice a rectangular quadrant into T2/T3 slots along its long axis.
+
+    Strategy: at the quadrant's fixed depth (perpendicular to long axis),
+    the target apt width = target_surface / depth. Compute how many apts
+    fit at that width; split the long dimension evenly.
+
+    Returns a list of ApartmentSlot with target_typologie set.
+    """
+    qx0, qy0, qx1, qy1 = quadrant.rect.bounds
+    w = qx1 - qx0
+    h = qy1 - qy0
+
+    if quadrant.long_axis == "horizontal":
+        long_len = w
+        depth = h
+    else:
+        long_len = h
+        depth = w
+
+    if depth <= 0 or long_len <= 0:
+        return []
+
+    # Target apt width along the long axis
+    target_width = max(_MIN_APT_WIDTH_M, target_surface / max(depth, 1.0))
+    # Number of apts that fit
+    n_apts = max(1, int(long_len / target_width))
+    actual_width = long_len / n_apts
+    # Drop if slivers
+    if actual_width < _MIN_APT_WIDTH_M:
+        n_apts = max(1, int(long_len / _MIN_APT_WIDTH_M))
+        actual_width = long_len / n_apts
+
+    slots: list[ApartmentSlot] = []
+    for i in range(n_apts):
+        if quadrant.long_axis == "horizontal":
+            ax0 = qx0 + i * actual_width
+            ax1 = qx0 + (i + 1) * actual_width
+            ay0, ay1 = qy0, qy1
+        else:
+            ay0 = qy0 + i * actual_width
+            ay1 = qy0 + (i + 1) * actual_width
+            ax0, ax1 = qx0, qx1
+        poly = shp_box(ax0, ay0, ax1, ay1)
+        position = "extremite" if i == 0 or i == n_apts - 1 else "milieu"
+        slots.append(ApartmentSlot(
+            id=f"{id_prefix}{quadrant.name}_{i}",
+            polygon=poly,
+            surface_m2=poly.area,
+            target_typologie=target_typo,
+            orientations=list(quadrant.facade_sides),
+            position_in_floor=position,
+        ))
+    return slots
