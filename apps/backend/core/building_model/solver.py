@@ -81,7 +81,7 @@ _INCENDIE_DIST_MAX_M = 25.0
 _CORE_ASPECT_MIN_LW = 0.6  # core cabine 1.1×1.4 ~ 0.7 aspect min
 
 
-_CORE_ADJ_MAX_EDGE_LEN = 22.0  # max length along the shared edge
+_CORE_ADJ_MAX_EDGE_LEN = 18.0  # max length along the shared edge
 
 
 def _core_adjacent_edge(
@@ -145,7 +145,7 @@ def _compute_circulation_network(
     core_bb = core.polygon.bounds
 
     polys = [core.polygon]
-    DUAL_THRESHOLD = 15.0
+    DUAL_THRESHOLD = 14.5
     for wing in wings:
         wxmin, wymin, wxmax, wymax = wing.bounds
         ww = wxmax - wxmin
@@ -209,52 +209,63 @@ def _compute_circulation_network(
                 polys.append(secondary.intersection(footprint))
             continue
 
-        # Fallback: central corridor + connector to core (legacy path for
-        # wings that don't share an edge with the core).
-        if perp < DUAL_THRESHOLD:
-            continue
-        if ww >= wh:
-            cy_mid = (wymin + wymax) / 2
-            corridor = ShapelyPolygon([
-                (wxmin, cy_mid - half), (wxmax, cy_mid - half),
-                (wxmax, cy_mid + half), (wxmin, cy_mid + half),
-            ])
+        # Non-adjacent wing: always emit a corridor, plus a connector
+        # linking it to the core. Mirror pipeline._emit_wing_corridors so
+        # the solver's pre-clip matches what pipeline actually draws.
+        wing_long_horizontal = ww >= wh
+        is_dual = perp >= DUAL_THRESHOLD
+        if wing_long_horizontal:
             axis = "horizontal"
-        else:
-            cx_mid = (wxmin + wxmax) / 2
+            if is_dual:
+                cy_axis = (wymin + wymax) / 2
+            else:
+                cy_axis = wymax - half if cy > (wymin + wymax) / 2 else wymin + half
             corridor = ShapelyPolygon([
-                (cx_mid - half, wymin), (cx_mid + half, wymin),
-                (cx_mid + half, wymax), (cx_mid - half, wymax),
+                (wxmin, cy_axis - half), (wxmax, cy_axis - half),
+                (wxmax, cy_axis + half), (wxmin, cy_axis + half),
             ])
+        else:
             axis = "vertical"
+            if is_dual:
+                cx_axis = (wxmin + wxmax) / 2
+            else:
+                cx_axis = wxmax - half if cx > (wxmin + wxmax) / 2 else wxmin + half
+            corridor = ShapelyPolygon([
+                (cx_axis - half, wymin), (cx_axis + half, wymin),
+                (cx_axis + half, wymax), (cx_axis - half, wymax),
+            ])
 
-        if corridor.distance(core.polygon) > 0.2:
-            cxmin, cymin, cxmax, cymax = corridor.bounds
+        corridor_clipped = corridor.intersection(footprint)
+        if corridor_clipped.distance(core.polygon) > 0.2:
+            cxmin, cymin, cxmax, cymax = corridor_clipped.bounds
             if axis == "horizontal":
-                connector_x = max(core_bb[0], min(core_bb[2], (cxmin + cxmax) / 2))
-                if cymin > core_bb[3]:
-                    y0 = core_bb[3]; y1 = cymin
-                elif cymax < core_bb[1]:
-                    y0 = cymax; y1 = core_bb[1]
+                x_lo = max(cxmin, core_bb[0])
+                x_hi = min(cxmax, core_bb[2])
+                if x_lo < x_hi:
+                    clo, chi = x_lo, x_hi
                 else:
-                    y0 = core_bb[3]; y1 = cymax
+                    mid = max(core_bb[0], min(core_bb[2], (cxmin + cxmax) / 2))
+                    clo, chi = mid - half, mid + half
+                y_lo = min(cymin, core_bb[1])
+                y_hi = max(cymax, core_bb[3])
                 connector = ShapelyPolygon([
-                    (connector_x - half, min(y0, y1)), (connector_x + half, min(y0, y1)),
-                    (connector_x + half, max(y0, y1)), (connector_x - half, max(y0, y1)),
+                    (clo, y_lo), (chi, y_lo), (chi, y_hi), (clo, y_hi),
                 ])
             else:
-                if cxmin > core_bb[2]:
-                    x0, x1 = core_bb[2], (cxmin + cxmax) / 2 + half
-                elif cxmax < core_bb[0]:
-                    x0, x1 = (cxmin + cxmax) / 2 - half, core_bb[0]
+                y_lo = max(cymin, core_bb[1])
+                y_hi = min(cymax, core_bb[3])
+                if y_lo < y_hi:
+                    clo, chi = y_lo, y_hi
                 else:
-                    x0, x1 = core_bb[2], (cxmin + cxmax) / 2 + half
+                    mid = max(core_bb[1], min(core_bb[3], (cymin + cymax) / 2))
+                    clo, chi = mid - half, mid + half
+                x_lo = min(cxmin, core_bb[0])
+                x_hi = max(cxmax, core_bb[2])
                 connector = ShapelyPolygon([
-                    (min(x0, x1), cy - half), (max(x0, x1), cy - half),
-                    (max(x0, x1), cy + half), (min(x0, x1), cy + half),
+                    (x_lo, clo), (x_hi, clo), (x_hi, chi), (x_lo, chi),
                 ])
             polys.append(connector.intersection(footprint))
-        polys.append(corridor.intersection(footprint))
+        polys.append(corridor_clipped)
 
     network = unary_union(polys)
     return network
@@ -266,22 +277,28 @@ def _find_reflex_vertex(footprint: ShapelyPolygon) -> tuple[float, float] | None
     For an L-shape this is the inner corner — the ideal spot for the
     common core because corridors can extend into both wings from here.
     Returns None for convex footprints (rectangles, etc.).
+
+    Orients the polygon CCW first so the cross-product sign convention
+    holds regardless of how shapely stored the ring.
     """
+    if footprint.is_empty or footprint.geom_type != "Polygon":
+        return None
     coords = list(footprint.exterior.coords)[:-1]
     n = len(coords)
     if n < 5:
         return None
+    # Normalise to CCW (interior on the left of each edge)
+    if not footprint.exterior.is_ccw:
+        coords = coords[::-1]
+        n = len(coords)
     for i in range(n):
         p_prev = coords[(i - 1) % n]
         p = coords[i]
         p_next = coords[(i + 1) % n]
-        # Cross product of (prev→curr) × (curr→next)
         v1 = (p[0] - p_prev[0], p[1] - p_prev[1])
         v2 = (p_next[0] - p[0], p_next[1] - p[1])
         cross = v1[0] * v2[1] - v1[1] * v2[0]
-        # For a counter-clockwise-wound polygon, a negative cross is a reflex
-        # vertex. Shapely normalizes polygons to CCW so this should hold.
-        if cross < -0.01:
+        if cross < -0.5:
             return (p[0], p[1])
     return None
 
@@ -305,17 +322,32 @@ def place_core(grid: ModularGrid, core_surface_m2: float) -> CorePlacement:
     reflex = _find_reflex_vertex(grid.footprint)
     if reflex is not None:
         rx, ry = reflex
-        # Offset the core INWARD from the reflex vertex. The inward direction
-        # is toward the centroid of the footprint.
-        centroid = grid.footprint.centroid
-        dx = centroid.x - rx
-        dy = centroid.y - ry
+        # Place the core so its NEAR CORNER sits exactly on the reflex
+        # vertex (no offset). This guarantees corridors extending into
+        # both wings from that vertex physically touch the core.
+        #
+        # Quadrant inward = direction du PLUS GRAND WING adjacent au
+        # reflex (pas du centroid du footprint entier — avec
+        # adossement nord, centroid glisse vers leg et core y va alors
+        # que bar — plus grand — reste vide).
+        _wings_for_core = _decompose_into_wings(grid.footprint)
+        if len(_wings_for_core) >= 2:
+            # Plus grand wing = celui où loger le core
+            _biggest = max(_wings_for_core, key=lambda w: w.area)
+            _bctr = _biggest.centroid
+            dx = _bctr.x - rx
+            dy = _bctr.y - ry
+        else:
+            centroid = grid.footprint.centroid
+            dx = centroid.x - rx
+            dy = centroid.y - ry
         mag = max(0.01, (dx * dx + dy * dy) ** 0.5)
         ux, uy = dx / mag, dy / mag
-        # Push the core so its near corner is ~0.5 m inside the reflex
-        offset = side / 2 + 0.5
-        ccx = rx + ux * offset
-        ccy = ry + uy * offset
+        # Snap quadrant vers le plus grand wing
+        qx = 1 if ux >= 0 else -1
+        qy = 1 if uy >= 0 else -1
+        ccx = rx + qx * side / 2
+        ccy = ry + qy * side / 2
         core_poly = ShapelyPolygon([
             (ccx - side / 2, ccy - side / 2), (ccx + side / 2, ccy - side / 2),
             (ccx + side / 2, ccy + side / 2), (ccx - side / 2, ccy + side / 2),
@@ -374,81 +406,146 @@ class ApartmentSlot:
 
 
 def _decompose_into_wings(footprint: ShapelyPolygon) -> list[ShapelyPolygon]:
-    """Split an L / T / cross footprint into rectangular wings.
+    """Split an axis-aligned L / rectangle footprint into up to 2 wings.
 
-    Greedy axis-aligned decomposition: iteratively carve the largest
-    bounding rectangle from the footprint until only slivers remain.
-    For a simple rectangular footprint returns [footprint]. For an L
-    returns 2 rectangles that union to the L. Works for axis-aligned
-    polygons with right-angle corners (typical cadastral shapes).
+    Rewritten 2026-04 after the greedy sweep version kept over-fragmenting
+    clean L-shapes into 3-4 degenerate wings (one of which a sliver <
+    1 m²). The new algorithm is purely analytical:
+
+    1. If fill_ratio (poly.area / bbox.area) ≥ 0.92 → treat as a plain
+       rectangle, return [bbox].
+    2. Find the ONE reflex vertex of the axis-aligned polygon (for an
+       L, there's exactly one). Polygons with 2+ reflexes (T / U / +
+       shapes) fall back to [bbox].
+    3. Try horizontal split at reflex.y: bbox is cut into bot/top, each
+       intersected with poly and rounded to its own axis-aligned bbox.
+    4. Try vertical split at reflex.x: same idea left/right.
+    5. Pick the split whose TWO rectangles (a) cover the most area and
+       (b) each have the shorter side ≥ 8 m (solver-friendly depth).
+       If neither qualifies, fall back to [bbox].
     """
-    remaining = footprint
-    wings: list[ShapelyPolygon] = []
-    safety = 10
-    while remaining.area > 1.0 and safety > 0:
-        safety -= 1
-        minx, miny, maxx, maxy = remaining.bounds
-        # Try both axis slices: horizontal sweep + vertical sweep, pick whichever
-        # yields the largest fully-contained rectangle.
-        best_rect: ShapelyPolygon | None = None
-        best_area = 0.0
-        # Vertical strips: find longest horizontal strip of full footprint height
-        step = 0.5
-        x = minx
-        while x < maxx:
-            x2 = x + step
-            # Strip from x to x2, full y range, intersected with remaining
-            strip = ShapelyPolygon([(x, miny), (x2, miny), (x2, maxy), (x, maxy)]).intersection(remaining)
-            # Extend x2 as long as strip is a clean rectangle (no reflex)
-            while x2 + step <= maxx:
-                next_strip = ShapelyPolygon(
-                    [(x, miny), (x2 + step, miny), (x2 + step, maxy), (x, maxy)]
-                ).intersection(remaining)
-                if _is_rectangle(next_strip, tol=0.5):
-                    strip = next_strip
-                    x2 += step
-                else:
-                    break
-            if _is_rectangle(strip, tol=0.5) and strip.area > best_area:
-                # Fit strip to its own minimal bbox
-                sxmin, symin, sxmax, symax = strip.bounds
-                rect = ShapelyPolygon([(sxmin, symin), (sxmax, symin), (sxmax, symax), (sxmin, symax)])
-                if rect.within(remaining.buffer(0.01)):
-                    best_rect = rect
-                    best_area = rect.area
-            x = x2 if x2 > x else x + step
+    from shapely.geometry import box as shp_box
+    from shapely.geometry import Polygon as _Poly
 
-        # Horizontal strips for the other axis
-        y = miny
-        while y < maxy:
-            y2 = y + step
-            strip = ShapelyPolygon([(minx, y), (maxx, y), (maxx, y2), (minx, y2)]).intersection(remaining)
-            while y2 + step <= maxy:
-                next_strip = ShapelyPolygon(
-                    [(minx, y), (maxx, y), (maxx, y2 + step), (minx, y2 + step)]
-                ).intersection(remaining)
-                if _is_rectangle(next_strip, tol=0.5):
-                    strip = next_strip
-                    y2 += step
-                else:
-                    break
-            if _is_rectangle(strip, tol=0.5) and strip.area > best_area:
-                sxmin, symin, sxmax, symax = strip.bounds
-                rect = ShapelyPolygon([(sxmin, symin), (sxmax, symin), (sxmax, symax), (sxmin, symax)])
-                if rect.within(remaining.buffer(0.01)):
-                    best_rect = rect
-                    best_area = rect.area
-            y = y2 if y2 > y else y + step
+    minx, miny, maxx, maxy = footprint.bounds
+    bbox = shp_box(minx, miny, maxx, maxy)
+    if bbox.area == 0:
+        return [footprint]
 
-        if best_rect is None or best_area < 1.0:
+    fill_ratio = footprint.area / bbox.area
+    # Near-rectangular → single wing = bbox (clean, solver-friendly).
+    if fill_ratio > 0.92:
+        return [bbox]
+
+    # Pré-simplification : les footprints issus d'un clip à un polygone
+    # buffered (parcelle - 3 m) arrivent souvent avec 8–12 sommets
+    # parasites (marches d'escalier de 0,2–0,5 m). Un L canonique n'a
+    # que 6 sommets, donc on simplifie à 0,8 m avant de compter les
+    # réflexes. Sans ça, on retombe systématiquement sur bbox pour
+    # toute forme non rectangulaire et le solver recrée des slots qui
+    # débordent du vrai footprint → apts < T2 → droppés.
+    pre_simplified = footprint.simplify(0.8)
+    if pre_simplified.geom_type != "Polygon" or pre_simplified.area < footprint.area * 0.90:
+        pre_simplified = footprint  # trop agressif, reste brut
+
+    # Orient CCW for stable cross-product sign
+    coords = list(pre_simplified.exterior.coords)[:-1]
+    poly_ccw = pre_simplified if pre_simplified.exterior.is_ccw else _Poly(coords[::-1])
+    cc = list(poly_ccw.exterior.coords)[:-1]
+
+    # Find all reflex vertices (inner corners on CCW → cross < 0)
+    reflexes: list[tuple[float, float]] = []
+    n = len(cc)
+    for i in range(n):
+        p0 = cc[(i - 1) % n]
+        p1 = cc[i]
+        p2 = cc[(i + 1) % n]
+        cr = (p1[0] - p0[0]) * (p2[1] - p1[1]) - (p1[1] - p0[1]) * (p2[0] - p1[0])
+        if cr < -0.5:
+            reflexes.append(p1)
+
+    # Only handle the single-reflex (L-shape) case reliably; higher
+    # complexity falls back to bbox.
+    if len(reflexes) != 1:
+        return [bbox]
+
+    rx, ry = reflexes[0]
+    MIN_WING_DEPTH = 8.0  # sub-wings thinner than 8 m produce unsellable apts
+
+    # Identify the notch corner: the bbox corner that the polygon does NOT
+    # cover. A probe slightly inside each corner tells us: if polygon
+    # doesn't contain it → that corner is the notch.
+    from shapely.geometry import Point as _Point
+    buf_test = footprint.buffer(0.1)
+    cx, cy = (minx + maxx) / 2, (miny + maxy) / 2
+    notch: tuple[float, float] | None = None
+    for corner in ((minx, miny), (maxx, miny), (minx, maxy), (maxx, maxy)):
+        probe = _Point(
+            corner[0] + (0.5 if corner[0] < cx else -0.5),
+            corner[1] + (0.5 if corner[1] < cy else -0.5),
+        )
+        if not buf_test.contains(probe):
+            notch = corner
             break
-        wings.append(best_rect)
-        remaining = remaining.difference(best_rect.buffer(0.001))
-        if remaining.geom_type == "MultiPolygon":
-            # Keep working on the biggest piece
-            remaining = max(remaining.geoms, key=lambda g: g.area)
 
-    return wings or [footprint]
+    if notch is None:
+        # Can't identify notch → safe fallback to bbox
+        return [bbox]
+
+    # Given the notch corner and the reflex (rx, ry), the axis-aligned L
+    # splits into two rectangles along either the x=rx or y=ry line.
+    # Horizontal split at y=ry: bottom half [minx..maxx, miny..ry],
+    # top half [minx..maxx, ry..maxy]. One of them has a notch on one side
+    # — we shrink that half's x-span to exclude the notch corner.
+    nx, ny = notch
+    def _h_wings() -> list[ShapelyPolygon]:
+        # Two horizontal bands; whichever contains the notch gets x-shrunk
+        bot_x0, bot_x1 = minx, maxx
+        top_x0, top_x1 = minx, maxx
+        if ny < (miny + maxy) / 2:  # notch on bottom
+            if nx < (minx + maxx) / 2:
+                bot_x0 = rx
+            else:
+                bot_x1 = rx
+        else:  # notch on top
+            if nx < (minx + maxx) / 2:
+                top_x0 = rx
+            else:
+                top_x1 = rx
+        return [shp_box(bot_x0, miny, bot_x1, ry), shp_box(top_x0, ry, top_x1, maxy)]
+
+    def _v_wings() -> list[ShapelyPolygon]:
+        # Two vertical bands; whichever contains the notch gets y-shrunk
+        left_y0, left_y1 = miny, maxy
+        right_y0, right_y1 = miny, maxy
+        if nx < (minx + maxx) / 2:  # notch on left
+            if ny < (miny + maxy) / 2:
+                left_y0 = ry
+            else:
+                left_y1 = ry
+        else:  # notch on right
+            if ny < (miny + maxy) / 2:
+                right_y0 = ry
+            else:
+                right_y1 = ry
+        return [shp_box(minx, left_y0, rx, left_y1), shp_box(rx, right_y0, maxx, right_y1)]
+
+    def _valid(ws: list[ShapelyPolygon]) -> bool:
+        for w in ws:
+            wb = w.bounds
+            if min(wb[2] - wb[0], wb[3] - wb[1]) < MIN_WING_DEPTH:
+                return False
+            if w.area <= 0:
+                return False
+        return True
+
+    candidates = [_h_wings(), _v_wings()]
+    valid = [c for c in candidates if _valid(c)]
+    if not valid:
+        return [bbox]
+    # Pick the split that better matches the original footprint area
+    best = min(valid, key=lambda ws: abs(sum(w.area for w in ws) - footprint.area))
+    return best
 
 
 def _is_rectangle(poly: ShapelyPolygon, tol: float = 0.5) -> bool:
@@ -528,12 +625,30 @@ def compute_apartment_slots(
     slot_idx = 0
 
     _CORRIDOR_WIDTH_M = 1.6   # minimum PMR corridor
-    # Dual-loaded splits a wing into two rows of apts (≥7 m deep each) plus a
-    # 1.6 m corridor in between. Threshold = 2×7 + 1.6 ≈ 15 m. Shallower wings
-    # use a single-loaded corridor (one row, corridor on one side).
-    _DUAL_LOADED_THRESHOLD_M = 15.0
+    # Dual-loaded splits a wing into two rows of apts (≥ 6.5 m deep each)
+    # plus a 1.6 m central corridor. Threshold = 2×6.5 + 1.6 ≈ 14.5 m. À
+    # 15 m profondeur (MAX_DEPTH résidentiel), on passe tout juste : 2 ×
+    # 6.7 m + 1.6 m = 15 m → dual-loaded. Shallower wings use single-
+    # loaded corridor on one side.
+    _DUAL_LOADED_THRESHOLD_M = 14.5
 
     core_bb_tuple = tuple(core.polygon.bounds)
+
+    # Pre-allocate a slot budget per wing proportional to wing area.
+    # This keeps apt density consistent across L-shape wings instead of
+    # letting each wing pick its own density from mix-weighted slot width
+    # (which underpacks narrow / single-loaded wings).
+    total_wing_area = sum(w.area for w in wings) or 1.0
+    wing_slot_budget = {
+        id(w): max(1, round(nb_apartments * w.area / total_wing_area))
+        for w in wings
+    }
+    # Distribute the rounding remainder to the biggest wing
+    budget_sum = sum(wing_slot_budget.values())
+    if budget_sum != nb_apartments and wings:
+        biggest = max(wings, key=lambda w: w.area)
+        wing_slot_budget[id(biggest)] += (nb_apartments - budget_sum)
+        wing_slot_budget[id(biggest)] = max(1, wing_slot_budget[id(biggest)])
 
     for wing_outer in wings:
         wxmin_o, wymin_o, wxmax_o, wymax_o = wing_outer.bounds
@@ -650,8 +765,22 @@ def compute_apartment_slots(
             else:
                 sub_wings = [wing_outer]
 
+        # Compute the slot budget for this outer wing, and distribute it
+        # across sub-wings proportional to area.
+        wing_budget = wing_slot_budget.get(id(wing_outer), 1)
+        total_sub_area = sum(sw.area for sw in sub_wings) or 1.0
+        sub_budgets = [
+            max(1, round(wing_budget * sw.area / total_sub_area))
+            for sw in sub_wings
+        ]
+        # Fix rounding so sub-budgets sum to wing_budget
+        delta = wing_budget - sum(sub_budgets)
+        if delta != 0 and sub_budgets:
+            biggest_idx = max(range(len(sub_wings)), key=lambda i: sub_wings[i].area)
+            sub_budgets[biggest_idx] = max(1, sub_budgets[biggest_idx] + delta)
+
         # Process each sub-wing (single or dual strip around the corridor)
-        for wing in sub_wings:
+        for sub_idx, wing in enumerate(sub_wings):
             wxmin, wymin, wxmax, wymax = wing.bounds
             wing_w = wxmax - wxmin
             wing_h = wymax - wymin
@@ -669,34 +798,20 @@ def compute_apartment_slots(
             if not fitting_typos:
                 continue
 
-            # 2. Target slot width = MIX-WEIGHTED fitting typo. This lets a
-            #    floor's requested mix drive the slot sizing: a T5-heavy
-            #    floor gets wider slots (fewer, larger apts), a T2-heavy
-            #    floor gets narrower slots (more, smaller apts).
-            total_fit_ratio = sum(mix_norm[t] for t in fitting_typos)
-            if total_fit_ratio > 0:
-                target_slot_width = sum(
-                    mix_norm[t] / total_fit_ratio
-                    * ((_TYPO_DIM_RANGE[t][0] + _TYPO_DIM_RANGE[t][1]) / 2)
-                    for t in fitting_typos
-                )
-            else:
-                smallest_typo = min(fitting_typos, key=lambda t: typo_surface_targets[t])
-                lw_min, lw_max, *_ = _TYPO_DIM_RANGE[smallest_typo]
-                target_slot_width = (lw_min + lw_max) / 2
-
-            # Global slot-width bounds = tightest fit + loosest fit across the
-            # fitting typos so we don't clamp below what any typo accepts.
+            # 2. Compute slot width using the BUDGETED slot count, clamped
+            #    to per-typo width ranges. This packs each sub-wing at the
+            #    building-level apt density rather than letting mix-weighted
+            #    widths under-pack narrow wings.
             min_w_global = min(_TYPO_DIM_RANGE[t][0] * 0.85 for t in fitting_typos)
             max_w_global = max(_TYPO_DIM_RANGE[t][1] * 1.15 for t in fitting_typos)
-            nb_slots_in_wing = max(1, round(slice_length / target_slot_width))
+            budget_here = sub_budgets[sub_idx]
             max_nb = max(1, int(slice_length / min_w_global))
             min_nb = max(1, math.ceil(slice_length / max_w_global))
-            nb_slots_in_wing = max(min_nb, min(nb_slots_in_wing, max_nb))
+            nb_slots_in_wing = max(min_nb, min(budget_here, max_nb))
             actual_slot_width = slice_length / nb_slots_in_wing
+            smallest_typo_for_fb = min(fitting_typos, key=lambda t: typo_surface_targets[t])
 
-            # Keep a legacy reference for the error fallback in step 3
-            smallest_typo = min(fitting_typos, key=lambda t: typo_surface_targets[t])
+            smallest_typo = smallest_typo_for_fb
 
             # 3. Re-filter candidates against the ACTUAL slot dimensions
             candidates: list[Typologie] = []
@@ -772,18 +887,95 @@ def compute_apartment_slots(
                     ))
                     slot_idx += 1
 
+    # Post-processing: absorb any landlocked dead zones inside the footprint
+    # into the nearest apt slot that has an exterior wall. This prevents
+    # visually empty (unallocated) patches in the plan and gives one of the
+    # existing apts an oversized layout rather than wasting the surface.
+    _absorb_dead_zones(slots, grid.footprint, circulation_network)
+
     return slots
 
 
-# Width × depth ranges per typology. Allow some depth overlap between typos
-# since depth is set by the wing and apts of multiple typologies live in
-# similar wings; strict ordering is enforced by _TYPO_SURFACE_RANGE below.
+def _absorb_dead_zones(
+    slots: list["ApartmentSlot"],
+    footprint: ShapelyPolygon,
+    circulation_network: ShapelyPolygon,
+) -> None:
+    """Merge landlocked + leftover pockets into the neighbouring apt.
+
+    Two sources of "dead zones":
+      1. Landlocked slots (orientations == [], no exterior wall) — these
+         slots were generated but can't be a valid logement because
+         they have no windows. Found inline in ``slots``.
+      2. Remainder pockets — space inside the footprint not covered by
+         any slot and not circulation.
+
+    Both get merged into the nearest slot that DOES have an exterior
+    wall, growing that slot (L-shape union when needed). Afterwards the
+    landlocked slot entries are removed from ``slots``. This turns a
+    "white gap" in the plan into a larger neighbouring apartment.
+    """
+    from shapely.geometry import Polygon as SP
+    from shapely.ops import unary_union
+
+    if not slots:
+        return
+
+    # 1. Collect dead-zone polygons: landlocked slots + remainder pockets
+    landlocked = [s for s in slots if not s.orientations]
+    dead_polys: list = [s.polygon for s in landlocked]
+    covered = unary_union([s.polygon for s in slots] + [circulation_network])
+    remainder = footprint.difference(covered)
+    if not remainder.is_empty:
+        dead_polys.extend(
+            list(remainder.geoms) if remainder.geom_type == "MultiPolygon" else [remainder]
+        )
+
+    # Remove landlocked slots from the active list so they don't end up
+    # as apartments — they'll be absorbed below.
+    for ll in landlocked:
+        if ll in slots:
+            slots.remove(ll)
+
+    if not slots:
+        return  # nothing left to merge into
+
+    # 2. Merge each dead polygon into the neighbouring non-landlocked slot
+    for pocket in dead_polys:
+        if pocket.is_empty or pocket.area < 5.0:
+            continue
+
+        def _shared_border(s, p=pocket):
+            return s.polygon.boundary.intersection(p.boundary).length
+
+        best = max(slots, key=_shared_border)
+        if _shared_border(best) < 0.5:
+            continue
+        merged = unary_union([best.polygon, pocket])
+        if merged.geom_type == "MultiPolygon":
+            merged = max(merged.geoms, key=lambda g: g.area)
+        if not isinstance(merged, SP):
+            continue
+        best.polygon = merged
+        best.surface_m2 = merged.area
+        # Re-classify target typologie based on new surface so the
+        # template selector picks an appropriate (larger) template.
+        best.target_typologie = _reclassify_by_surface(
+            merged.area, best.target_typologie,
+        )
+
+
+# Width × depth ranges per typology — ALIGNED with the production template
+# library's dimensions_grille (templates_library table). Keeping the solver
+# and templates in sync prevents slots that the template selector must
+# later reject for being too narrow / too deep to fit any template.
+# If new templates with wider ranges are added, bump these values.
 _TYPO_DIM_RANGE: dict[Typologie, tuple[float, float, float, float]] = {
-    Typologie.STUDIO: (4.0, 5.5, 5.5, 8.0),
-    Typologie.T1:     (4.5, 6.0, 6.0, 9.0),
-    Typologie.T2:     (5.8, 7.2, 7.0, 11.0),
-    Typologie.T3:     (7.0, 8.5, 7.5, 12.0),
-    Typologie.T4:     (8.0, 10.5, 8.0, 12.0),
+    Typologie.STUDIO: (4.0, 5.5, 5.5, 7.0),
+    Typologie.T1:     (4.5, 6.0, 6.0, 7.5),
+    Typologie.T2:     (6.0, 7.5, 7.0, 8.5),
+    Typologie.T3:     (7.2, 9.0, 8.5, 10.5),
+    Typologie.T4:     (8.5, 11.0, 9.0, 11.5),
     Typologie.T5:     (9.5, 12.0, 10.0, 13.0),
 }
 
@@ -795,7 +987,7 @@ _TYPO_SURFACE_RANGE: dict[Typologie, tuple[float, float]] = {
     Typologie.T2:     (42.0, 52.0),
     Typologie.T3:     (52.0, 65.0),   # user: ≤60 m²
     Typologie.T4:     (65.0, 90.0),   # > T3 max
-    Typologie.T5:     (90.0, 120.0),  # > T4 max
+    Typologie.T5:     (90.0, 160.0),  # > T4 max; extended to absorb merged landlocked-adjacent slots
 }
 
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BuildingModelNiveau,
   BuildingModelCellule,
@@ -14,6 +15,8 @@ import {
   type Coord,
 } from "./plan-utils";
 import { PlanPatterns, NorthArrow, ScaleBar, TitleBlock } from "./plan-patterns";
+import { CotationsLayer } from "./CotationsLayer";
+import { BalconsJardinsLayer } from "./BalconsJardinsLayer";
 import {
   Sofa3p, DiningTable,
   Bed, Wardrobe, Desk,
@@ -34,6 +37,72 @@ interface NiveauPlanProps {
   height?: number;
   northAngleDeg?: number;
   projectName?: string;
+  /** Footprint for PC-grade cotations overlay. Required if showCotations=true. */
+  footprint?: [number, number][];
+  /** Render the PC cotations overlay (exterior perimeter, room dims, opening widths). */
+  showCotations?: boolean;
+  /** Called when the user clicks an apartment. Empty string to deselect. */
+  onSelectApt?: (aptId: string) => void;
+  /** Currently selected apt id — renders a highlight outline around it. */
+  selectedAptId?: string | null;
+  /** Edit mode — shows draggable handles for openings/walls on the selected apt. */
+  editMode?: boolean;
+  /** Notifies parent of geometry changes made in edit mode. */
+  onGeometryChange?: (payload: {
+    apt_id: string;
+    openings?: Array<{ opening_id: string; position_along_wall_cm: number }>;
+    walls?: Array<{ wall_id: string; geometry: { type: "LineString"; coords: [number, number][] } }>;
+    rooms?: Array<{ room_id: string; polygon_xy: [number, number][] }>;
+  }) => void;
+  /** Id of the opening clicked (non-drag) — parent uses it to show delete UI. */
+  selectedOpeningId?: string | null;
+  onSelectOpening?: (id: string | null) => void;
+  /** Set to a non-null opening type to enter "add-opening" mode. In this
+   * mode every wall of the selected apt becomes clickable; click a wall
+   * to spawn a new opening at that position. */
+  addOpeningType?: "fenetre" | "porte_fenetre" | "porte_interieure" | null;
+  onAddOpening?: (op: {
+    type: "fenetre" | "porte_fenetre" | "porte_interieure";
+    wall_id: string;
+    position_along_wall_cm: number;
+  }) => void;
+  /** Id of the wall selected (click on a cloison handle) — for delete UI. */
+  selectedWallId?: string | null;
+  onSelectWall?: (id: string | null) => void;
+  /** Notifies parent when a wall has been dragged to a new position. */
+  onWallMove?: (wallId: string, newCoords: [number, number][]) => void;
+  /** Local overrides applied live while dragging a wall — keyed by wall id. */
+  wallOverrides?: Record<string, [number, number][]>;
+  /** Room polygon overrides so dragging a wall also visually reshapes rooms. */
+  roomOverrides?: Record<string, [number, number][]>;
+  /** Click on a corridor polygon → parent handles selection/delete. */
+  selectedCirculationId?: string | null;
+  onSelectCirculation?: (id: string | null) => void;
+  /** Corridor polygon overrides (live drag preview). */
+  circulationOverrides?: Record<string, [number, number][]>;
+  onCirculationEdge?: (id: string, coords: [number, number][]) => void;
+  selectedCirculationEdge?: number | null;
+  onSelectCirculationEdge?: (idx: number | null) => void;
+  /** Core element-level selection + drag (escalier / ascenseur / palier). */
+  selectedCoreElement?: "escalier" | "ascenseur" | "palier" | null;
+  onSelectCoreElement?: (el: "escalier" | "ascenseur" | "palier" | null) => void;
+  /** Per-element live position overrides. */
+  escalierCenter?: [number, number] | null;
+  ascCenter?: [number, number] | null;
+  palierCenter?: [number, number] | null;
+  /** Notify parent when the user drags a sub-element. */
+  onCoreElementMove?: (el: "escalier" | "ascenseur" | "palier", center: [number, number]) => void;
+  /** Per-element hidden sides (persisted in BM core.{el}.hidden_sides). */
+  escalierHiddenSides?: string[];
+  ascHiddenSides?: string[];
+  palierHiddenSides?: string[];
+  /** Per-element "removed" flags — skip rendering entirely. */
+  escalierRemoved?: boolean;
+  ascRemoved?: boolean;
+  palierRemoved?: boolean;
+  /** Click a specific side of a core sub-element. */
+  onSelectCoreSide?: (el: "escalier" | "ascenseur" | "palier", side: "nord" | "sud" | "est" | "ouest") => void;
+  selectedCoreSide?: { el: "escalier" | "ascenseur" | "palier"; side: string } | null;
 }
 
 export function NiveauPlan({
@@ -47,6 +116,41 @@ export function NiveauPlan({
   height = 620,
   northAngleDeg = 0,
   projectName,
+  onSelectApt,
+  selectedAptId,
+  editMode = false,
+  onGeometryChange,
+  selectedOpeningId,
+  onSelectOpening,
+  addOpeningType,
+  onAddOpening,
+  selectedWallId,
+  onSelectWall,
+  onWallMove,
+  wallOverrides,
+  roomOverrides,
+  selectedCirculationId,
+  onSelectCirculation,
+  circulationOverrides,
+  onCirculationEdge,
+  selectedCirculationEdge,
+  onSelectCirculationEdge,
+  selectedCoreElement,
+  onSelectCoreElement,
+  escalierCenter,
+  ascCenter,
+  palierCenter,
+  onCoreElementMove,
+  escalierHiddenSides,
+  ascHiddenSides,
+  palierHiddenSides,
+  escalierRemoved,
+  ascRemoved,
+  palierRemoved,
+  onSelectCoreSide,
+  selectedCoreSide,
+  footprint,
+  showCotations = false,
 }: NiveauPlanProps) {
   const allPts: Coord[] = niveau.cellules.flatMap((c) => c.polygon_xy);
   const circulations = niveau.circulations_communes ?? [];
@@ -81,6 +185,7 @@ export function NiveauPlan({
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       className="bg-white border border-slate-200 rounded-lg"
+      data-niveau-plan="true"
       style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}
     >
       <PlanPatterns />
@@ -91,15 +196,91 @@ export function NiveauPlan({
       {/* Border frame */}
       <rect x={12} y={12} width={width - 24} height={height - 24} fill="white" stroke="#0f172a" strokeWidth={0.6} />
 
-      {/* Cellules */}
-      {niveau.cellules.map((c) => (
-        <CelluleLayer key={c.id} cellule={c} scale={scale} project={project} />
-      ))}
+      {/* Enveloppe du bâtiment — background clair qui trace l'intérieur
+          du L et masque la zone NOTCH (intérieur du L non construit). Sans
+          ce fond, les jardins privatifs se dessinent dans la notch et
+          l'ensemble ressemble à une croix au lieu d'un L. */}
+      {footprint && footprint.length >= 3 && (
+        <g>
+          <path
+            d={ringToPath(footprint, project)}
+            fill="#f5f5f4"
+            stroke="none"
+          />
+        </g>
+      )}
 
-      {/* Palier (circulation commune) */}
-      {circulations.map((circ) => (
-        <PalierLayer key={circ.id} circulation={circ} scale={scale} project={project} />
-      ))}
+      {/* Balcons (étages) / Jardins privatifs (RDC) — dessinés AVANT les
+          cellules pour que le bâtiment les recouvre à la jonction mur. */}
+      {footprint && footprint.length >= 3 && (
+        <BalconsJardinsLayer
+          niveau={niveau}
+          footprint={footprint}
+          project={project}
+          scale={scale}
+          isRdc={isRdc}
+        />
+      )}
+
+      {/* Cellules — apply live wall/room overrides on the selected apt */}
+      {niveau.cellules.map((c) => {
+        const isEdited = c.id === selectedAptId;
+        const displayedCell = isEdited && (wallOverrides || roomOverrides)
+          ? {
+              ...c,
+              walls: (c.walls ?? []).map((w) =>
+                wallOverrides?.[w.id]
+                  ? { ...w, geometry: { ...w.geometry, coords: wallOverrides[w.id] } as typeof w.geometry }
+                  : w,
+              ),
+              rooms: (c.rooms ?? []).map((r) =>
+                roomOverrides?.[r.id]
+                  ? { ...r, polygon_xy: roomOverrides[r.id] as typeof r.polygon_xy }
+                  : r,
+              ),
+            }
+          : c;
+        return (
+          <CelluleLayer
+            key={c.id}
+            cellule={displayedCell}
+            scale={scale}
+            project={project}
+            onSelect={onSelectApt}
+            isSelected={selectedAptId === c.id}
+          />
+        );
+      })}
+
+      {/* Palier (circulation commune) — apply live overrides for drag preview */}
+      {circulations.map((circ) => {
+        const override = circulationOverrides?.[circ.id];
+        const displayed = override ? { ...circ, polygon_xy: override as typeof circ.polygon_xy } : circ;
+        const selectable = editMode && onSelectCirculation;
+        const isSel = selectedCirculationId === circ.id;
+        return (
+          <g
+            key={circ.id}
+            style={selectable ? { cursor: "pointer" } : undefined}
+            onClick={selectable ? (e) => {
+              e.stopPropagation();
+              onSelectCirculation?.(circ.id === selectedCirculationId ? null : circ.id);
+            } : undefined}
+          >
+            <PalierLayer circulation={displayed} scale={scale} project={project} />
+            {isSel && (
+              <path
+                d={ringToPath(displayed.polygon_xy, project)}
+                fill="none"
+                stroke="#dc2626"
+                strokeWidth={3}
+                strokeDasharray="6 3"
+                pointerEvents="none"
+              />
+            )}
+          </g>
+        );
+      })}
 
       {/* Core (escalier top-left, ASC top-right, palier strip bottom).
           The palier sits SOUTH of the stairs/ASC so it flows naturally
@@ -112,6 +293,19 @@ export function NiveauPlan({
           hasAscenseur={hasAscenseur}
           scale={scale}
           project={project}
+          escalierCenter={escalierCenter ?? undefined}
+          ascCenter={ascCenter ?? undefined}
+          palierCenter={palierCenter ?? undefined}
+          selectedCoreElement={editMode ? selectedCoreElement : null}
+          onSelectCoreElement={editMode ? onSelectCoreElement : undefined}
+          escalierHiddenSides={escalierHiddenSides}
+          ascHiddenSides={ascHiddenSides}
+          palierHiddenSides={palierHiddenSides}
+          escalierRemoved={escalierRemoved}
+          ascRemoved={ascRemoved}
+          palierRemoved={palierRemoved}
+          onSelectCoreSide={editMode ? onSelectCoreSide : undefined}
+          selectedCoreSide={editMode ? selectedCoreSide : null}
         />
       )}
 
@@ -129,6 +323,21 @@ export function NiveauPlan({
         />
       )}
 
+      {/* Contour L FINAL par-dessus TOUT — garantit que la forme du
+          bâtiment (L) soit lisible visuellement même avec les jardins
+          qui débordent vers la notch. Sans ce trait, les jardins
+          ceinturent les apts et masquent l'L → rendu cross. */}
+      {footprint && footprint.length >= 3 && (
+        <path
+          d={ringToPath(footprint, project)}
+          fill="none"
+          stroke="#0f172a"
+          strokeWidth={3.5}
+          strokeLinejoin="miter"
+          style={{ pointerEvents: "none" }}
+        />
+      )}
+
       {/* Sheet header */}
       <g>
         <rect x={20} y={20} width={width - 40} height={38} fill="white" />
@@ -141,6 +350,11 @@ export function NiveauPlan({
           {projectName ? ` · ${projectName}` : ""}
         </text>
       </g>
+
+      {/* PC-grade cotations overlay (opt-in) */}
+      {showCotations && footprint && footprint.length >= 3 && (
+        <CotationsLayer niveau={niveau} footprint={footprint} project={project} scale={scale} />
+      )}
 
       {/* Scale bar */}
       <ScaleBar x={34} y={height - 36} scalePxPerM={scale} meters={5} />
@@ -156,6 +370,92 @@ export function NiveauPlan({
         subtitle={`${niveau.usage_principal} · 1:100`}
         sheetCode={`PA-${String(niveau.index + 10).padStart(2, "0")}`}
       />
+
+      {/* Edit-mode core element drag handles (escalier / asc / palier) */}
+      {editMode && selectedCoreElement && corePosition && onCoreElementMove && (() => {
+        const side = Math.sqrt(coreSurfaceM2);
+        const [cx, cy] = corePosition;
+        const defCenters = {
+          escalier: [cx - side * 0.21, cy + side * 0.19] as [number, number],
+          ascenseur: [cx + side * 0.29, cy + side * 0.19] as [number, number],
+          palier: [cx, cy - side * 0.19] as [number, number],
+        };
+        const overrides = {
+          escalier: escalierCenter,
+          ascenseur: ascCenter,
+          palier: palierCenter,
+        };
+        const el = selectedCoreElement;
+        const pos = overrides[el] ?? defCenters[el];
+        return (
+          <CoreDragHandle
+            position={pos}
+            scale={scale}
+            project={project}
+            box={box}
+            onMove={(c) => onCoreElementMove(el, c)}
+          />
+        );
+      })()}
+
+      {/* Edit-mode corridor edge handles */}
+      {editMode && selectedCirculationId && onCirculationEdge && (() => {
+        const circ = circulations.find((c) => c.id === selectedCirculationId);
+        if (!circ) return null;
+        const coords = (circulationOverrides?.[circ.id] ?? circ.polygon_xy) as [number, number][];
+        return (
+          <CirculationEdgeOverlay
+            circulationId={circ.id}
+            polygon={coords}
+            scale={scale}
+            project={project}
+            box={box}
+            onEdge={onCirculationEdge}
+            selectedEdgeIdx={selectedCirculationEdge ?? null}
+            onSelectEdge={onSelectCirculationEdge}
+          />
+        );
+      })()}
+
+      {/* Edit-mode drag handles for the selected apt */}
+      {editMode && selectedAptId && (() => {
+        const sel = niveau.cellules.find((c) => c.id === selectedAptId);
+        if (!sel) return null;
+        // Apply live overrides so the wall handles follow the dragged position
+        const sel2 = (wallOverrides || roomOverrides)
+          ? {
+              ...sel,
+              walls: (sel.walls ?? []).map((w) =>
+                wallOverrides?.[w.id]
+                  ? { ...w, geometry: { ...w.geometry, coords: wallOverrides[w.id] } as typeof w.geometry }
+                  : w,
+              ),
+              rooms: (sel.rooms ?? []).map((r) =>
+                roomOverrides?.[r.id]
+                  ? { ...r, polygon_xy: roomOverrides[r.id] as typeof r.polygon_xy }
+                  : r,
+              ),
+            }
+          : sel;
+        return (
+          <EditOverlay
+            cellule={sel2}
+            scale={scale}
+            project={project}
+            box={box}
+            width={width}
+            headerPx={HEADER_PX}
+            onGeometryChange={onGeometryChange}
+            selectedOpeningId={selectedOpeningId}
+            onSelectOpening={onSelectOpening}
+            addOpeningType={addOpeningType}
+            onAddOpening={onAddOpening}
+            selectedWallId={selectedWallId}
+            onSelectWall={onSelectWall}
+            onWallMove={onWallMove}
+          />
+        );
+      })()}
     </svg>
   );
 }
@@ -168,13 +468,35 @@ interface LayerProps {
   project: (c: Coord) => Coord;
 }
 
-function CelluleLayer({ cellule, scale, project }: LayerProps) {
+function CelluleLayer({
+  cellule, scale, project,
+  onSelect, isSelected,
+}: LayerProps & { onSelect?: (id: string) => void; isSelected?: boolean }) {
+  const [hover, setHover] = useState(false);
+  const clickable = cellule.type === "logement" && !!onSelect;
   return (
-    <g>
+    <g
+      style={clickable ? { cursor: "pointer" } : undefined}
+      onClick={clickable ? (e) => { e.stopPropagation(); onSelect!(cellule.id); } : undefined}
+      onMouseEnter={clickable ? () => setHover(true) : undefined}
+      onMouseLeave={clickable ? () => setHover(false) : undefined}
+    >
       {/* Rooms — fill first */}
       {cellule.rooms.map((r) => (
         <RoomFloor key={r.id} room={r} project={project} />
       ))}
+
+      {/* Selection highlight (drawn before walls so walls stay crisp) */}
+      {isSelected && (
+        <path
+          d={ringToPath(cellule.polygon_xy, project)}
+          fill="#2563eb"
+          fillOpacity={0.12}
+          stroke="#2563eb"
+          strokeWidth={3}
+          strokeDasharray="6 3"
+        />
+      )}
 
       {/* Cellule envelope (thick outer walls ~20cm) */}
       <CelluleEnvelope cellule={cellule} scale={scale} project={project} />
@@ -221,6 +543,20 @@ function CelluleLayer({ cellule, scale, project }: LayerProps) {
       {/* Typologie tag */}
       {cellule.typologie && (
         <TypologieTag cellule={cellule} project={project} />
+      )}
+
+      {/* Hover overlay — drawn last so it's visible above room tiles.
+          Faint blue tint signals the apt is clickable in edit mode. */}
+      {clickable && hover && !isSelected && (
+        <path
+          d={ringToPath(cellule.polygon_xy, project)}
+          fill="#3b82f6"
+          fillOpacity={0.12}
+          stroke="#2563eb"
+          strokeWidth={1.5}
+          strokeDasharray="4 3"
+          pointerEvents="none"
+        />
       )}
     </g>
   );
@@ -680,14 +1016,40 @@ function PalierLayer({ circulation, scale, project }: {
   // connect (passage from palier to corridors).
   const isCorePalier = (circulation.id ?? "").toLowerCase().startsWith("palier");
   const stroke = Math.max(1, 0.05 * scale);
+  // `hidden_edges` is a list of edge indices (edge i goes from vertex i to
+  // vertex (i+1)%n) whose stroke should not render. Lets the user remove a
+  // "face" of a corridor visually without changing its walkable polygon.
+  const hidden: number[] = (circulation as unknown as { hidden_edges?: number[] })
+    .hidden_edges ?? [];
+  const pts = circulation.polygon_xy;
   return (
-    <g style={{ pointerEvents: "none" }}>
+    <g>
+      {/* Fill without stroke */}
       <path
-        d={ringToPath(circulation.polygon_xy, project)}
+        d={ringToPath(pts, project)}
         fill="url(#pat-tiles)"
-        stroke="#0f172a"
-        strokeWidth={stroke}
-        strokeLinejoin="round"
+        stroke="none"
+      />
+      {/* Draw each edge as its own line so hidden ones can be skipped */}
+      {pts.map((p, i) => {
+        if (hidden.includes(i)) return null;
+        const q = pts[(i + 1) % pts.length];
+        const [x1, y1] = project(p);
+        const [x2, y2] = project(q);
+        return (
+          <line key={`e-${i}`} x1={x1} y1={y1} x2={x2} y2={y2}
+            stroke="#0f172a"
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            pointerEvents="none"
+          />
+        );
+      })}
+      <path
+        d={ringToPath(pts, project)}
+        fill="none"
+        stroke="transparent"
+        strokeWidth={0}
       />
       {/* Only the core-palier and hall keep their label inline — corridors
           already have their width annotated via the plan legend. */}
@@ -711,12 +1073,41 @@ function CoreLayer({
   hasAscenseur,
   scale,
   project,
+  escalierCenter,
+  ascCenter,
+  palierCenter,
+  selectedCoreElement,
+  onSelectCoreElement,
+  escalierHiddenSides,
+  ascHiddenSides,
+  palierHiddenSides,
+  escalierRemoved,
+  ascRemoved,
+  palierRemoved,
+  onSelectCoreSide,
+  selectedCoreSide,
 }: {
   position: [number, number];
   surfaceM2: number;
   hasAscenseur: boolean;
   scale: number;
   project: (c: Coord) => Coord;
+  escalierCenter?: [number, number];
+  ascCenter?: [number, number];
+  palierCenter?: [number, number];
+  selectedCoreElement?: "escalier" | "ascenseur" | "palier" | null;
+  onSelectCoreElement?: (el: "escalier" | "ascenseur" | "palier" | null) => void;
+  /** Per-element hidden wall sides (north/south/east/west). */
+  escalierHiddenSides?: string[];
+  ascHiddenSides?: string[];
+  palierHiddenSides?: string[];
+  /** Skip rendering this sub-element entirely (soft-delete via BM flag). */
+  escalierRemoved?: boolean;
+  ascRemoved?: boolean;
+  palierRemoved?: boolean;
+  /** Click on a specific side (N/S/E/O) of a core element. */
+  onSelectCoreSide?: (el: "escalier" | "ascenseur" | "palier", side: "nord" | "sud" | "est" | "ouest") => void;
+  selectedCoreSide?: { el: "escalier" | "ascenseur" | "palier"; side: string } | null;
 }) {
   // Layout convention (user spec, maximises usable space + exterior views):
   //   Top 62 % : escalier (left 58 %) + ASC (right 42 %)
@@ -728,69 +1119,137 @@ function CoreLayer({
   // the north side.
   const side = Math.sqrt(surfaceM2);
   const [cxM, cyM] = position;
-  // Project the core's SW (world small-x, small-y) and NE corners. Because
-  // the projector flips Y (SVG y grows down, world y grows up), SW maps to
-  // the PIXEL BOTTOM-LEFT and NE to the PIXEL TOP-RIGHT. Compute the
-  // unambiguous pixel-rect top-left with min().
-  const [pswX, pswY] = project([cxM - side / 2, cyM - side / 2]);
-  const [pneX, pneY] = project([cxM + side / 2, cyM + side / 2]);
-  const rectLeft = Math.min(pswX, pneX);
-  const rectTop = Math.min(pswY, pneY); // pixel-top of the core on screen
-  const fullW = Math.abs(pneX - pswX);
-  const fullH = Math.abs(pneY - pswY);
 
-  const STAIRS_ZONE_FRAC = 0.62;
-  const PALIER_ZONE_FRAC = 0.38;
-  const STAIR_W_FRAC = 0.58;
-  const ASC_W_FRAC = 0.42;
+  // Element sizes in world meters (consistent across plans)
+  const STAIR_W_M = side * 0.58;
+  const STAIR_H_M = side * 0.62;
+  const ASC_W_M = side * 0.42;
+  const ASC_H_M = side * 0.40;
+  const PAL_W_M = side;
+  const PAL_H_M = side * 0.38;
 
-  const topZoneH = fullH * STAIRS_ZONE_FRAC; // stairs + ASC (pixel TOP of core)
-  const palierZoneH = fullH * PALIER_ZONE_FRAC; // palier strip (pixel BOTTOM = world SOUTH)
+  // Default centers relative to core center (match legacy layout)
+  const defStairC: [number, number] = [cxM - side * 0.21, cyM + side * 0.19];
+  const defAscC: [number, number] = [cxM + side * 0.29, cyM + side * 0.19];
+  const defPalC: [number, number] = [cxM, cyM - side * 0.19];
 
-  const stairRect = {
-    x: rectLeft,
-    y: rectTop,
-    w: fullW * STAIR_W_FRAC,
-    h: topZoneH,
+  const stairC = escalierCenter ?? defStairC;
+  const ascC = ascCenter ?? defAscC;
+  const palC = palierCenter ?? defPalC;
+
+  // Helper: convert center+size (world) to pixel rect {x,y,w,h}
+  const toPixelRect = (c: [number, number], wM: number, hM: number) => {
+    const [pswX, pswY] = project([c[0] - wM / 2, c[1] - hM / 2]);
+    const [pneX, pneY] = project([c[0] + wM / 2, c[1] + hM / 2]);
+    return {
+      x: Math.min(pswX, pneX),
+      y: Math.min(pswY, pneY),
+      w: Math.abs(pneX - pswX),
+      h: Math.abs(pneY - pswY),
+    };
   };
-  const elevRect = {
-    x: rectLeft + fullW * STAIR_W_FRAC,
-    y: rectTop + topZoneH * 0.18,
-    w: fullW * ASC_W_FRAC,
-    h: topZoneH * 0.64,
-  };
+
+  const stairRect = toPixelRect(stairC, STAIR_W_M, STAIR_H_M);
+  const elevRect = toPixelRect(ascC, ASC_W_M, ASC_H_M);
+  const palierRect = toPixelRect(palC, PAL_W_M, PAL_H_M);
 
   const NB_TREADS = 11;
+  const selEscalier = selectedCoreElement === "escalier";
+  const selAsc = selectedCoreElement === "ascenseur";
+  const selPalier = selectedCoreElement === "palier";
+
+  const clickable = !!onSelectCoreElement;
+
+  /** Render the 4 sides of a core-sub-rect as independent <line>s so the
+   * user can click any one and hide it (e.g. "remove the north side of
+   * the palier square"). */
+  const RectSides = ({
+    rect, hidden = [], el, selected, baseStrokeWidth,
+  }: {
+    rect: { x: number; y: number; w: number; h: number };
+    hidden?: string[];
+    el: "escalier" | "ascenseur" | "palier";
+    selected: boolean;
+    baseStrokeWidth: number;
+  }) => {
+    const sides: Array<{ side: "nord" | "sud" | "est" | "ouest"; x1: number; y1: number; x2: number; y2: number }> = [
+      // SVG y grows down but world y grows up, so the rect's top-in-SVG is "north" in world.
+      { side: "nord", x1: rect.x, y1: rect.y, x2: rect.x + rect.w, y2: rect.y },
+      { side: "sud", x1: rect.x, y1: rect.y + rect.h, x2: rect.x + rect.w, y2: rect.y + rect.h },
+      { side: "ouest", x1: rect.x, y1: rect.y, x2: rect.x, y2: rect.y + rect.h },
+      { side: "est", x1: rect.x + rect.w, y1: rect.y, x2: rect.x + rect.w, y2: rect.y + rect.h },
+    ];
+    return (
+      <g>
+        {sides.map(({ side, x1, y1, x2, y2 }) => {
+          if (hidden.includes(side)) return null;
+          const isSideSelected = selectedCoreSide?.el === el && selectedCoreSide?.side === side;
+          const overallSelected = selected;
+          const stroke = isSideSelected ? "#dc2626" : overallSelected ? "#dc2626" : "#0f172a";
+          const sw = isSideSelected ? 3.5 : overallSelected ? 2 : baseStrokeWidth;
+          return (
+            <g key={side}>
+              {/* Thick transparent hit area so tiny clicks still register */}
+              {onSelectCoreSide && (
+                <line x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke="white" strokeOpacity={0.001} strokeWidth={14}
+                  style={{ cursor: "pointer" }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectCoreSide(el, side);
+                  }}
+                />
+              )}
+              <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={stroke} strokeWidth={sw}
+                strokeDasharray={isSideSelected ? "4 3" : undefined}
+                pointerEvents="none"
+              />
+            </g>
+          );
+        })}
+      </g>
+    );
+  };
 
   return (
-    <g style={{ pointerEvents: "none" }}>
-      {/* 1. Erase the palier tile pattern on the TOP zone (pixel top =
-            world north) so stairs + ASC appear on a clean white
-            background. Bottom zone (pixel bottom = world south) keeps
-            its tile pattern drawn earlier by PalierLayer. */}
-      <rect x={rectLeft} y={rectTop} width={fullW} height={topZoneH} fill="white" />
+    <g>
+      {/* Palier strip (clickable) */}
+      {!palierRemoved && (
+      <g
+        style={clickable ? { cursor: "pointer" } : undefined}
+        onClick={clickable ? (e) => {
+          e.stopPropagation();
+          onSelectCoreElement!(selPalier ? null : "palier");
+        } : undefined}
+      >
+        <rect
+          x={palierRect.x} y={palierRect.y}
+          width={palierRect.w} height={palierRect.h}
+          fill="url(#pat-tiles)"
+          stroke="none"
+        />
+        <RectSides rect={palierRect} hidden={palierHiddenSides} el="palier" selected={selPalier} baseStrokeWidth={1.2} />
+      </g>
+      )}
 
-      {/* 2. Black separator line between top (stairs+ASC) and bottom
-            (palier) zones — visually confirms the two-zone split. */}
-      <line
-        x1={rectLeft}
-        y1={rectTop + topZoneH}
-        x2={rectLeft + fullW}
-        y2={rectTop + topZoneH}
-        stroke="#0f172a"
-        strokeWidth={1.4}
-      />
-
-      {/* 3. Stairs rectangle (top-left) */}
+      {/* Stairs rectangle (clickable) */}
+      {!escalierRemoved && (
+      <g
+        style={clickable ? { cursor: "pointer" } : undefined}
+        onClick={clickable ? (e) => {
+          e.stopPropagation();
+          onSelectCoreElement!(selEscalier ? null : "escalier");
+        } : undefined}
+      >
       <rect
         x={stairRect.x}
         y={stairRect.y}
         width={stairRect.w}
         height={stairRect.h}
         fill="#e2e8f0"
-        stroke="#0f172a"
-        strokeWidth={1.4}
+        stroke="none"
       />
+      <RectSides rect={stairRect} hidden={escalierHiddenSides} el="escalier" selected={selEscalier} baseStrokeWidth={1.4} />
       {/* Vertical tread lines across the stair box */}
       {Array.from({ length: NB_TREADS }).map((_, i) => {
         const frac = (i + 0.5) / NB_TREADS;
@@ -832,19 +1291,27 @@ function CoreLayer({
       >
         escalier
       </text>
+      </g>
+      )}
 
-      {/* 4. Elevator (top-right, beside the stairs in the SAME top zone) */}
-      {hasAscenseur && (
-        <g>
+      {/* Elevator (clickable) — now independently positionable */}
+      {hasAscenseur && !ascRemoved && (
+        <g
+          style={clickable ? { cursor: "pointer" } : undefined}
+          onClick={clickable ? (e) => {
+            e.stopPropagation();
+            onSelectCoreElement!(selAsc ? null : "ascenseur");
+          } : undefined}
+        >
           <rect
             x={elevRect.x}
             y={elevRect.y}
             width={elevRect.w}
             height={elevRect.h}
             fill="#f8fafc"
-            stroke="#0f172a"
-            strokeWidth={1.2}
+            stroke="none"
           />
+          <RectSides rect={elevRect} hidden={ascHiddenSides} el="ascenseur" selected={selAsc} baseStrokeWidth={1.2} />
           <line
             x1={elevRect.x + 2}
             y1={elevRect.y + elevRect.h / 2}
@@ -867,27 +1334,32 @@ function CoreLayer({
         </g>
       )}
 
-      {/* 5. Palier label in the BOTTOM strip (the palier tiles from
-             PalierLayer are still visible there). */}
-      <text
-        x={rectLeft + fullW / 2}
-        y={rectTop + topZoneH + palierZoneH / 2 - 2}
-        textAnchor="middle"
-        fontSize={9.5}
-        fontWeight={600}
-        fill="#334155"
-      >
-        palier
-      </text>
-      <text
-        x={rectLeft + fullW / 2}
-        y={rectTop + topZoneH + palierZoneH / 2 + 10}
-        textAnchor="middle"
-        fontSize={8}
-        fill="#64748b"
-      >
-        140 cm
-      </text>
+      {/* Palier label (centered on palier rect) */}
+      {!palierRemoved && (
+        <>
+          <text
+            x={palierRect.x + palierRect.w / 2}
+            y={palierRect.y + palierRect.h / 2 - 2}
+            textAnchor="middle"
+            fontSize={9.5}
+            fontWeight={600}
+            fill="#334155"
+            pointerEvents="none"
+          >
+            palier
+          </text>
+          <text
+            x={palierRect.x + palierRect.w / 2}
+            y={palierRect.y + palierRect.h / 2 + 10}
+            textAnchor="middle"
+            fontSize={8}
+            fill="#64748b"
+            pointerEvents="none"
+          >
+            140 cm
+          </text>
+        </>
+      )}
     </g>
   );
 }
@@ -1096,6 +1568,548 @@ function MainEntrance({
       >
         ↓ Rue
       </text>
+    </g>
+  );
+}
+
+
+/* ═════════════════════ EDIT OVERLAY ═════════════════════ */
+
+type BBox = { minx: number; miny: number; maxx: number; maxy: number };
+
+/** Convert a pixel coord in the SVG back to world (meters). Mirrors
+ * ``makeProjector`` in plan-utils.ts. */
+function makeInverseProjector(
+  box: BBox, width: number, planHeight: number, padding: number, headerPx: number,
+) {
+  const w = box.maxx - box.minx || 1;
+  const h = box.maxy - box.miny || 1;
+  const scale = Math.min((width - 2 * padding) / w, (planHeight - 2 * padding) / h);
+  const drawnW = w * scale;
+  const drawnH = h * scale;
+  const offsetX = (width - drawnW) / 2;
+  const offsetY = (planHeight - drawnH) / 2;
+  return ([px, py]: [number, number]): [number, number] => [
+    box.minx + (px - offsetX) / scale,
+    box.miny + (planHeight - offsetY - (py - headerPx)) / scale,
+  ];
+}
+
+function EditOverlay({
+  cellule, scale, project, box, width, headerPx, onGeometryChange,
+  selectedOpeningId, onSelectOpening,
+  addOpeningType, onAddOpening,
+  selectedWallId, onSelectWall, onWallMove,
+}: {
+  cellule: BuildingModelCellule;
+  scale: number;
+  project: (c: Coord) => Coord;
+  box: BBox;
+  width: number;
+  headerPx: number;
+  onGeometryChange?: NiveauPlanProps["onGeometryChange"];
+  selectedOpeningId?: string | null;
+  onSelectOpening?: (id: string | null) => void;
+  addOpeningType?: "fenetre" | "porte_fenetre" | "porte_interieure" | null;
+  onAddOpening?: (op: {
+    type: "fenetre" | "porte_fenetre" | "porte_interieure";
+    wall_id: string;
+    position_along_wall_cm: number;
+  }) => void;
+  selectedWallId?: string | null;
+  onSelectWall?: (id: string | null) => void;
+  onWallMove?: (wallId: string, newCoords: [number, number][]) => void;
+}) {
+  const [openingOverrides, setOpeningOverrides] = useState<Record<string, number>>({});
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+
+  const walls = cellule.walls ?? [];
+  const wallMap = new Map(walls.map((w) => [w.id, w]));
+
+  // Convert a mouse/touch client point to world meters by walking up to
+  // the enclosing <svg> and using its CTM. Robust to window resize/zoom.
+  const clientToWorld = useCallback(
+    (clientX: number, clientY: number, svgEl: SVGSVGElement): [number, number] | null => {
+      const pt = svgEl.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      const ctm = svgEl.getScreenCTM();
+      if (!ctm) return null;
+      const p = pt.matrixTransform(ctm.inverse());
+      const [refPx, refPy] = project([box.minx, box.miny]);
+      return [
+        box.minx + (p.x - refPx) / scale,
+        box.miny + (refPy - p.y) / scale,
+      ];
+    },
+    [box, project, scale],
+  );
+
+  // SVG ref captured at drag-start. Stored in a ref so we always
+  // operate on the SAME <svg> the user clicked (crucial when multiple
+  // plans are rendered — the thumbnail AND the dialog share the same
+  // data-attribute).
+  const dragSvgRef = useRef<SVGSVGElement | null>(null);
+
+  // Global drag listeners — attached once dragging starts, cleaned up on
+  // release. Using document listeners is more reliable than SVG pointer
+  // capture across browsers.
+  useEffect(() => {
+    if (!draggingId) return;
+    const op = (cellule.openings ?? []).find((o) => o.id === draggingId);
+    if (!op) return;
+    const wall = wallMap.get(op.wall_id);
+    if (!wall) return;
+    const coords = wall.geometry?.coords as [number, number][] | undefined;
+    if (!coords || coords.length < 2) return;
+    const [a, b] = coords;
+    const wx = b[0] - a[0];
+    const wy = b[1] - a[1];
+    const wallLenM = Math.hypot(wx, wy);
+    const wallLenCm = wallLenM * 100;
+    const wallLen2 = wx * wx + wy * wy;
+    if (wallLen2 < 1e-6) return;
+
+    const onMove = (e: MouseEvent) => {
+      const svgEl = dragSvgRef.current;
+      if (!svgEl) return;
+      const world = clientToWorld(e.clientX, e.clientY, svgEl);
+      if (!world) return;
+      const dx = world[0] - a[0];
+      const dy = world[1] - a[1];
+      const t = (dx * wx + dy * wy) / wallLen2;
+      const clamped = Math.max(0.05, Math.min(0.95, t));
+      const newPosCm = Math.round((clamped * wallLenCm) / 5) * 5;
+      setOpeningOverrides((prev) => ({ ...prev, [op.id]: newPosCm }));
+    };
+    const onUp = () => {
+      setDraggingId(null);
+      dragSvgRef.current = null;
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [draggingId, cellule.openings, wallMap, clientToWorld]);
+
+  // On drag release commit the change upstream (so the parent can save)
+  const lastDraggedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (draggingId) {
+      lastDraggedIdRef.current = draggingId;
+      return;
+    }
+    const id = lastDraggedIdRef.current;
+    if (!id || !onGeometryChange) return;
+    const pos = openingOverrides[id];
+    if (pos == null) return;
+    onGeometryChange({
+      apt_id: cellule.id,
+      openings: [{ opening_id: id, position_along_wall_cm: pos }],
+    });
+    lastDraggedIdRef.current = null;
+  }, [draggingId, openingOverrides, onGeometryChange, cellule.id]);
+
+  function OpeningHandle({ op }: { op: BuildingModelOpening }) {
+    const wall = wallMap.get(op.wall_id);
+    if (!wall) return null;
+    const coords = wall.geometry?.coords as [number, number][] | undefined;
+    if (!coords || coords.length < 2) return null;
+    const [a, b] = coords;
+    const wallLenM = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const wallLenCm = wallLenM * 100;
+    const posCm = openingOverrides[op.id] ?? op.position_along_wall_cm ?? wallLenCm / 2;
+    const t = Math.max(0, Math.min(1, posCm / Math.max(1, wallLenCm)));
+    const world: [number, number] = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+    const [px, py] = project(world);
+
+    const isDoor = op.type === "porte_entree" || op.type === "porte_interieure";
+    const fill = isDoor ? "#f59e0b" : "#0ea5e9";
+    const isActive = draggingId === op.id;
+    const isSelected = selectedOpeningId === op.id;
+    const radius = isActive || isSelected ? 10 : 8;
+    return (
+      <g
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          // Capture the ACTUAL SVG we're inside (handles the case where
+          // multiple plans share the same [data-niveau-plan] attribute).
+          const svgEl = (e.currentTarget as SVGElement).ownerSVGElement;
+          if (svgEl) dragSvgRef.current = svgEl;
+          onSelectOpening?.(op.id);
+          setDraggingId(op.id);
+        }}
+        style={{ cursor: isActive ? "grabbing" : "grab" }}
+      >
+        <circle cx={px} cy={py} r={18} fill="white" fillOpacity={0.001} />
+        <circle
+          cx={px} cy={py}
+          r={radius}
+          fill={fill}
+          stroke={isSelected ? "#dc2626" : "white"}
+          strokeWidth={isSelected ? 3 : 2}
+        />
+        <text x={px} y={py + 3} textAnchor="middle" fontSize={9} fill="white" fontWeight={700}>
+          {isDoor ? "⇅" : "◇"}
+        </text>
+      </g>
+    );
+  }
+
+  // --- Add-opening mode: overlay clickable hit zones on each candidate wall
+  const exteriorTypes: Record<string, true> = {
+    fenetre: true, porte_fenetre: true,
+  };
+  const isExteriorAdd = addOpeningType ? addOpeningType in exteriorTypes : false;
+
+  function WallHitZone({ wall }: { wall: BuildingModelWall }) {
+    const coords = wall.geometry?.coords as [number, number][] | undefined;
+    if (!coords || coords.length < 2) return null;
+    // Exterior openings go on PORTEUR walls (perimeter); interior on
+    // cloisons. Filter by wall type for clarity.
+    const isPorteur = wall.type === "porteur";
+    if (isExteriorAdd && !isPorteur) return null;
+    if (!isExteriorAdd && isPorteur) return null;
+    const [a, b] = coords;
+    const [ax, ay] = project(a);
+    const [bx, by] = project(b);
+    // Thick transparent line as hit zone
+    const onClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!onAddOpening || !addOpeningType) return;
+      const svgEl = (e.currentTarget as SVGElement).ownerSVGElement;
+      if (!svgEl) return;
+      const world = clientToWorld(e.clientX, e.clientY, svgEl);
+      if (!world) return;
+      const dx = world[0] - a[0];
+      const dy = world[1] - a[1];
+      const wx = b[0] - a[0];
+      const wy = b[1] - a[1];
+      const wallLen2 = wx * wx + wy * wy;
+      if (wallLen2 < 1e-6) return;
+      const t = Math.max(0.05, Math.min(0.95, (dx * wx + dy * wy) / wallLen2));
+      const wallLenCm = Math.hypot(wx, wy) * 100;
+      const pos = Math.round((t * wallLenCm) / 5) * 5;
+      onAddOpening({
+        type: addOpeningType,
+        wall_id: wall.id,
+        position_along_wall_cm: pos,
+      });
+    };
+    return (
+      <g onClick={onClick} style={{ cursor: "crosshair" }}>
+        {/* Transparent fat line for clicking */}
+        <line x1={ax} y1={ay} x2={bx} y2={by} stroke="white" strokeOpacity={0.001} strokeWidth={16} />
+        {/* Visible highlight */}
+        <line x1={ax} y1={ay} x2={bx} y2={by} stroke="#22c55e" strokeWidth={3} strokeDasharray="6 3" />
+      </g>
+    );
+  }
+
+  // ─── Wall dragging (cloisons internes) ───
+  const [draggingWallId, setDraggingWallId] = useState<string | null>(null);
+  const wallSvgRef = useRef<SVGSVGElement | null>(null);
+
+  useEffect(() => {
+    if (!draggingWallId) return;
+    const wall = (cellule.walls ?? []).find((w) => w.id === draggingWallId);
+    if (!wall || wall.type === "porteur") return;
+    const coords = wall.geometry?.coords as [number, number][] | undefined;
+    if (!coords || coords.length < 2) return;
+    const [a, b] = coords;
+    const isVertical = Math.abs(b[0] - a[0]) < 0.01;
+    const isHorizontal = Math.abs(b[1] - a[1]) < 0.01;
+    if (!isVertical && !isHorizontal) return; // only axis-aligned walls
+
+    const onMove = (e: MouseEvent) => {
+      const svgEl = wallSvgRef.current;
+      if (!svgEl) return;
+      const world = clientToWorld(e.clientX, e.clientY, svgEl);
+      if (!world) return;
+      let newCoords: [number, number][];
+      if (isVertical) {
+        // Clamp to apt bbox to stay inside the cellule
+        const aptXs = cellule.polygon_xy.map((p) => p[0]);
+        const newX = Math.max(
+          Math.min(...aptXs) + 0.5,
+          Math.min(Math.max(...aptXs) - 0.5, Math.round(world[0] * 10) / 10),
+        );
+        newCoords = [[newX, a[1]], [newX, b[1]]];
+      } else {
+        const aptYs = cellule.polygon_xy.map((p) => p[1]);
+        const newY = Math.max(
+          Math.min(...aptYs) + 0.5,
+          Math.min(Math.max(...aptYs) - 0.5, Math.round(world[1] * 10) / 10),
+        );
+        newCoords = [[a[0], newY], [b[0], newY]];
+      }
+      onWallMove?.(draggingWallId, newCoords);
+    };
+    const onUp = () => {
+      setDraggingWallId(null);
+      wallSvgRef.current = null;
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [draggingWallId, cellule, clientToWorld, onWallMove]);
+
+  function WallHandle({ wall }: { wall: BuildingModelWall }) {
+    const coords = wall.geometry?.coords as [number, number][] | undefined;
+    if (!coords || coords.length < 2) return null;
+    const [a, b] = coords;
+    const [ax, ay] = project(a);
+    const [bx, by] = project(b);
+    const midWorld: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const [mx, my] = project(midWorld);
+    const isSelected = selectedWallId === wall.id;
+    const isActive = draggingWallId === wall.id;
+    const isPorteur = wall.type === "porteur";
+    const fill = isPorteur ? "#64748b" : "#8b5cf6";
+
+    const onSelectMouseDown = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const svgEl = (e.currentTarget as SVGElement).ownerSVGElement;
+      if (svgEl) wallSvgRef.current = svgEl;
+      onSelectWall?.(wall.id);
+      // Drag only for cloisons (non-porteur)
+      if (!isPorteur) setDraggingWallId(wall.id);
+    };
+
+    return (
+      <g>
+        {/* Entire wall length as invisible click target (16 px wide) */}
+        <line
+          x1={ax} y1={ay} x2={bx} y2={by}
+          stroke="white" strokeOpacity={0.001}
+          strokeWidth={16}
+          style={{ cursor: isActive ? "grabbing" : isPorteur ? "pointer" : "grab" }}
+          onMouseDown={onSelectMouseDown}
+        />
+        {/* Visible highlight along selected wall so user sees what they picked */}
+        {isSelected && (
+          <line
+            x1={ax} y1={ay} x2={bx} y2={by}
+            stroke="#dc2626"
+            strokeWidth={4}
+            strokeDasharray="5 3"
+            pointerEvents="none"
+          />
+        )}
+        {/* Small midpoint handle (color-coded) for drag/visual reference */}
+        <g
+          onMouseDown={onSelectMouseDown}
+          style={{ cursor: isActive ? "grabbing" : isPorteur ? "pointer" : "grab" }}
+        >
+          <circle cx={mx} cy={my} r={14} fill="white" fillOpacity={0.001} />
+          <rect
+            x={mx - 6} y={my - 6}
+            width={12} height={12}
+            rx={2}
+            fill={fill}
+            stroke={isSelected ? "#dc2626" : "white"}
+            strokeWidth={isSelected ? 3 : 2}
+          />
+          <text x={mx} y={my + 3} textAnchor="middle" fontSize={8} fill="white" fontWeight={700}>
+            {isPorteur ? "■" : "↔"}
+          </text>
+        </g>
+      </g>
+    );
+  }
+
+  const openings = cellule.openings ?? [];
+  void headerPx; void width;
+  return (
+    <g>
+      {addOpeningType && walls.map((w) => (
+        <WallHitZone key={w.id} wall={w} />
+      ))}
+      {/* Wall drag handles — only for internal cloisons, only when not in add-opening mode */}
+      {!addOpeningType && walls.map((w) => (
+        <WallHandle key={`wh-${w.id}`} wall={w} />
+      ))}
+      {openings.map((op) => (
+        <OpeningHandle key={op.id} op={op} />
+      ))}
+    </g>
+  );
+}
+
+
+/* ═══════════════════ CORE DRAG HANDLE ═══════════════════ */
+
+function CoreDragHandle({
+  position, scale, project, box, onMove,
+}: {
+  position: [number, number];
+  scale: number;
+  project: (c: Coord) => Coord;
+  box: BBox;
+  onMove: (pos: [number, number]) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [px, py] = project(position);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMouseMove = (e: MouseEvent) => {
+      const svgEl = svgRef.current;
+      if (!svgEl) return;
+      const pt = svgEl.createSVGPoint();
+      pt.x = e.clientX; pt.y = e.clientY;
+      const ctm = svgEl.getScreenCTM();
+      if (!ctm) return;
+      const p = pt.matrixTransform(ctm.inverse());
+      const [refPx, refPy] = project([box.minx, box.miny]);
+      const x = box.minx + (p.x - refPx) / scale;
+      const y = box.miny + (refPy - p.y) / scale;
+      // Snap to 10cm
+      onMove([Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
+    };
+    const onUp = () => { setDragging(false); svgRef.current = null; };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [dragging, box, project, scale, onMove]);
+
+  return (
+    <g
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        svgRef.current = (e.currentTarget as SVGElement).ownerSVGElement;
+        setDragging(true);
+      }}
+      style={{ cursor: dragging ? "grabbing" : "move" }}
+    >
+      <circle cx={px} cy={py} r={22} fill="white" fillOpacity={0.001} />
+      <circle cx={px} cy={py} r={14} fill="#0ea5e9" stroke="white" strokeWidth={3} />
+      <text x={px} y={py + 5} textAnchor="middle" fontSize={14} fontWeight={700} fill="white">
+        ✢
+      </text>
+    </g>
+  );
+}
+
+
+/* ═══════════════════ CIRCULATION EDGE OVERLAY ═══════════════════ */
+
+function CirculationEdgeOverlay({
+  circulationId, polygon, scale, project, box, onEdge,
+  onSelectEdge, selectedEdgeIdx,
+}: {
+  circulationId: string;
+  polygon: [number, number][];
+  scale: number;
+  project: (c: Coord) => Coord;
+  box: BBox;
+  onEdge: (id: string, coords: [number, number][]) => void;
+  onSelectEdge?: (idx: number | null) => void;
+  selectedEdgeIdx?: number | null;
+}) {
+  const [draggingEdgeIdx, setDraggingEdgeIdx] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+
+  useEffect(() => {
+    if (draggingEdgeIdx == null) return;
+    const i = draggingEdgeIdx;
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    const isVertical = Math.abs(a[0] - b[0]) < 0.01;
+    const isHorizontal = Math.abs(a[1] - b[1]) < 0.01;
+    if (!isVertical && !isHorizontal) return;
+
+    const onMove = (e: MouseEvent) => {
+      const svgEl = svgRef.current;
+      if (!svgEl) return;
+      const pt = svgEl.createSVGPoint();
+      pt.x = e.clientX; pt.y = e.clientY;
+      const ctm = svgEl.getScreenCTM();
+      if (!ctm) return;
+      const p = pt.matrixTransform(ctm.inverse());
+      const [refPx, refPy] = project([box.minx, box.miny]);
+      const worldX = box.minx + (p.x - refPx) / scale;
+      const worldY = box.miny + (refPy - p.y) / scale;
+
+      // Update both endpoints of this edge (axis-aligned move)
+      const newPolygon = polygon.map((pt, idx) => {
+        const isEdgePt = idx === i || idx === (i + 1) % polygon.length;
+        if (!isEdgePt) return pt;
+        if (isVertical) return [Math.round(worldX * 10) / 10, pt[1]] as [number, number];
+        return [pt[0], Math.round(worldY * 10) / 10] as [number, number];
+      }) as [number, number][];
+      onEdge(circulationId, newPolygon);
+    };
+    const onUp = () => { setDraggingEdgeIdx(null); svgRef.current = null; };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [draggingEdgeIdx, polygon, box, project, scale, circulationId, onEdge]);
+
+  return (
+    <g>
+      {polygon.map((a, i) => {
+        const b = polygon[(i + 1) % polygon.length];
+        const isVertical = Math.abs(a[0] - b[0]) < 0.01;
+        const isHorizontal = Math.abs(a[1] - b[1]) < 0.01;
+        const [ax, ay] = project(a);
+        const [bx, by] = project(b);
+        const midWorld: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        const [mx, my] = project(midWorld);
+        const active = draggingEdgeIdx === i;
+        const isSelected = selectedEdgeIdx === i;
+        const draggable = isVertical || isHorizontal;
+        return (
+          <g key={`ce-${i}`}>
+            {/* Entire edge clickable (for select + visual feedback) */}
+            <line x1={ax} y1={ay} x2={bx} y2={by}
+              stroke="white" strokeOpacity={0.001} strokeWidth={16}
+              style={{ cursor: "pointer" }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectEdge?.(isSelected ? null : i);
+              }}
+            />
+            {isSelected && (
+              <line x1={ax} y1={ay} x2={bx} y2={by}
+                stroke="#dc2626" strokeWidth={4} strokeDasharray="5 3" pointerEvents="none"
+              />
+            )}
+            {/* Midpoint drag handle (only if axis-aligned) */}
+            {draggable && (
+              <g
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  svgRef.current = (e.currentTarget as SVGElement).ownerSVGElement;
+                  onSelectEdge?.(i);
+                  setDraggingEdgeIdx(i);
+                }}
+                style={{ cursor: active ? "grabbing" : "grab" }}
+              >
+                <circle cx={mx} cy={my} r={16} fill="white" fillOpacity={0.001} />
+                <rect x={mx - 6} y={my - 6} width={12} height={12} rx={2}
+                  fill="#ec4899" stroke={isSelected ? "#dc2626" : "white"} strokeWidth={isSelected ? 3 : 2} />
+              </g>
+            )}
+          </g>
+        );
+      })}
     </g>
   );
 }

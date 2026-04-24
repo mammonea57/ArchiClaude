@@ -21,6 +21,67 @@ export function bboxOf(pts: Coord[]): BBox | null {
   return { minx, miny, maxx, maxy };
 }
 
+/**
+ * Intervals along the "other" axis where a polygon's interior is crossed by
+ * the axis-aligned line {axis: pos}.
+ * - axis="x" (line parallel to y-axis at x=pos): returns y-intervals where polygon covers.
+ * - axis="y" (line parallel to x-axis at y=pos): returns x-intervals.
+ *
+ * Uses a half-open rule on the cut axis to avoid double-counting vertices that
+ * land exactly on the line.
+ */
+export function polygonLineIntersectIntervals(
+  polygon: Coord[],
+  axis: "x" | "y",
+  pos: number,
+): Array<[number, number]> {
+  if (polygon.length < 3) return [];
+  const crossings: number[] = [];
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    const aP = axis === "x" ? a[0] : a[1];
+    const bP = axis === "x" ? b[0] : b[1];
+    const aQ = axis === "x" ? a[1] : a[0];
+    const bQ = axis === "x" ? b[1] : b[0];
+    if (aP === bP) continue;
+    const minP = Math.min(aP, bP), maxP = Math.max(aP, bP);
+    // Half-open to prevent corners producing a double crossing
+    if (pos < minP || pos >= maxP) continue;
+    const t = (pos - aP) / (bP - aP);
+    crossings.push(aQ + t * (bQ - aQ));
+  }
+  crossings.sort((x, y) => x - y);
+  const segments: Array<[number, number]> = [];
+  for (let i = 0; i + 1 < crossings.length; i += 2) {
+    if (crossings[i + 1] - crossings[i] > 1e-6) {
+      segments.push([crossings[i], crossings[i + 1]]);
+    }
+  }
+  return segments;
+}
+
+/**
+ * Return the "other-axis" coordinate where a line segment crosses the line
+ * {axis: pos}, or null if it doesn't.
+ */
+export function segmentCrossAxis(
+  a: Coord,
+  b: Coord,
+  axis: "x" | "y",
+  pos: number,
+): number | null {
+  const aP = axis === "x" ? a[0] : a[1];
+  const bP = axis === "x" ? b[0] : b[1];
+  if (aP === bP) return null;
+  const minP = Math.min(aP, bP), maxP = Math.max(aP, bP);
+  if (pos < minP || pos >= maxP) return null;
+  const aQ = axis === "x" ? a[1] : a[0];
+  const bQ = axis === "x" ? b[1] : b[0];
+  const t = (pos - aP) / (bP - aP);
+  return aQ + t * (bQ - aQ);
+}
+
 export function polygonCentroid(pts: Coord[]): Coord {
   if (pts.length === 0) return [0, 0];
   let x = 0, y = 0;

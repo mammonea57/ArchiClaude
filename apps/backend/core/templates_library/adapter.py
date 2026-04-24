@@ -52,15 +52,17 @@ class TemplateAdapter:
         from core.templates_library.layout_generator import (
             build_walls_and_openings, generate_apartment,
         )
-        rooms, _, _, palier_side = generate_apartment(
+        rooms, _, _, palier_side, effective_typo = generate_apartment(
             slot_bounds=slot.polygon.bounds,
             typologie=slot.target_typologie,
             orientations=slot.orientations or [],
             slot_id=slot.id,
             template_id=template.id,
+            palier_side_hint=getattr(slot, "palier_side_hint", None),
         )
         walls, openings = build_walls_and_openings(
             rooms, slot.polygon.bounds, palier_side, slot.id,
+            orientations=slot.orientations,
         )
 
         # Assign label_fr from the generator (already set) and re-label any
@@ -72,7 +74,7 @@ class TemplateAdapter:
         apartment = Cellule(
             id=slot.id,
             type=CelluleType.LOGEMENT,
-            typologie=slot.target_typologie,
+            typologie=effective_typo,
             surface_m2=sum(r.surface_m2 for r in rooms),
             polygon_xy=[(x, y) for (x, y) in slot.polygon.exterior.coords[:-1]],
             orientation=slot.orientations,

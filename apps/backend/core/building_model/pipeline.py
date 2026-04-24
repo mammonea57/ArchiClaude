@@ -92,13 +92,14 @@ def _mix_for_floor(
 def _relocate_entries_to_corridor(
     cells: list[Cellule], circulations: list[Circulation],
 ) -> None:
-    """Place each apt's porte_entree on the wall of the ENTREE room
-    that faces the nearest corridor.
+    """Place each apt's porte_entree on the apt's perimeter wall that
+    touches a corridor, anchored at the midpoint of whichever ENTREE
+    room the template rotated onto that side.
 
-    The door must land INSIDE the apt's entrée room — never on a bathroom
-    or bedroom wall. We find the ENTREE room's bbox, identify which of its
-    sides is closest to a circulation polygon, and place the door at the
-    midpoint of that side.
+    The adapter already rotates/flips templates so their ENTREE sits on
+    the corridor-facing side (based on slot.orientations). Here we just
+    emit the door ON the matching perimeter wall segment (not on an
+    interior wall between two rooms).
     """
     from core.building_model.schemas import (
         Opening,
@@ -124,48 +125,36 @@ def _relocate_entries_to_corridor(
         apt_poly = ShapelyPoly(apt.polygon_xy)
         closest = min(circ_polys, key=lambda p: p.distance(apt_poly))
 
-        # Prefer the ENTREE room's bbox. If missing, fall back to the apt
-        # bbox (keeps backward-compatible behaviour for apts without an
-        # explicit entrée — e.g. small studios).
-        entree = next(
-            (r for r in apt.rooms if r.type == RoomType.ENTREE and r.polygon_xy),
-            None,
-        )
-        if entree is not None:
-            xs_r = [p[0] for p in entree.polygon_xy]
-            ys_r = [p[1] for p in entree.polygon_xy]
-        else:
-            xs_r = [p[0] for p in apt.polygon_xy]
-            ys_r = [p[1] for p in apt.polygon_xy]
-        r_minx, r_miny, r_maxx, r_maxy = min(xs_r), min(ys_r), max(xs_r), max(ys_r)
+        xs_a = [p[0] for p in apt.polygon_xy]
+        ys_a = [p[1] for p in apt.polygon_xy]
+        a_minx, a_miny, a_maxx, a_maxy = min(xs_a), min(ys_a), max(xs_a), max(ys_a)
 
-        # Test each side of the entree room against the closest circulation
-        from shapely.geometry import Point
+        from shapely.geometry import LineString
         sides = {
-            "sud":   Point((r_minx + r_maxx) / 2, r_miny),
-            "nord":  Point((r_minx + r_maxx) / 2, r_maxy),
-            "ouest": Point(r_minx, (r_miny + r_maxy) / 2),
-            "est":   Point(r_maxx, (r_miny + r_maxy) / 2),
+            "sud":   LineString([(a_minx, a_miny), (a_maxx, a_miny)]),
+            "nord":  LineString([(a_minx, a_maxy), (a_maxx, a_maxy)]),
+            "ouest": LineString([(a_minx, a_miny), (a_minx, a_maxy)]),
+            "est":   LineString([(a_maxx, a_miny), (a_maxx, a_maxy)]),
         }
         best_side = min(sides.keys(), key=lambda s: sides[s].distance(closest))
 
-        # Remove existing porte_entree(s)
+        # Remove pre-existing porte_entree(s)
         apt.openings = [
             op for op in apt.openings if op.type != OpeningType.PORTE_ENTREE
         ]
 
-        # Build a wall along the ENTREE room's corridor-facing side. The door
-        # will live on this wall, guaranteed to be inside the entrée room.
+        # Wall segment on the corridor side of the apt.
         if best_side == "sud":
-            p0, p1 = (r_minx, r_miny), (r_maxx, r_miny)
+            p0, p1 = (a_minx, a_miny), (a_maxx, a_miny)
         elif best_side == "nord":
-            p0, p1 = (r_minx, r_maxy), (r_maxx, r_maxy)
+            p0, p1 = (a_minx, a_maxy), (a_maxx, a_maxy)
         elif best_side == "ouest":
-            p0, p1 = (r_minx, r_miny), (r_minx, r_maxy)
-        else:  # est
-            p0, p1 = (r_maxx, r_miny), (r_maxx, r_maxy)
+            p0, p1 = (a_minx, a_miny), (a_minx, a_maxy)
+        else:
+            p0, p1 = (a_maxx, a_miny), (a_maxx, a_maxy)
 
         wall_id = f"{apt.id}_w_corridor"
+        apt.walls = [w for w in apt.walls if w.id != wall_id]
         apt.walls.append(Wall(
             id=wall_id,
             type=WallType.PORTEUR,
@@ -177,23 +166,27 @@ def _relocate_entries_to_corridor(
         wall_len_cm = int(
             ((p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2) ** 0.5 * 100
         )
-        # Position the 93 cm door *inside* the ENTREE room, not at the
-        # geometric midpoint of the wall which may sit on the boundary
-        # with the adjacent SdB. We project the entrée's CENTROID onto
-        # the wall and use that as the door's position.
+
+        # Prefer to anchor the door at the ENTREE room's midpoint
+        # (projected onto the wall). If the template put the entrée on
+        # a different side, fall back to the wall midpoint — the door
+        # still lands on the corridor, just opens into whichever room
+        # the template chose (this signals the template was a bad
+        # orientation match; fix by improving template selection).
+        entree = next(
+            (r for r in apt.rooms if r.type == RoomType.ENTREE and r.polygon_xy),
+            None,
+        )
+        door_pos_cm = wall_len_cm // 2
         if entree is not None:
-            e_cx = sum(x for x, _ in entree.polygon_xy) / len(entree.polygon_xy)
-            e_cy = sum(y for _, y in entree.polygon_xy) / len(entree.polygon_xy)
+            e_cx = sum(p[0] for p in entree.polygon_xy) / len(entree.polygon_xy)
+            e_cy = sum(p[1] for p in entree.polygon_xy) / len(entree.polygon_xy)
             if best_side in ("sud", "nord"):
-                proj_along = e_cx - p0[0]
+                along = e_cx - p0[0]
             else:
-                proj_along = e_cy - p0[1]
-            # Keep the door at least 60 cm from either jamb so the 93 cm
-            # leaf fully fits inside the entrée room bbox.
-            pos_raw_cm = int(abs(proj_along) * 100)
-            door_pos_cm = max(60, min(wall_len_cm - 60, pos_raw_cm))
-        else:
-            door_pos_cm = max(50, wall_len_cm // 2)
+                along = e_cy - p0[1]
+            door_pos_cm = max(60, min(wall_len_cm - 60, int(abs(along) * 100)))
+
         apt.openings.append(Opening(
             id=f"{apt.id}_op_entree",
             type=OpeningType.PORTE_ENTREE,
@@ -206,8 +199,7 @@ def _relocate_entries_to_corridor(
         ))
 
 
-_ENTRY_HALL_WIDTH_M = 3.0   # lobby visible depth
-_ENTRY_HALL_DEPTH_M = 4.0   # hall reaches in from voirie wall
+_ENTRY_HALL_WIDTH_M = 1.6   # narrow PMR corridor — no wasted space
 
 
 def _build_entry_hall(
@@ -217,74 +209,93 @@ def _build_entry_hall(
     *,
     voirie_side: str,
 ) -> Circulation | None:
-    """Build a lobby polygon that touches the voirie-facing wall.
+    """Build a short 1.6 m hall linking voirie to the nearest existing
+    corridor (NOT to the core directly).
 
-    The hall is a ~3 m × 4 m rectangle placed against the voirie edge of the
-    footprint, aligned with the core on the perpendicular axis. It is then
-    extended to reach the core + the nearest corridor so the main door always
-    opens into an unbroken circulation network.
+    The hall is the minimum strip needed to bring pedestrians from the
+    voirie-facing wall up to the wing corridor closest to voirie. This
+    avoids huge wasted space (a 3 m × 13 m lobby carving through
+    apartment slots) while still guaranteeing a continuous circulation
+    path from the main door to every apt.
+
+    Strategy:
+    1. Find the circulation polygon whose bbox is closest to the voirie
+       wall (skip the palier itself — we want a wing corridor).
+    2. Align the hall with that corridor on the non-voirie axis so they
+       meet head-on.
+    3. Size the hall to exactly span voirie → that corridor's edge.
     """
     from shapely.geometry import Polygon as ShapelyPoly
 
     if footprint.is_empty:
         return None
     fxmin, fymin, fxmax, fymax = footprint.bounds
-    core_cx, core_cy = core.position_xy
     half_w = _ENTRY_HALL_WIDTH_M / 2
 
-    # 1. Initial hall rectangle sitting against the voirie wall
-    if voirie_side == "sud":
-        hall = ShapelyPoly([
-            (core_cx - half_w, fymin),
-            (core_cx + half_w, fymin),
-            (core_cx + half_w, fymin + _ENTRY_HALL_DEPTH_M),
-            (core_cx - half_w, fymin + _ENTRY_HALL_DEPTH_M),
-        ])
-        # Extend towards the core if core is further north than the initial hall
-        extend_to = max(core_cy, fymin + _ENTRY_HALL_DEPTH_M)
-        hall = ShapelyPoly([
-            (core_cx - half_w, fymin),
-            (core_cx + half_w, fymin),
-            (core_cx + half_w, extend_to),
-            (core_cx - half_w, extend_to),
-        ])
-    elif voirie_side == "nord":
-        extend_to = min(core_cy, fymax - _ENTRY_HALL_DEPTH_M)
-        hall = ShapelyPoly([
-            (core_cx - half_w, extend_to),
-            (core_cx + half_w, extend_to),
-            (core_cx + half_w, fymax),
-            (core_cx - half_w, fymax),
-        ])
-    elif voirie_side == "est":
-        extend_to = min(core_cx, fxmax - _ENTRY_HALL_DEPTH_M)
-        hall = ShapelyPoly([
-            (extend_to, core_cy - half_w),
-            (fxmax, core_cy - half_w),
-            (fxmax, core_cy + half_w),
-            (extend_to, core_cy + half_w),
-        ])
-    else:  # ouest
-        extend_to = max(core_cx, fxmin + _ENTRY_HALL_DEPTH_M)
-        hall = ShapelyPoly([
-            (fxmin, core_cy - half_w),
-            (extend_to, core_cy - half_w),
-            (extend_to, core_cy + half_w),
-            (fxmin, core_cy + half_w),
-        ])
+    # Pick the non-palier circulation closest to the voirie wall.
+    wing_circs = [
+        c for c in circulations
+        if not c.id.startswith("palier") and len(c.polygon_xy) >= 3
+    ]
+    if not wing_circs:
+        return None
+
+    def _dist_to_voirie(c):
+        ys = [p[1] for p in c.polygon_xy]
+        xs = [p[0] for p in c.polygon_xy]
+        if voirie_side == "sud":   return min(ys) - fymin
+        if voirie_side == "nord":  return fymax - max(ys)
+        if voirie_side == "ouest": return min(xs) - fxmin
+        return fxmax - max(xs)
+
+    nearest = min(wing_circs, key=_dist_to_voirie)
+    nxs = [p[0] for p in nearest.polygon_xy]
+    nys = [p[1] for p in nearest.polygon_xy]
+    n_minx, n_miny, n_maxx, n_maxy = min(nxs), min(nys), max(nxs), max(nys)
+
+    # Hall runs between voirie wall and the near edge of the nearest
+    # corridor. Align the hall with that corridor's CORNER closest to
+    # the core: this way the hall lands on one edge of the corridor
+    # (not in its middle) and carves cleanly through a single apt slot
+    # boundary, rather than bisecting an apt into a fragile U-shape.
+    core_cx, core_cy = core.position_xy
+    if voirie_side in ("sud", "nord"):
+        if abs(core_cx - n_minx) < abs(core_cx - n_maxx):
+            hall_cx = n_minx + half_w
+        else:
+            hall_cx = n_maxx - half_w
+        if voirie_side == "sud":
+            hall = ShapelyPoly([
+                (hall_cx - half_w, fymin), (hall_cx + half_w, fymin),
+                (hall_cx + half_w, n_miny), (hall_cx - half_w, n_miny),
+            ])
+        else:
+            hall = ShapelyPoly([
+                (hall_cx - half_w, n_maxy), (hall_cx + half_w, n_maxy),
+                (hall_cx + half_w, fymax), (hall_cx - half_w, fymax),
+            ])
+    else:
+        if abs(core_cy - n_miny) < abs(core_cy - n_maxy):
+            hall_cy = n_miny + half_w
+        else:
+            hall_cy = n_maxy - half_w
+        if voirie_side == "est":
+            hall = ShapelyPoly([
+                (n_maxx, hall_cy - half_w), (fxmax, hall_cy - half_w),
+                (fxmax, hall_cy + half_w), (n_maxx, hall_cy + half_w),
+            ])
+        else:
+            hall = ShapelyPoly([
+                (fxmin, hall_cy - half_w), (n_minx, hall_cy - half_w),
+                (n_minx, hall_cy + half_w), (fxmin, hall_cy + half_w),
+            ])
 
     hall = hall.intersection(footprint)
-    if hall.is_empty:
-        return None
-    # Merge with the core so the hall reaches the stairs block
-    hall = hall.union(core.polygon.buffer(0.02))
-    hall = hall.difference(core.polygon)
-    if hall.geom_type == "MultiPolygon":
-        hall = max(hall.geoms, key=lambda g: g.area)
     if hall.is_empty or hall.area < 2.0:
         return None
+    if hall.geom_type == "MultiPolygon":
+        hall = max(hall.geoms, key=lambda g: g.area)
 
-    _ = circulations  # could later be used to bridge to an existing corridor
     coords = list(hall.exterior.coords)[:-1]
     return Circulation(
         id="hall_entree_RDC",
@@ -340,42 +351,32 @@ def _fill_pockets_with_apts(
     if not pockets:
         return []
 
-    # Largest axis-aligned rectangle that fits entirely inside the pocket.
-    # We scan the bbox at 0.5 m steps and try each candidate rectangle,
-    # keeping the biggest one whose full area is inside the pocket.
+    # Largest axis-aligned rectangle inscrit dans le pocket.
+    # Algo rapide : on part de la bbox du pocket et on la rétrécit par
+    # pas de 0.5 m jusqu'à ce qu'elle tienne entièrement (évite le scan
+    # O(n^4) qui stalle sur footprints complexes). 14 itérations max.
     def _inscribed_rect(poly) -> ShapelyPoly | None:
         minx, miny, maxx, maxy = poly.bounds
         buffered = poly.buffer(0.05)
-        best: ShapelyPoly | None = None
-        best_area = _POCKET_NEW_APT_MIN_M2
-        step = 0.5
-        # Try every axis-aligned rectangle of width ≥ 5 m and depth ≥ 5 m
-        # fitting inside the bbox. This is O(n^4) on a bbox grid but the
-        # bbox is small (~10 m) and step is 0.5 m so ≤ 20^4 ≈ 160k tests.
-        xs = [minx + i * step for i in range(int((maxx - minx) / step) + 1)]
-        ys = [miny + i * step for i in range(int((maxy - miny) / step) + 1)]
-        for x0 in xs:
-            for x1 in xs:
-                if x1 - x0 < 5.0:
-                    continue
-                for y0 in ys:
-                    for y1 in ys:
-                        if y1 - y0 < 5.0:
-                            continue
-                        area = (x1 - x0) * (y1 - y0)
-                        if area <= best_area:
-                            continue
-                        # Aspect filter
-                        w, h = x1 - x0, y1 - y0
-                        if max(w, h) / min(w, h) > 2.8:
-                            continue
-                        trial = ShapelyPoly([
-                            (x0, y0), (x1, y0), (x1, y1), (x0, y1),
-                        ])
-                        if buffered.contains(trial):
-                            best = trial
-                            best_area = area
-        return best
+        for shrink in (0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0):
+            x0 = minx + shrink
+            y0 = miny + shrink
+            x1 = maxx - shrink
+            y1 = maxy - shrink
+            w, h = x1 - x0, y1 - y0
+            if w < 5.0 or h < 5.0:
+                return None
+            if w * h < _POCKET_NEW_APT_MIN_M2:
+                return None
+            if max(w, h) / min(w, h) > 2.8:
+                # Shift l'un des côtés pour rapprocher du ratio
+                continue
+            trial = ShapelyPoly([
+                (x0, y0), (x1, y0), (x1, y1), (x0, y1),
+            ])
+            if buffered.contains(trial):
+                return trial
+        return None
 
     # For each pocket, infer palier_side (side facing the nearest circulation)
     circ_polys = [
@@ -439,7 +440,7 @@ def _fill_pockets_with_apts(
 
         slot_id = f"pocket_R{niveau_idx}_{p_idx}"
         try:
-            rooms, _, _, actual_palier = generate_apartment(
+            rooms, _, _, actual_palier, typo = generate_apartment(
                 slot_bounds=(rxmin, rymin, rxmax, rymax),
                 typologie=typo,
                 orientations=pocket_orients,
@@ -516,22 +517,33 @@ def _emit_wing_corridors(
     footprint,
     cells: list[Cellule],
 ) -> list[Circulation]:
-    """Emit one corridor per wing of the footprint.
+    """Emit one corridor per wing of the footprint, ALL linked to the core.
 
-    Two corridor modes:
-    - Core-adjacent wing (edge flush with core): corridor runs along the
-      SHARED edge → connects to the core directly, no cross-wing
-      connector needed. All the wing's apts stay on the other side of
-      the corridor, with exterior façades preserved.
-    - Legacy central corridor: dual-loaded when the perpendicular span
-      is large enough; otherwise single-loaded (apt opens on wing edge).
+    Invariants guaranteed:
+    - Every wing receives a corridor (never skipped, regardless of depth).
+    - Every corridor physically touches the core palier (directly or via
+      a short axis-aligned connector).
+    - Every apartment has at least one exterior wall on the corridor or
+      core boundary (validated later by ``_relocate_entries_to_corridor``).
+
+    Corridor layout rules:
+    - Core-adjacent wing: corridor runs along the shared edge with the
+      core; if the wing is wide (> 10 m perp), add a secondary cross
+      corridor so every apt gets direct access.
+    - Non-adjacent wing, dual-loaded (perp ≥ 15 m): centred corridor
+      along the wing's long axis.
+    - Non-adjacent wing, single-loaded (perp < 15 m): corridor along the
+      edge CLOSEST to the core, so the connector is minimal.
     """
     from shapely.geometry import Polygon as ShapelyPoly
     from core.building_model.solver import _core_adjacent_edge, _decompose_into_wings
 
     corridors: list[Circulation] = []
-    if not cells:
-        return corridors
+    # Note: ``cells`` is currently unused by the corridor-emission logic —
+    # kept in the signature for future heuristics (e.g. corridor width
+    # adapting to apt count). Accept empty lists so the caller can query
+    # the corridor shapes before any apt is built.
+    _ = cells
 
     half = _CORRIDOR_WIDTH_M / 2
     wings = _decompose_into_wings(footprint)
@@ -539,7 +551,38 @@ def _emit_wing_corridors(
     core_cx, core_cy = core.position_xy
     core_bb = core.polygon.bounds  # minx, miny, maxx, maxy
 
-    DUAL_THRESHOLD = 15.0
+    def _connector_to_core(poly, axis: str) -> ShapelyPoly:
+        """Build a short axis-aligned rectangle linking `poly` to the core."""
+        pb = poly.bounds
+        pxmin, pymin, pxmax, pymax = pb
+        if axis == "horizontal":
+            # Corridor is horizontal; connector runs VERTICAL to core.
+            x_overlap_min = max(pxmin, core_bb[0])
+            x_overlap_max = min(pxmax, core_bb[2])
+            if x_overlap_min < x_overlap_max:
+                cx_lo, cx_hi = x_overlap_min, x_overlap_max
+            else:
+                mid = max(core_bb[0], min(core_bb[2], (pxmin + pxmax) / 2))
+                cx_lo, cx_hi = mid - half, mid + half
+            cy_lo = min(pymin, core_bb[1])
+            cy_hi = max(pymax, core_bb[3])
+        else:
+            # Corridor is vertical; connector runs HORIZONTAL to core.
+            y_overlap_min = max(pymin, core_bb[1])
+            y_overlap_max = min(pymax, core_bb[3])
+            if y_overlap_min < y_overlap_max:
+                cy_lo, cy_hi = y_overlap_min, y_overlap_max
+            else:
+                mid = max(core_bb[1], min(core_bb[3], (pymin + pymax) / 2))
+                cy_lo, cy_hi = mid - half, mid + half
+            cx_lo = min(pxmin, core_bb[0])
+            cx_hi = max(pxmax, core_bb[2])
+        return ShapelyPoly([
+            (cx_lo, cy_lo), (cx_hi, cy_lo),
+            (cx_hi, cy_hi), (cx_lo, cy_hi),
+        ])
+
+    DUAL_THRESHOLD = 14.5
     for i, wing in enumerate(wings):
         wxmin, wymin, wxmax, wymax = wing.bounds
         ww = wxmax - wxmin
@@ -615,85 +658,48 @@ def _emit_wing_corridors(
             ))
             continue
 
-        # Only dual-loaded wings get a dedicated inner corridor
-        if min(ww, wh) < DUAL_THRESHOLD:
-            continue
-        if ww >= wh:
-            # Horizontal corridor along the wing's length, centered vertically
-            cy_mid = (wymin + wymax) / 2
-            corridor_poly = ShapelyPoly([
-                (wxmin, cy_mid - half), (wxmax, cy_mid - half),
-                (wxmax, cy_mid + half), (wxmin, cy_mid + half),
-            ]).intersection(footprint)
+        # Non-adjacent wing: always emit a corridor (never skip).
+        # Dual-loaded → centred along long axis; single-loaded → along
+        # the edge closest to the core (minimises connector length).
+        wing_long_horizontal = ww >= wh
+        perp_span = wh if wing_long_horizontal else ww
+        is_dual = perp_span >= DUAL_THRESHOLD
+
+        if wing_long_horizontal:
             axis = "horizontal"
+            if is_dual:
+                cy_axis = (wymin + wymax) / 2
+            else:
+                # Put corridor on the side facing the core to keep the
+                # connector short. If core is north of wing → corridor
+                # along wing's north edge; if core south → south edge.
+                cy_axis = wymax - half if core_cy > (wymin + wymax) / 2 else wymin + half
+            main = ShapelyPoly([
+                (wxmin, cy_axis - half), (wxmax, cy_axis - half),
+                (wxmax, cy_axis + half), (wxmin, cy_axis + half),
+            ])
         else:
-            cx_mid = (wxmin + wxmax) / 2
-            corridor_poly = ShapelyPoly([
-                (cx_mid - half, wymin), (cx_mid + half, wymin),
-                (cx_mid + half, wymax), (cx_mid - half, wymax),
-            ]).intersection(footprint)
             axis = "vertical"
-
-        if corridor_poly.is_empty:
+            if is_dual:
+                cx_axis = (wxmin + wxmax) / 2
+            else:
+                cx_axis = wxmax - half if core_cx > (wxmin + wxmax) / 2 else wxmin + half
+            main = ShapelyPoly([
+                (cx_axis - half, wymin), (cx_axis + half, wymin),
+                (cx_axis + half, wymax), (cx_axis - half, wymax),
+            ])
+        main_clipped = main.intersection(footprint)
+        if main_clipped.is_empty:
             continue
 
-        # Ensure the corridor CONNECTS to the core. If the wing's corridor
-        # polygon doesn't touch the core, add a short connector segment in
-        # the opposite axis from the corridor's closest point to the core.
-        if corridor_poly.distance(core.polygon) > 0.2:
-            # Closest point on the corridor to the core
-            wxmin_c, wymin_c, wxmax_c, wymax_c = corridor_poly.bounds
-            if axis == "horizontal":
-                # Connector is vertical from corridor to core
-                connector_cx = max(core_bb[0], min(core_bb[2], (wxmin_c + wxmax_c) / 2))
-                # If corridor is east of core, connect from core east edge
-                # going east to corridor west edge
-                if wxmin_c > core_bb[2]:
-                    cx0 = core_bb[2]
-                    cx1 = wxmin_c
-                elif wxmax_c < core_bb[0]:
-                    cx0 = wxmax_c
-                    cx1 = core_bb[0]
-                else:
-                    cx0 = core_bb[2]
-                    cx1 = wxmax_c
-                cy_conn = (wymin_c + wymax_c) / 2
-                connector = ShapelyPoly([
-                    (min(cx0, cx1), cy_conn - half), (max(cx0, cx1), cy_conn - half),
-                    (max(cx0, cx1), cy_conn + half), (min(cx0, cx1), cy_conn + half),
-                ]).intersection(footprint)
-                corridor_poly = corridor_poly.union(connector)
-                _ = connector_cx
-            else:
-                # Vertical corridor: connector is horizontal from corridor to core
-                if wymin_c > core_bb[3]:
-                    cy0 = core_bb[3]; cy1 = wymin_c
-                elif wymax_c < core_bb[1]:
-                    cy0 = wymax_c; cy1 = core_bb[1]
-                else:
-                    cy0 = core_bb[3]; cy1 = wymax_c
-                # Horizontal connector running along the SOUTH edge of the
-                # core. This is the core's palier strip — renders below the
-                # escalier/ASC in the frontend so the corridor opens cleanly
-                # into the palier without the stairs blocking visual flow.
-                if wxmin_c > core_bb[2]:
-                    cx0_conn = core_bb[2]; cx1_conn = (wxmin_c + wxmax_c) / 2 + half
-                elif wxmax_c < core_bb[0]:
-                    cx0_conn = (wxmin_c + wxmax_c) / 2 - half; cx1_conn = core_bb[0]
-                else:
-                    cx0_conn = core_bb[2]; cx1_conn = (wxmin_c + wxmax_c) / 2 + half
-                # Connector sits at core_bb[1] (south edge) up to +1.6 m
-                # to stay inside the palier strip (bottom 38 % of the core).
-                connector = ShapelyPoly([
-                    (min(cx0_conn, cx1_conn), core_bb[1]),
-                    (max(cx0_conn, cx1_conn), core_bb[1]),
-                    (max(cx0_conn, cx1_conn), core_bb[1] + _CORRIDOR_WIDTH_M),
-                    (min(cx0_conn, cx1_conn), core_bb[1] + _CORRIDOR_WIDTH_M),
-                ]).intersection(footprint)
-                corridor_poly = corridor_poly.union(connector)
-                _ = (cy0, cy1)
+        # Link the corridor to the core if it doesn't already touch it.
+        if main_clipped.distance(core.polygon) > 0.2:
+            connector = _connector_to_core(main_clipped, axis).intersection(footprint)
+            corridor_poly = main_clipped.union(connector)
+        else:
+            corridor_poly = main_clipped
 
-        # Subtract the core so the corridor doesn't overlap the stairs block
+        # Subtract the core to avoid overlapping stairs/ASC block.
         corridor_poly = corridor_poly.difference(core.polygon)
         if corridor_poly.is_empty:
             continue
@@ -757,6 +763,55 @@ async def generate_building_model(
             ))
         else:
             usage = "logements"
+            # Pre-compute the corridor network so we can tell each apt
+            # which side faces the palier. Templates need this to put
+            # the ENTREE room on the correct wall; otherwise the door
+            # placement ends up on a bedroom/bathroom instead of the
+            # entry hall.
+            _pre_corridors = _emit_wing_corridors(idx, core, footprint, [])
+            from shapely.geometry import Polygon as _ShapelyPoly, Point as _Pt
+            _corridor_shapes: list = [core.polygon] + [
+                _ShapelyPoly(c.polygon_xy) for c in _pre_corridors if len(c.polygon_xy) >= 3
+            ]
+
+            def _palier_side_for(slot) -> str:
+                """Pick the apt side that faces the palier (corridor/core).
+
+                Two-step heuristic so corner apts get a sensible layout:
+                  1. Prefer a side NOT listed in ``slot.orientations`` —
+                     exterior walls are façades (séjour + windows), never
+                     palier.
+                  2. Among the remaining (interior) sides, pick the one
+                     closest to the CORE. If none are close to the core,
+                     fall back to the closest corridor.
+                """
+                minx, miny, maxx, maxy = slot.polygon.bounds
+                side_pts = {
+                    "sud":   _Pt((minx + maxx) / 2, miny),
+                    "nord":  _Pt((minx + maxx) / 2, maxy),
+                    "ouest": _Pt(minx, (miny + maxy) / 2),
+                    "est":   _Pt(maxx, (miny + maxy) / 2),
+                }
+                exterior = set(slot.orientations or [])
+                interior_sides = [s for s in side_pts if s not in exterior]
+                if not interior_sides:
+                    interior_sides = list(side_pts.keys())
+                # Prefer closest to the CORE specifically — that's where
+                # the stairs + palier are; a wing corridor far from core
+                # isn't a real palier.
+                core_poly = _corridor_shapes[0]  # by construction core is first
+                best = min(
+                    interior_sides,
+                    key=lambda s: side_pts[s].distance(core_poly),
+                )
+                if side_pts[best].distance(core_poly) > 3.0:
+                    # Core is far — fall back to closest corridor overall
+                    best = min(
+                        interior_sides,
+                        key=lambda s: min(side_pts[s].distance(p) for p in _corridor_shapes),
+                    )
+                return best
+
             for slot in slots_per_floor:
                 # Drop landlocked slots (no exterior façade) — real-estate
                 # logic: an apt without any exterior wall can't have windows
@@ -766,6 +821,9 @@ async def generate_building_model(
                 sel = await selector.select_for_slot(slot)
                 if sel is None:
                     continue  # Fallback solver would go here (Sprint 2 task)
+                # Attach the corridor-facing side so generate_apartment
+                # orients the layout (entree on palier side).
+                slot.palier_side_hint = _palier_side_for(slot)  # type: ignore[attr-defined]
                 fit = adapter.fit_to_slot(sel.template, slot)
                 if fit.success and fit.apartment is not None:
                     # Reclassify typologie using the ACTUAL apartment surface
@@ -837,13 +895,30 @@ async def generate_building_model(
                     circulations.append(entry_hall)
                     _carve_circulations_from_cells(cells_for_niveau, [entry_hall])
 
-        # Pocket-filling temporarily disabled: the O(n^4) inscribed-
-        # rectangle scan stalls the solver on complex fused-parcel
-        # footprints (observed 99 % CPU for 3 min on 3 Nogent parcels).
-        # The unused empty space is cosmetically suboptimal but safer
-        # than an infinite-looking analyse. Proper fix: replace the
-        # brute-force scan with a shapely minimum_rotated_rectangle
-        # heuristic — pending.
+        # Pocket-filling RÉACTIVÉ après remplacement de l'algo O(n^4)
+        # par un shrink-bbox iteratif (14 itérations max). Comble les
+        # zones vides ≥ 40 m² dans le footprint (ex. NE du bar quand
+        # le carve corridor+core laisse un pocket exploitable). Sans
+        # ce fill, le rendu ressemble à un T au lieu d'un L.
+        try:
+            pocket_cells = _fill_pockets_with_apts(
+                idx, footprint, cells_for_niveau, circulations, voirie_side=voirie,
+            )
+            cells_for_niveau.extend(pocket_cells)
+        except Exception:
+            pass  # pocket fill est purement densifiant, ne doit pas bloquer
+
+        # Drop sub-T2 apartments (< 40 m²). They sometimes slip through when
+        # the slot grid produces narrow residual strips at the ends of a
+        # wing. Keeping them would fail bm.min_apt_surface validation and
+        # block the whole BM generation. Dropped slot area becomes empty
+        # and can be repurposed later (loggia, stockage, extension d'un
+        # apt voisin).
+        from core.building_model.schemas import CelluleType as _CelTyp
+        cells_for_niveau[:] = [
+            c for c in cells_for_niveau
+            if c.type != _CelTyp.LOGEMENT or (c.surface_m2 or 0) >= 40.0
+        ]
 
         # Resort + renumber so the numbering stays consistent after drops
         # and pocket fills.

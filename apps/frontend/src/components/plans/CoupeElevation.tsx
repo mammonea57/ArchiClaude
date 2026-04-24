@@ -2,10 +2,39 @@
 
 import type { BuildingModelPayload } from "@/lib/types";
 import { PlanPatterns, NorthArrow, ScaleBar, TitleBlock } from "./plan-patterns";
+import {
+  bboxOf,
+  coordsFromGeoJSON,
+  polygonLineIntersectIntervals,
+  roomLabelTiny,
+  roomStyle,
+  segmentCrossAxis,
+  type Coord,
+} from "./plan-utils";
+
+const SIDE_LABEL: Record<"nord" | "sud" | "est" | "ouest", string> = {
+  nord: "Nord",
+  sud: "Sud",
+  est: "Est",
+  ouest: "Ouest",
+};
+
+const FACADE_SHEET: Record<"nord" | "sud" | "est" | "ouest", 1 | 2 | 3 | 4> = {
+  nord: 1,
+  sud: 2,
+  est: 3,
+  ouest: 4,
+};
+
+type FacadeSide = "nord" | "sud" | "est" | "ouest";
 
 interface CoupeElevationProps {
   bm: BuildingModelPayload;
   mode: "coupe" | "facade";
+  /** For mode="coupe" only: "AA" = transversale (y-axis), "BB" = longitudinale (x-axis). Default "AA". */
+  cutAxis?: "AA" | "BB";
+  /** For mode="facade" only: cardinal side being drawn. Default = first voirie side, fallback "sud". */
+  facadeSide?: FacadeSide;
   width?: number;
   height?: number;
   projectName?: string;
@@ -18,10 +47,13 @@ interface CoupeElevationProps {
  * Both: scale bar on side, height dimensions, story codes, title block.
  */
 export function CoupeElevation({
-  bm, mode, width = 900, height = 620, projectName,
+  bm, mode, cutAxis = "AA", facadeSide, width = 900, height = 620, projectName,
 }: CoupeElevationProps) {
   const env = bm.envelope;
   const niveaux = [...bm.niveaux].sort((a, b) => a.index - b.index);
+  const voirieFirst = (bm.site.voirie_orientations?.[0] ?? "sud") as FacadeSide;
+  const side: FacadeSide = facadeSide ?? voirieFirst;
+  const isVoirieSide = mode === "facade" && side === voirieFirst;
 
   // Horizontal span from footprint bbox (mode-dependent)
   let spanM = Math.sqrt(env.emprise_m2);
@@ -32,7 +64,14 @@ export function CoupeElevation({
     const ys = coords.map((c) => c[1]);
     const w = Math.max(...xs) - Math.min(...xs);
     const h = Math.max(...ys) - Math.min(...ys);
-    spanM = mode === "facade" ? w : h;
+    // N/S façades = x-extent (horizontal run). E/O façades = y-extent.
+    // Coupe AA' = y-extent (transversale, perpendicular to voirie).
+    // Coupe BB' = x-extent (longitudinale, parallel to voirie).
+    if (mode === "facade") {
+      spanM = (side === "nord" || side === "sud") ? w : h;
+    } else {
+      spanM = cutAxis === "BB" ? w : h;
+    }
   }
 
   // Total height + 1m for parapet + below-ground
@@ -128,9 +167,42 @@ export function CoupeElevation({
 
       {/* Building volume */}
       {mode === "coupe" ? (
-        <CoupeBody stories={stories} worldToPx={worldToPx} spanPx={spanPx} scale={scale} parapetPx={parapetPx} />
+        <CoupeBody
+          bm={bm}
+          cutAxis={cutAxis}
+          stories={stories}
+          worldToPx={worldToPx}
+          spanPx={spanPx}
+          scale={scale}
+          parapetPx={parapetPx}
+        />
       ) : (
-        <FacadeBody stories={stories} openingsByStory={openingsByStory} worldToPx={worldToPx} spanPx={spanPx} scale={scale} parapetPx={parapetPx} env={env} />
+        <FacadeBody
+          stories={stories}
+          openingsByStory={openingsByStory}
+          worldToPx={worldToPx}
+          spanPx={spanPx}
+          scale={scale}
+          parapetPx={parapetPx}
+          env={env}
+          showEntry={isVoirieSide}
+          side={side}
+        />
+      )}
+
+      {/* Width dimension under building (façade mode only) */}
+      {mode === "facade" && (
+        <WidthDim
+          xLeft={bx0}
+          xRight={bx0 + spanPx}
+          y={by0 + 18}
+          widthM={spanM}
+        />
+      )}
+
+      {/* Orientation diagram — shows which face is visible from overhead */}
+      {mode === "facade" && (
+        <FacadeOrientationBadge x={padLeft + 4} y={padTop + 6} side={side} />
       )}
 
       {/* Height dimension on the right */}
@@ -165,12 +237,45 @@ export function CoupeElevation({
         <rect x={20} y={20} width={width - 40} height={38} fill="white" />
         <line x1={20} y1={58} x2={width - 20} y2={58} stroke="#0f172a" strokeWidth={0.5} />
         <text x={30} y={40} fontSize={15} fontWeight={700} fill="#0f172a">
-          {mode === "coupe" ? "Coupe longitudinale A-A" : `Façade principale (${bm.site.voirie_orientations[0] ?? "sud"})`}
+          {mode === "coupe"
+            ? (cutAxis === "BB" ? "Coupe B-B' — longitudinale" : "Coupe A-A' — transversale")
+            : `Façade ${SIDE_LABEL[side]}${isVoirieSide ? " — principale (voirie)" : ""}`}
         </text>
         <text x={30} y={54} fontSize={10.5} fill="#475569">
           R+{env.niveaux - 1} · hauteur {env.hauteur_totale_m} m · RDC {env.hauteur_rdc_m} m · étages courants {env.hauteur_etage_courant_m} m
           {projectName ? ` · ${projectName}` : ""}
         </text>
+
+        {/* Efficacité plan — badge discret en haut droit du header */}
+        {mode === "coupe" && (() => {
+          const niveauxList = bm.niveaux ?? [];
+          let shabM2 = 0, circM2 = 0, spM2 = 0;
+          for (const n of niveauxList) {
+            spM2 += n.surface_plancher_m2 ?? 0;
+            for (const c of n.cellules ?? []) {
+              if (c.type === "logement") shabM2 += c.surface_m2 ?? 0;
+            }
+            for (const c of n.circulations_communes ?? []) circM2 += c.surface_m2 ?? 0;
+          }
+          const effPct = spM2 > 0 ? Math.round((shabM2 / spM2) * 100) : 0;
+          const circPct = spM2 > 0 ? Math.round((circM2 / spM2) * 100) : 0;
+          const efficient = effPct >= 82;
+          return (
+            <g>
+              <rect x={width - 232} y={28} width={200} height={22} rx={3}
+                fill={efficient ? "#ecfdf5" : "#fef3c7"}
+                stroke={efficient ? "#10b981" : "#f59e0b"} strokeWidth={0.8} />
+              <text x={width - 222} y={43} fontSize={9.5} fontWeight={700}
+                fill={efficient ? "#065f46" : "#92400e"}>
+                Efficacité plan
+              </text>
+              <text x={width - 38} y={43} fontSize={9.5} fontWeight={700}
+                fill={efficient ? "#065f46" : "#92400e"} textAnchor="end">
+                SHAB {effPct}% · circ {circPct}%
+              </text>
+            </g>
+          );
+        })()}
       </g>
 
       {/* Compass + scale */}
@@ -180,9 +285,15 @@ export function CoupeElevation({
       <TitleBlock
         x={width - 232}
         y={height - 68}
-        title={mode === "coupe" ? "Coupe A-A" : "Façade"}
-        subtitle={`1:100 · ${mode === "coupe" ? "DP-CO-01" : "DP-FA-01"}`}
-        sheetCode={mode === "coupe" ? "PC3" : "PC5"}
+        title={mode === "coupe"
+          ? (cutAxis === "BB" ? "Coupe B-B'" : "Coupe A-A'")
+          : `Façade ${SIDE_LABEL[side]}`}
+        subtitle={`1:100 · ${mode === "coupe"
+          ? (cutAxis === "BB" ? "DP-CO-02" : "DP-CO-01")
+          : `DP-FA-0${FACADE_SHEET[side]}`}`}
+        sheetCode={mode === "coupe"
+          ? (cutAxis === "BB" ? "PC3-2" : "PC3-1")
+          : `PC5-${FACADE_SHEET[side]}`}
       />
     </svg>
   );
@@ -190,107 +301,304 @@ export function CoupeElevation({
 
 /* ─────────── Coupe body ─────────── */
 
+type StoryT = { code: string; yBase: number; height: number; usage: string; hsp: number };
+
 function CoupeBody({
-  stories, worldToPx, spanPx, scale, parapetPx,
+  bm, cutAxis, stories, worldToPx, spanPx, scale, parapetPx,
 }: {
-  stories: Array<{ code: string; yBase: number; height: number; usage: string }>;
+  bm: BuildingModelPayload;
+  cutAxis: "AA" | "BB";
+  stories: StoryT[];
   worldToPx: (x: number, y: number) => [number, number];
   spanPx: number;
   scale: number;
   parapetPx: number;
 }) {
+  const footprint = coordsFromGeoJSON(bm.envelope?.footprint_geojson);
+  const bb = bboxOf(footprint);
+  // Axis perpendicular to cut line (the "cut" axis). AA' cuts at x=cx, BB' at y=cy.
+  const perpAxis: "x" | "y" = cutAxis === "AA" ? "x" : "y";
+  const cutPos = bb
+    ? (cutAxis === "AA" ? (bb.minx + bb.maxx) / 2 : (bb.miny + bb.maxy) / 2)
+    : 0;
+  // Section-horizontal world-axis = the OTHER axis. Origin = min of that axis.
+  const sectionOrigin = bb ? (cutAxis === "AA" ? bb.miny : bb.minx) : 0;
+  const toSection = (worldQ: number) => worldQ - sectionOrigin;
+
+  const footprintIntervals = polygonLineIntersectIntervals(footprint, perpAxis, cutPos);
+
+  const niveaux = [...bm.niveaux].sort((a, b) => a.index - b.index);
+  const wallW = Math.max(4, 0.25 * scale);
+  const slabH = 0.25 * scale;
+
+  // Core for stair profile: we only draw the stair run if the cut line actually
+  // intersects the core's escalier footprint. We assume stair has the same
+  // center as the core and runs along the axis of the cut direction.
+  const core = bm.core as {
+    position_xy?: [number, number];
+    escalier?: { position_xy?: [number, number]; width_m?: number; length_m?: number };
+  };
+  const esc = core.escalier;
+  const stairPos = esc?.position_xy ?? core.position_xy;
+  const stairSize = { w: esc?.width_m ?? 1.2, l: esc?.length_m ?? 2.6 };
+  const stairCuts = stairPos && bb
+    ? (() => {
+        // Approximate stair bbox in world coords centered at stairPos.
+        const [cxS, cyS] = stairPos;
+        // Orient stair along the longer bbox axis of the building footprint.
+        const fw = bb.maxx - bb.minx;
+        const fh = bb.maxy - bb.miny;
+        const runAlongX = fw >= fh;
+        const hw = runAlongX ? stairSize.l / 2 : stairSize.w / 2;
+        const hh = runAlongX ? stairSize.w / 2 : stairSize.l / 2;
+        // Does the cut line pass through the stair bbox ?
+        const crosses = perpAxis === "x"
+          ? cutPos >= cxS - hw && cutPos <= cxS + hw
+          : cutPos >= cyS - hh && cutPos <= cyS + hh;
+        if (!crosses) return null;
+        // Section-horizontal extent of the stair: the span of stair in the
+        // OTHER axis (what the section shows).
+        const sectCenter = perpAxis === "x" ? cyS : cxS;
+        const sectHalf = perpAxis === "x" ? hh : hw;
+        return {
+          xStart: toSection(sectCenter - sectHalf),
+          xEnd: toSection(sectCenter + sectHalf),
+        };
+      })()
+    : null;
+
   return (
     <g>
-      {/* Outer walls (filled concrete) - left + right */}
-      {stories.map((s, i) => {
-        const [xL, yB] = worldToPx(0, s.yBase);
-        const [, yT] = worldToPx(0, s.yBase + s.height);
-        const wallW = Math.max(4, 0.25 * scale);
+      {/* Render each footprint segment independently (an L-shape cut may
+          produce two disjoint envelopes). */}
+      {footprintIntervals.map(([wA, wB], segIdx) => {
+        const sA = toSection(wA);
+        const sB = toSection(wB);
+        const [xA, by0] = worldToPx(sA, 0);
+        const [xB] = worldToPx(sB, 0);
+        const segPx = xB - xA;
+        const topStory = stories[stories.length - 1];
+        const [, yTopTop] = worldToPx(sA, topStory.yBase + topStory.height);
         return (
-          <g key={i}>
-            <rect x={xL} y={yT} width={wallW} height={yB - yT} fill="url(#pat-concrete)" stroke="#0f172a" strokeWidth={0.7} />
-            <rect x={xL + spanPx - wallW} y={yT} width={wallW} height={yB - yT} fill="url(#pat-concrete)" stroke="#0f172a" strokeWidth={0.7} />
+          <g key={`seg-${segIdx}`}>
+            {/* Outer walls on both ends */}
+            {stories.map((s, i) => {
+              const [, yB] = worldToPx(sA, s.yBase);
+              const [, yT] = worldToPx(sA, s.yBase + s.height);
+              return (
+                <g key={`ow-${segIdx}-${i}`}>
+                  <rect x={xA} y={yT} width={wallW} height={yB - yT} fill="url(#pat-concrete)" stroke="#0f172a" strokeWidth={0.7} />
+                  <rect x={xB - wallW} y={yT} width={wallW} height={yB - yT} fill="url(#pat-concrete)" stroke="#0f172a" strokeWidth={0.7} />
+                </g>
+              );
+            })}
+
+            {/* Slabs between stories */}
+            {stories.map((s, i) => {
+              const [, yB] = worldToPx(sA, s.yBase);
+              return (
+                <rect
+                  key={`slab-${segIdx}-${i}`}
+                  x={xA - 2}
+                  y={yB - slabH}
+                  width={segPx + 4}
+                  height={slabH}
+                  fill="url(#pat-concrete)"
+                  stroke="#0f172a"
+                  strokeWidth={0.6}
+                />
+              );
+            })}
+
+            {/* Top slab + parapet */}
+            <g>
+              <rect x={xA - 2} y={yTopTop - slabH * 1.2} width={segPx + 4} height={slabH * 1.2} fill="url(#pat-concrete)" stroke="#0f172a" strokeWidth={0.6} />
+              <rect x={xA - 2} y={yTopTop - slabH * 1.2 - parapetPx} width={segPx + 4} height={parapetPx} fill="#e7e5e4" stroke="#0f172a" strokeWidth={0.6} />
+              <rect x={xA - 2} y={yTopTop - slabH * 1.2 - parapetPx} width={segPx + 4} height={2} fill="#78716c" />
+            </g>
+
+            {/* Per-story contents: rooms (actual intersections) + interior-wall ticks */}
+            {stories.map((s, i) => {
+              const niv = niveaux[i];
+              const [, yB] = worldToPx(sA, s.yBase);
+              const [, yT] = worldToPx(sA, s.yBase + s.height);
+              const innerY = yT + slabH;
+              const innerH = (yB - yT) - slabH;
+              const segWorldRange: [number, number] = [wA, wB];
+
+              // Collect cellules cut by this cut line, clipped to this envelope segment
+              type Piece = { wA: number; wB: number; label: string; tone: string; type: string };
+              const pieces: Piece[] = [];
+              for (const cell of niv?.cellules ?? []) {
+                const intervals = polygonLineIntersectIntervals(
+                  cell.polygon_xy as Coord[],
+                  perpAxis,
+                  cutPos,
+                );
+                for (const [ia, ib] of intervals) {
+                  const a = Math.max(ia, segWorldRange[0]);
+                  const b = Math.min(ib, segWorldRange[1]);
+                  if (b - a < 0.2) continue;
+                  // Pick the room type at segment midpoint if we can
+                  const mid = (a + b) / 2;
+                  let roomType = cell.typologie ?? "logement";
+                  let roomLabel = (cell.typologie ?? "LGT").toUpperCase();
+                  for (const r of cell.rooms ?? []) {
+                    const rIntervals = polygonLineIntersectIntervals(
+                      r.polygon_xy as Coord[],
+                      perpAxis,
+                      cutPos,
+                    );
+                    const hit = rIntervals.find(([ra, rb]) => mid >= ra && mid <= rb);
+                    if (hit) {
+                      roomType = r.type;
+                      roomLabel = roomLabelTiny(r.type);
+                      break;
+                    }
+                  }
+                  const style = roomStyle(roomType);
+                  pieces.push({ wA: a, wB: b, label: roomLabel, tone: style.fill, type: roomType });
+                }
+              }
+              for (const circ of niv?.circulations_communes ?? []) {
+                const intervals = polygonLineIntersectIntervals(
+                  circ.polygon_xy as Coord[],
+                  perpAxis,
+                  cutPos,
+                );
+                for (const [ia, ib] of intervals) {
+                  const a = Math.max(ia, segWorldRange[0]);
+                  const b = Math.min(ib, segWorldRange[1]);
+                  if (b - a < 0.2) continue;
+                  pieces.push({ wA: a, wB: b, label: "Circ.", tone: "#f1f5f9", type: "circulation" });
+                }
+              }
+              // Sort L→R along section axis
+              pieces.sort((p, q) => p.wA - q.wA);
+
+              // Interior wall ticks: union of walls from all cellules whose
+              // geometry crosses the cut line within [wA, wB]
+              const wallTicks: number[] = [];
+              for (const cell of niv?.cellules ?? []) {
+                for (const w of cell.walls ?? []) {
+                  if (w.type === "porteur") continue;  // outer porteur handled by envelope
+                  const coords = w.geometry?.coords as Coord[] | undefined;
+                  if (!coords || coords.length < 2) continue;
+                  const hit = segmentCrossAxis(coords[0], coords[1], perpAxis, cutPos);
+                  if (hit === null) continue;
+                  if (hit < wA || hit > wB) continue;
+                  wallTicks.push(hit);
+                }
+              }
+
+              // Deduplicate wallTicks that land too close to a room boundary
+              // (those are already drawn as the edge of the room fill).
+              const roomEdges = new Set<number>();
+              for (const p of pieces) {
+                roomEdges.add(Math.round(p.wA * 10) / 10);
+                roomEdges.add(Math.round(p.wB * 10) / 10);
+              }
+              const uniqueTicks = wallTicks.filter((wt) => {
+                const key = Math.round(wt * 10) / 10;
+                return !roomEdges.has(key);
+              });
+
+              return (
+                <g key={`rooms-${segIdx}-${i}`}>
+                  {pieces.map((p, pi) => {
+                    const pxA = worldToPx(toSection(p.wA), 0)[0];
+                    const pxB = worldToPx(toSection(p.wB), 0)[0];
+                    return (
+                      <g key={pi}>
+                        <rect x={pxA + 0.4} y={innerY} width={pxB - pxA - 0.8} height={innerH} fill={p.tone} opacity={0.72} />
+                        {pxB - pxA > 26 && (
+                          <text
+                            x={(pxA + pxB) / 2}
+                            y={innerY + innerH / 2 + 3.5}
+                            textAnchor="middle"
+                            fontSize={9}
+                            fontWeight={600}
+                            fill="#0f172a"
+                          >
+                            {p.label}
+                          </text>
+                        )}
+                        {/* Room-edge cloison tick */}
+                        <line x1={pxB} y1={innerY + 1} x2={pxB} y2={innerY + innerH - 1} stroke="#94a3b8" strokeWidth={0.6} />
+                      </g>
+                    );
+                  })}
+
+                  {/* Non-edge interior cloisons (dashed, light) */}
+                  {uniqueTicks.map((wt, wi) => {
+                    const [xTick] = worldToPx(toSection(wt), 0);
+                    return (
+                      <line
+                        key={`wt-${wi}`}
+                        x1={xTick}
+                        y1={innerY + 1}
+                        x2={xTick}
+                        y2={innerY + innerH - 1}
+                        stroke="#94a3b8"
+                        strokeWidth={0.6}
+                        strokeDasharray="3 2"
+                      />
+                    );
+                  })}
+
+                  {/* Slab bottom-shadow for floor separation */}
+                  <line
+                    x1={xA + wallW}
+                    y1={innerY + innerH + 0.5}
+                    x2={xB - wallW}
+                    y2={innerY + innerH + 0.5}
+                    stroke="#0f172a"
+                    strokeWidth={0.35}
+                    opacity={0.35}
+                  />
+                </g>
+              );
+            })}
           </g>
         );
       })}
 
-      {/* Slabs between stories */}
-      {stories.map((s, i) => {
-        const [xL, yB] = worldToPx(0, s.yBase);
-        const slabH = 0.25 * scale;
-        return (
-          <rect
-            key={`slab-${i}`}
-            x={xL - 2}
-            y={yB - slabH}
-            width={spanPx + 4}
-            height={slabH}
-            fill="url(#pat-concrete)"
-            stroke="#0f172a"
-            strokeWidth={0.6}
-          />
-        );
-      })}
-
-      {/* Top slab + parapet */}
-      {(() => {
-        const top = stories[stories.length - 1];
-        const [xL, yT] = worldToPx(0, top.yBase + top.height);
-        const slabH = 0.3 * scale;
+      {/* Stair profile (diagonal stringer per flight, clean switchback) */}
+      {stairCuts && (() => {
+        const [xS0] = worldToPx(stairCuts.xStart, 0);
+        const [xS1] = worldToPx(stairCuts.xEnd, 0);
         return (
           <g>
-            <rect x={xL - 2} y={yT - slabH} width={spanPx + 4} height={slabH} fill="url(#pat-concrete)" stroke="#0f172a" strokeWidth={0.6} />
-            {/* Parapet */}
-            <rect x={xL - 2} y={yT - slabH - parapetPx} width={spanPx + 4} height={parapetPx} fill="#e7e5e4" stroke="#0f172a" strokeWidth={0.6} />
-            <rect x={xL - 2} y={yT - slabH - parapetPx} width={spanPx + 4} height={2} fill="#78716c" />
-          </g>
-        );
-      })()}
-
-      {/* Room interior per story */}
-      {stories.map((s, i) => {
-        const [xL, yB] = worldToPx(0, s.yBase);
-        const [, yT] = worldToPx(0, s.yBase + s.height);
-        const wallW = Math.max(4, 0.25 * scale);
-        const innerX = xL + wallW + 2;
-        const innerY = yT + 0.25 * scale;
-        const innerW = spanPx - 2 * (wallW + 2);
-        const innerH = (yB - yT) - 0.5 * scale;
-        return (
-          <g key={`room-${i}`}>
-            <rect x={innerX} y={innerY} width={innerW} height={innerH} fill="#fafaf9" />
-            <rect x={innerX} y={innerY + innerH * 0.85} width={innerW} height={innerH * 0.15} fill="url(#pat-parquet)" />
-            <text x={innerX + innerW / 2} y={innerY + innerH / 2 + 4} textAnchor="middle" fontSize={10} fill="#64748b">
-              {s.usage}
-            </text>
-          </g>
-        );
-      })}
-
-      {/* Stairs marker in middle */}
-      {(() => {
-        const mid = stories[Math.floor(stories.length / 2)];
-        const [, yB] = worldToPx(0, mid.yBase);
-        const [xL, yT] = worldToPx(0, mid.yBase + mid.height);
-        const sx = xL + spanPx / 2 - 18;
-        return (
-          <g>
-            {Array.from({ length: 8 }).map((_, i) => (
-              <line
-                key={i}
-                x1={sx + i * 4.5}
-                y1={yB - 2}
-                x2={sx + i * 4.5}
-                y2={yT + 2}
-                stroke="#475569"
-                strokeWidth={0.4}
-              />
-            ))}
-            <path
-              d={`M ${sx} ${yB - 2} L ${sx + 36} ${yT + 2}`}
-              stroke="#0f172a"
-              strokeWidth={0.8}
-            />
+            {stories.slice(0, -1).map((s, i) => {
+              const [, yB] = worldToPx(0, s.yBase);
+              const [, yT] = worldToPx(0, s.yBase + s.height);
+              const flightUpLeft = i % 2 === 1;
+              const sx0 = flightUpLeft ? xS1 : xS0;
+              const sx1 = flightUpLeft ? xS0 : xS1;
+              const steps = 5;
+              return (
+                <g key={`stair-${i}`}>
+                  {/* Stringer */}
+                  <line x1={sx0} y1={yB - 1} x2={sx1} y2={yT + 1} stroke="#1e293b" strokeWidth={1.1} />
+                  {/* Simple tread ticks */}
+                  {Array.from({ length: steps - 1 }).map((_, k) => {
+                    const t = (k + 1) / steps;
+                    const tx = sx0 + (sx1 - sx0) * t;
+                    const ty = yB - (yB - yT) * t;
+                    return (
+                      <line key={k} x1={tx - 2} y1={ty} x2={tx + 2} y2={ty} stroke="#475569" strokeWidth={0.7} />
+                    );
+                  })}
+                  {/* Arrow head indicating ascent on first flight of each pair */}
+                  {i === 0 && (
+                    <polygon
+                      points={`${sx1},${yT + 1} ${sx1 - (sx1 > sx0 ? 5 : -5)},${yT + 5} ${sx1 - (sx1 > sx0 ? 5 : -5)},${yT - 3}`}
+                      fill="#1e293b"
+                    />
+                  )}
+                </g>
+              );
+            })}
           </g>
         );
       })()}
@@ -300,8 +608,32 @@ function CoupeBody({
 
 /* ─────────── Façade body ─────────── */
 
+/* Contemporary residential palette (2025-2026 architectural trends,
+ * cost-aware for 12% margin target):
+ *   - ENDUIT: beige sable / blanc cassé (RPE minéral, bas coût)
+ *   - BARDAGE: cèdre naturel vertical (accents sélectifs, attique)
+ *   - MÉTAL: noir thermolaqué (menuiseries, garde-corps, brise-soleil)
+ *   - SOUBASSEMENT: pierre reconstituée anthracite (plinthe)
+ *   - ACCENT: terracotta / bleu pétrole (rare, rythme vertical)
+ */
+const PALETTE = {
+  enduitBase: "#e8e1d0",     // beige sable
+  enduitShadow: "#d9d0b8",   // ombre enduit
+  bardageWood: "#9c7d57",    // cèdre naturel
+  bardageWoodDark: "#6f5636",
+  soubassement: "#4a4542",   // pierre anthracite
+  soubassementLine: "#2a2725",
+  menuiserieBlack: "#1a1a1a",
+  menuiserieNoir: "#0a0a0a",
+  glass: "#8fc7e0",
+  glassLight: "#b9dce9",
+  glassReflect: "#dceef5",
+  gardeCorps: "#111111",
+  accentPetrole: "#25525c",
+};
+
 function FacadeBody({
-  stories, openingsByStory, worldToPx, spanPx, scale, parapetPx, env,
+  stories, openingsByStory, worldToPx, spanPx, scale, parapetPx, env, showEntry, side,
 }: {
   stories: Array<{ code: string; yBase: number; height: number; usage: string }>;
   openingsByStory: number[];
@@ -310,96 +642,186 @@ function FacadeBody({
   scale: number;
   parapetPx: number;
   env: BuildingModelPayload["envelope"];
+  showEntry: boolean;
+  side: "nord" | "sud" | "est" | "ouest";
 }) {
   const topStory = stories[stories.length - 1];
   const [xL, yTop] = worldToPx(0, topStory.yBase + topStory.height);
   const [, yBase] = worldToPx(0, 0);
+  const totalH = yBase - yTop;
+
+  const isVoirie = showEntry;
+  const isPignon = side === "est" || side === "ouest";
+  const isNorth = side === "nord";
+
+  // Attic setback (last floor): 1.2 m from the façade plane, rendered as a
+  // wood-clad attic at the top of the sheet.
+  const [, yAtticTop] = worldToPx(0, topStory.yBase);  // bottom of attic
+  const atticHeight = topStory.height;
+  const atticSetbackPx = 1.2 * scale;  // visual inset for attic
+  const [, yAtticFloor] = worldToPx(0, topStory.yBase);  // floor of attic = top of R+N-1
+
+  // Soubassement (pierre anthracite), 0.9 m
+  const soubassementHeight = 0.9 * scale;
+  const [, ySoubassementTop] = worldToPx(0, 0);  // ground
+  const ySoub = yBase - soubassementHeight;
+
+  // Number of vertical bays (rhythm): 5-7 depending on span (contemporary
+  // wide openings, not cram).
+  const targetBayM = 3.8;  // bay spacing in meters — one window + wall
+  const estimatedBays = Math.max(4, Math.round(spanPx / (targetBayM * scale)));
+  const bays = Math.min(8, estimatedBays);
+  const bayW = spanPx / bays;
 
   return (
     <g>
-      {/* Enduit wall base colour */}
-      <rect x={xL} y={yTop} width={spanPx} height={yBase - yTop} fill="#f0eadc" />
-      {/* Plinthe — darker stone band at ground */}
-      <rect x={xL} y={yBase - 0.8 * scale} width={spanPx} height={0.8 * scale} fill="#a8a29e" />
-      {/* Light vertical shadow on right to suggest volume */}
-      <rect x={xL + spanPx - 6} y={yTop} width={6} height={yBase - yTop} fill="#0f172a" opacity={0.08} />
+      {/* ───── Main wall — enduit ───── */}
+      <defs>
+        <linearGradient id="enduit-vshadow" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stopColor={PALETTE.enduitShadow} stopOpacity={0.45} />
+          <stop offset="0.25" stopColor={PALETTE.enduitShadow} stopOpacity={0} />
+          <stop offset="0.75" stopColor={PALETTE.enduitShadow} stopOpacity={0} />
+          <stop offset="1" stopColor={PALETTE.enduitShadow} stopOpacity={0.6} />
+        </linearGradient>
+      </defs>
+      <rect x={xL} y={yTop} width={spanPx} height={totalH} fill={PALETTE.enduitBase} />
+      <rect x={xL} y={yTop} width={spanPx} height={totalH} fill="url(#enduit-vshadow)" />
 
-      {/* Enduit horizontal rule lines */}
-      {Array.from({ length: Math.floor((yBase - yTop) / 30) }).map((_, i) => (
-        <line key={i} x1={xL} y1={yTop + (i + 1) * 30} x2={xL + spanPx} y2={yTop + (i + 1) * 30} stroke="#d6d3d1" strokeWidth={0.25} />
-      ))}
+      {/* ───── Attic (dernier étage) — bardage bois vertical ───── */}
+      <rect
+        x={xL + atticSetbackPx}
+        y={yAtticFloor - atticHeight * scale / env.hauteur_etage_courant_m}
+        width={spanPx - 2 * atticSetbackPx}
+        height={yAtticFloor - (yAtticFloor - atticHeight * scale / env.hauteur_etage_courant_m)}
+        fill={PALETTE.bardageWood}
+      />
+      {/* Wood cladding vertical boards (one line every ~15 cm) */}
+      {(() => {
+        const atticHPx = topStory.height * scale;
+        const boardSpacingPx = 6;  // ~15-20 cm boards
+        const atticTop = yAtticFloor - atticHPx;
+        const atticW = spanPx - 2 * atticSetbackPx;
+        const n = Math.floor(atticW / boardSpacingPx);
+        return Array.from({ length: n }).map((_, i) => (
+          <line
+            key={`b-${i}`}
+            x1={xL + atticSetbackPx + i * boardSpacingPx}
+            y1={atticTop}
+            x2={xL + atticSetbackPx + i * boardSpacingPx}
+            y2={yAtticFloor}
+            stroke={PALETTE.bardageWoodDark}
+            strokeWidth={0.25}
+            opacity={0.65}
+          />
+        ));
+      })()}
+      {/* Nez de dalle dark line separating attic from floor below */}
+      <rect
+        x={xL}
+        y={yAtticFloor - 3}
+        width={spanPx}
+        height={3}
+        fill={PALETTE.menuiserieBlack}
+      />
 
-      {/* Windows grid per story */}
+      {/* ───── Soubassement (pierre anthracite) ───── */}
+      <rect
+        x={xL - 1}
+        y={ySoub}
+        width={spanPx + 2}
+        height={soubassementHeight}
+        fill={PALETTE.soubassement}
+      />
+      {/* Joints horizontaux */}
+      <line x1={xL - 1} y1={ySoub + soubassementHeight * 0.5} x2={xL + spanPx + 1} y2={ySoub + soubassementHeight * 0.5} stroke={PALETTE.soubassementLine} strokeWidth={0.4} />
+      <line x1={xL - 1} y1={ySoub} x2={xL + spanPx + 1} y2={ySoub} stroke={PALETTE.menuiserieBlack} strokeWidth={1.2} />
+
+      {/* ───── Windows per story ───── */}
       {stories.map((s, i) => {
         const isRdc = i === 0;
-        const nOp = Math.max(3, openingsByStory[i] || 3);
-        const cols = Math.min(nOp, Math.max(3, Math.floor(spanPx / 80)));
+        const isAttic = i === stories.length - 1;
         const [, yT] = worldToPx(0, s.yBase + s.height);
         const [, yB] = worldToPx(0, s.yBase);
         const storyH = yB - yT;
-        const winH = Math.min(storyH * 0.55, env.hauteur_etage_courant_m * 0.55 * scale);
-        const winW = Math.min((spanPx * 0.7) / cols, 100);
-        const winY = yT + (storyH - winH) / 2;
-        const gap = (spanPx - cols * winW) / (cols + 1);
-        const entryCol = Math.floor(cols / 2);
+
+        // Window proportions — contemporary tall vertical windows on upper
+        // floors, more compact on RDC (because of soubassement), smaller on
+        // NORD (energy-conscious).
+        const winH = isRdc
+          ? storyH * 0.55 - soubassementHeight * 0.5
+          : storyH * (isNorth ? 0.52 : 0.70);
+        const winW = Math.min(bayW * 0.58, isNorth ? 55 : 78);
+        const winY = isRdc
+          ? ySoub - winH - 6
+          : yT + (storyH - winH) / 2;
+
         return (
           <g key={`fa-${i}`}>
-            {Array.from({ length: cols }).map((_, c) => {
-              const wx = xL + gap + c * (winW + gap);
-              // RDC center = main entrance (glass door instead of window)
-              if (isRdc && c === entryCol) {
-                const doorH = storyH * 0.78;
-                const doorW = winW * 1.1;
-                const doorX = wx - (doorW - winW) / 2;
+            {Array.from({ length: bays }).map((_, c) => {
+              const bayCx = xL + (c + 0.5) * bayW;
+              const wx = bayCx - winW / 2;
+
+              // Entry on RDC + center bay only on voirie façade
+              const isEntryBay = isRdc && c === Math.floor(bays / 2) && showEntry;
+              if (isEntryBay) {
+                const doorH = storyH * 0.82;
+                const doorW = winW * 1.25;
+                const doorX = bayCx - doorW / 2;
                 const doorY = yB - doorH;
                 return (
                   <g key={c}>
-                    {/* canopy */}
-                    <rect x={doorX - 8} y={doorY - 10} width={doorW + 16} height={8} fill="#78716c" stroke="#44403c" strokeWidth={0.5} />
-                    {/* glass door frame */}
-                    <rect x={doorX} y={doorY} width={doorW} height={doorH} fill="#7dd3fc" stroke="#0c4a6e" strokeWidth={1.3} />
-                    {/* vertical mullion */}
-                    <line x1={doorX + doorW / 2} y1={doorY} x2={doorX + doorW / 2} y2={doorY + doorH} stroke="#0c4a6e" strokeWidth={1.1} />
-                    {/* handle */}
-                    <rect x={doorX + doorW * 0.5 - 1} y={doorY + doorH * 0.45} width={2} height={10} fill="#78716c" />
-                    {/* transom */}
-                    <line x1={doorX} y1={doorY + doorH * 0.78} x2={doorX + doorW} y2={doorY + doorH * 0.78} stroke="#0c4a6e" strokeWidth={0.6} />
-                    {/* threshold */}
-                    <rect x={doorX - 4} y={doorY + doorH} width={doorW + 8} height={3} fill="#44403c" />
-                    {/* entry label */}
-                    <text x={doorX + doorW / 2} y={doorY - 14} textAnchor="middle" fontSize={8.5} fontWeight={600} fill="#0c4a6e">
-                      Entrée
+                    {/* Auvent / casquette bois en porte-à-faux */}
+                    <rect x={doorX - 16} y={doorY - 16} width={doorW + 32} height={5} fill={PALETTE.bardageWood} stroke={PALETTE.bardageWoodDark} strokeWidth={0.5} />
+                    <rect x={doorX - 16} y={doorY - 21} width={doorW + 32} height={5} fill={PALETTE.bardageWoodDark} opacity={0.9} />
+                    {/* Vitrage entrée toute hauteur */}
+                    <rect x={doorX} y={doorY} width={doorW} height={doorH} fill={PALETTE.glass} stroke={PALETTE.menuiserieNoir} strokeWidth={1.8} />
+                    {/* Porte + vantaux + imposte */}
+                    <line x1={doorX + doorW / 2} y1={doorY} x2={doorX + doorW / 2} y2={doorY + doorH} stroke={PALETTE.menuiserieNoir} strokeWidth={1.4} />
+                    <line x1={doorX} y1={doorY + doorH * 0.18} x2={doorX + doorW} y2={doorY + doorH * 0.18} stroke={PALETTE.menuiserieNoir} strokeWidth={0.9} />
+                    {/* Reflets vitrage */}
+                    <rect x={doorX + 3} y={doorY + 3} width={doorW / 2 - 5} height={doorH - 6} fill={PALETTE.glassReflect} opacity={0.35} />
+                    {/* Poignée inox linéaire */}
+                    <rect x={doorX + doorW * 0.40} y={doorY + doorH * 0.55} width={1.8} height={22} fill="#cbd5e1" />
+                    {/* Seuil */}
+                    <rect x={doorX - 3} y={doorY + doorH} width={doorW + 6} height={2.5} fill={PALETTE.menuiserieNoir} />
+                    {/* Label */}
+                    <text x={bayCx} y={doorY - 26} textAnchor="middle" fontSize={9} fontWeight={700} fill={PALETTE.menuiserieNoir} letterSpacing="0.6">
+                      ENTRÉE
                     </text>
                   </g>
                 );
               }
+
               return (
                 <g key={c}>
-                  {/* Allège (sill band) */}
-                  <rect x={wx - 3} y={winY + winH} width={winW + 6} height={3} fill="#a8a29e" stroke="#78716c" strokeWidth={0.4} />
-                  {/* Frame */}
-                  <rect x={wx} y={winY} width={winW} height={winH} fill="#cbe9f5" stroke="#0c4a6e" strokeWidth={1.1} />
-                  {/* Mullions */}
-                  <line x1={wx + winW / 2} y1={winY} x2={wx + winW / 2} y2={winY + winH} stroke="#0c4a6e" strokeWidth={0.8} />
-                  <line x1={wx} y1={winY + winH / 2} x2={wx + winW} y2={winY + winH / 2} stroke="#0c4a6e" strokeWidth={0.8} />
-                  {/* Reflections */}
-                  <rect x={wx + 2} y={winY + 2} width={winW / 2 - 3} height={winH / 2 - 3} fill="#7dd3fc" opacity={0.55} />
-                  <rect x={wx + winW / 2 + 1} y={winY + winH / 2 + 1} width={winW / 2 - 3} height={winH / 2 - 3} fill="#e0f2fe" opacity={0.55} />
-                  {/* Lintel */}
-                  <rect x={wx - 3} y={winY - 3} width={winW + 6} height={3} fill="#78716c" />
-                  {/* Balcony railing on upper floors (R+1 and above), center windows only */}
-                  {!isRdc && i > 0 && c !== 0 && c !== cols - 1 && (
-                    <g>
-                      <rect x={wx - 4} y={winY + winH + 4} width={winW + 8} height={10} fill="none" stroke="#44403c" strokeWidth={0.8} />
-                      {Array.from({ length: 8 }).map((_, br) => (
-                        <line
-                          key={br}
-                          x1={wx - 4 + br * (winW + 8) / 7}
-                          y1={winY + winH + 4}
-                          x2={wx - 4 + br * (winW + 8) / 7}
-                          y2={winY + winH + 14}
-                          stroke="#44403c"
-                          strokeWidth={0.5}
+                  {/* ── Window frame ── */}
+                  <rect x={wx - 1} y={winY - 1} width={winW + 2} height={winH + 2} fill={PALETTE.menuiserieBlack} />
+                  <rect x={wx} y={winY} width={winW} height={winH} fill={PALETTE.glass} />
+                  {/* Glass reflections — graded */}
+                  <rect x={wx + 1.5} y={winY + 1.5} width={winW * 0.45} height={winH * 0.6} fill={PALETTE.glassReflect} opacity={0.42} />
+                  <rect x={wx + winW * 0.55} y={winY + winH * 0.55} width={winW * 0.4} height={winH * 0.4} fill={PALETTE.glassLight} opacity={0.35} />
+                  {/* Central mullion */}
+                  <line x1={wx + winW / 2} y1={winY} x2={wx + winW / 2} y2={winY + winH} stroke={PALETTE.menuiserieNoir} strokeWidth={1.0} />
+                  {/* Allège sous la fenêtre (bandeau moderne étroit) */}
+                  <rect x={wx - 2} y={winY + winH + 0.5} width={winW + 4} height={2.2} fill={PALETTE.soubassement} />
+
+                  {/* ── Balcony / loggia per side ── */}
+                  {!isRdc && !isAttic && renderBalconyOrLoggia({
+                    side, isVoirie, isPignon, wx, winY, winW, winH, yT, yB,
+                    palette: PALETTE, c, bays,
+                  })}
+
+                  {/* ── Brise-soleil vertical (pignons E/W only) ── */}
+                  {!isRdc && isPignon && c > 0 && c < bays - 1 && (
+                    <g opacity={0.88}>
+                      {[-1, 1].map((sgn) => (
+                        <rect
+                          key={sgn}
+                          x={wx + (sgn < 0 ? -4 : winW + 1)}
+                          y={winY - 3}
+                          width={3}
+                          height={winH + 6}
+                          fill={PALETTE.menuiserieBlack}
                         />
                       ))}
                     </g>
@@ -407,23 +829,103 @@ function FacadeBody({
                 </g>
               );
             })}
-            {/* Story band horizontal line (nez de dalle) */}
-            <line x1={xL} y1={yB - 0.25 * scale} x2={xL + spanPx} y2={yB - 0.25 * scale} stroke="#78716c" strokeWidth={0.7} />
+
+            {/* Nez de dalle horizontal entre les étages */}
+            {i < stories.length - 1 && (
+              <rect x={xL} y={yB - 3} width={spanPx} height={3} fill={PALETTE.soubassement} opacity={0.85} />
+            )}
           </g>
         );
       })}
 
-      {/* Parapet */}
-      <rect x={xL} y={yTop - parapetPx} width={spanPx} height={parapetPx} fill="#d6d3d1" stroke="#0f172a" strokeWidth={0.8} />
-      <rect x={xL} y={yTop - parapetPx} width={spanPx} height={3} fill="#57534e" />
+      {/* ───── Garde-corps balcons filants (sud voirie seulement) ───── */}
+      {isVoirie && stories.slice(1, -1).map((s, i) => {
+        const [, yB] = worldToPx(0, s.yBase);
+        return (
+          <g key={`balcony-filant-${i}`}>
+            {/* Dalle de balcon */}
+            <rect x={xL + 6} y={yB - 4} width={spanPx - 12} height={4} fill={PALETTE.soubassement} opacity={0.9} />
+            {/* Garde-corps verre + cadre métal noir */}
+            <rect x={xL + 6} y={yB - 18} width={spanPx - 12} height={14} fill={PALETTE.glassLight} opacity={0.38} />
+            <rect x={xL + 6} y={yB - 18} width={spanPx - 12} height={14} fill="none" stroke={PALETTE.gardeCorps} strokeWidth={0.9} />
+            <rect x={xL + 6} y={yB - 18} width={spanPx - 12} height={1.4} fill={PALETTE.gardeCorps} />
+            <rect x={xL + 6} y={yB - 5.5} width={spanPx - 12} height={1.4} fill={PALETTE.gardeCorps} />
+          </g>
+        );
+      })}
 
-      {/* Building outline */}
-      <rect x={xL} y={yTop} width={spanPx} height={yBase - yTop} fill="none" stroke="#1c1917" strokeWidth={1.6} />
+      {/* ───── Parapet & attique terminale ───── */}
+      <rect x={xL - 1} y={yTop - parapetPx} width={spanPx + 2} height={parapetPx} fill={PALETTE.enduitShadow} />
+      <rect x={xL - 1} y={yTop - parapetPx} width={spanPx + 2} height={3} fill={PALETTE.menuiserieNoir} />
+      <rect x={xL - 1} y={yTop} width={spanPx + 2} height={2.5} fill={PALETTE.menuiserieBlack} />
 
-      {/* Ground line continuation */}
+      {/* Building outline (crisp contour) */}
+      <rect x={xL} y={yTop} width={spanPx} height={totalH} fill="none" stroke={PALETTE.menuiserieNoir} strokeWidth={1.4} />
+
+      {/* Ground line */}
       <line x1={xL - 30} y1={yBase} x2={xL + spanPx + 30} y2={yBase} stroke="#0f172a" strokeWidth={1.4} />
+      {/* Light ground shadow under building */}
+      <rect x={xL - 4} y={yBase} width={spanPx + 8} height={3} fill="#0f172a" opacity={0.22} />
     </g>
   );
+}
+
+/**
+ * Per-side balcony / loggia logic. The SUD façade (voirie) gets a filant
+ * balcony drawn separately (see main component); here we draw per-window
+ * elements only on non-voirie sides to differentiate.
+ */
+function renderBalconyOrLoggia({
+  side, isVoirie, isPignon, wx, winY, winW, winH, yT, yB, palette, c, bays,
+}: {
+  side: "nord" | "sud" | "est" | "ouest";
+  isVoirie: boolean;
+  isPignon: boolean;
+  wx: number;
+  winY: number;
+  winW: number;
+  winH: number;
+  yT: number;
+  yB: number;
+  palette: typeof PALETTE;
+  c: number;
+  bays: number;
+}) {
+  // NORD: no balcony, just clean windows
+  if (side === "nord") return null;
+
+  // Pignons E/W: loggia creuse (recessed balcony) on the 2 central bays
+  if (isPignon) {
+    const centralBays = c >= Math.floor(bays / 3) && c < Math.ceil((2 * bays) / 3);
+    if (!centralBays) return null;
+    // Draw a darker recess pattern indicating a loggia
+    const loggiaX = wx - winW * 0.15;
+    const loggiaY = winY - 6;
+    const loggiaW = winW * 1.3;
+    const loggiaH = winH + 12;
+    return (
+      <g>
+        <rect x={loggiaX} y={loggiaY} width={loggiaW} height={loggiaH} fill={palette.soubassement} opacity={0.22} />
+        <rect x={loggiaX} y={loggiaY + loggiaH - 2} width={loggiaW} height={2} fill={palette.menuiserieBlack} opacity={0.4} />
+        {/* Garde-corps loggia — métal noir barreaudage */}
+        <rect x={loggiaX + 2} y={loggiaY + loggiaH - 14} width={loggiaW - 4} height={12} fill="none" stroke={palette.gardeCorps} strokeWidth={0.8} />
+        {Array.from({ length: 8 }).map((_, b) => (
+          <line
+            key={b}
+            x1={loggiaX + 2 + b * (loggiaW - 4) / 7}
+            y1={loggiaY + loggiaH - 14}
+            x2={loggiaX + 2 + b * (loggiaW - 4) / 7}
+            y2={loggiaY + loggiaH - 2}
+            stroke={palette.gardeCorps}
+            strokeWidth={0.5}
+          />
+        ))}
+      </g>
+    );
+  }
+
+  // SUD non-voirie impossible, already handled by `isVoirie`. Shouldn't reach.
+  return null;
 }
 
 /* ─────────── Height dimension ─────────── */
@@ -460,6 +962,60 @@ function HeightDim({
           </g>
         );
       })}
+    </g>
+  );
+}
+
+/* ─────────── Width dimension (façade only) ─────────── */
+
+function WidthDim({
+  xLeft, xRight, y, widthM,
+}: { xLeft: number; xRight: number; y: number; widthM: number }) {
+  return (
+    <g>
+      <line x1={xLeft} y1={y} x2={xRight} y2={y} stroke="#0f172a" strokeWidth={0.6} />
+      <polygon points={`${xLeft},${y} ${xLeft + 6},${y - 3} ${xLeft + 6},${y + 3}`} fill="#0f172a" />
+      <polygon points={`${xRight},${y} ${xRight - 6},${y - 3} ${xRight - 6},${y + 3}`} fill="#0f172a" />
+      <text x={(xLeft + xRight) / 2} y={y + 11} fontSize={10} fontWeight={700} fill="#0f172a" textAnchor="middle">
+        {widthM.toFixed(1)} m
+      </text>
+    </g>
+  );
+}
+
+/* ─────────── Orientation badge — which face of the building is shown ─────────── */
+
+function FacadeOrientationBadge({
+  x, y, side,
+}: { x: number; y: number; side: "nord" | "sud" | "est" | "ouest" }) {
+  // Tiny plan-view square with an arrow on the shown side
+  const size = 42;
+  const cx = x + size / 2, cy = y + size / 2;
+  const half = size / 2 - 5;
+  // Arrow pointing out of the building on the shown side
+  const arrowPos: Record<"nord" | "sud" | "est" | "ouest", [number, number, number, number]> = {
+    nord: [cx, cy - half, cx, cy - half - 9],
+    sud: [cx, cy + half, cx, cy + half + 9],
+    est: [cx + half, cy, cx + half + 9, cy],
+    ouest: [cx - half, cy, cx - half - 9, cy],
+  };
+  const [ax1, ay1, ax2, ay2] = arrowPos[side];
+  const perp: Record<"nord" | "sud" | "est" | "ouest", [number, number]> = {
+    nord: [-1, 0], sud: [-1, 0], est: [0, -1], ouest: [0, -1],
+  };
+  const [px, py] = perp[side];
+  return (
+    <g>
+      <rect x={x} y={y} width={size} height={size} fill="white" stroke="#475569" strokeWidth={0.6} rx={3} />
+      <rect x={cx - half} y={cy - half} width={half * 2} height={half * 2} fill="#e2e8f0" stroke="#64748b" strokeWidth={0.8} />
+      <line x1={ax1} y1={ay1} x2={ax2} y2={ay2} stroke="#0f766e" strokeWidth={1.3} />
+      <polygon
+        points={`${ax2},${ay2} ${ax2 + px * 3.5 + (ax2 - ax1) * 0.25},${ay2 + py * 3.5 + (ay2 - ay1) * 0.25} ${ax2 - px * 3.5 + (ax2 - ax1) * 0.25},${ay2 - py * 3.5 + (ay2 - ay1) * 0.25}`}
+        fill="#0f766e"
+      />
+      <text x={cx} y={cy + 3} fontSize={9} fontWeight={700} fill="#0f172a" textAnchor="middle">
+        {{ nord: "N", sud: "S", est: "E", ouest: "O" }[side]}
+      </text>
     </g>
   );
 }

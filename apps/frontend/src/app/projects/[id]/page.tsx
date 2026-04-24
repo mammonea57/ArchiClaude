@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { FeasibilityDashboard, type KPI } from "@/components/panels/FeasibilityDashboard";
 import { ServitudesList, type Alert } from "@/components/panels/ServitudesList";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Calculator, FileText, LayoutGrid, Play, Loader2, Trash2 } from "lucide-react";
+import { ArrowLeft, Calculator, Copy, FileText, LayoutGrid, Play, Loader2, Trash2 } from "lucide-react";
 import type { Project, BuildingModelRow, BuildingModelPayload } from "@/lib/types";
 
 function statusLabel(status: Project["status"]): string {
@@ -115,6 +115,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
   const { buildingModel, notFound: bmNotFound } = useBuildingModel(id);
   const [analyzing, setAnalyzing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   async function handleAnalyze() {
@@ -127,6 +128,18 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Erreur lors de l'analyse");
       setAnalyzing(false);
+    }
+  }
+
+  async function handleDuplicate() {
+    setDuplicating(true);
+    setActionError(null);
+    try {
+      const resp = await apiFetch<{ id: string }>(`/projects/${id}/duplicate`, { method: "POST" });
+      router.push(`/projects/${resp.id}`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Erreur lors de la duplication");
+      setDuplicating(false);
     }
   }
 
@@ -248,6 +261,19 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
                     </Link>
                   </>
                 )}
+                <Button
+                  variant="outline"
+                  className="gap-2 font-medium"
+                  onClick={handleDuplicate}
+                  disabled={duplicating}
+                >
+                  {duplicating ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                  Dupliquer
+                </Button>
                 <Button
                   variant="outline"
                   className="gap-2 font-medium"

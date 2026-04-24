@@ -31,11 +31,11 @@ export function PlanPatterns() {
         <line x1="46" y1="0" x2="46" y2="14" stroke="#a87a3a" strokeWidth="0.25" />
       </pattern>
 
-      {/* Ceramic tiles — 20×20cm grid with grout */}
+      {/* Ceramic tiles — 20×20cm grid with grout (entrée, cuisine) */}
       <pattern id="pat-tiles" width="20" height="20" patternUnits="userSpaceOnUse">
-        <rect width="20" height="20" fill="#e4eef6" />
-        <line x1="20" y1="0" x2="20" y2="20" stroke="#9dbcd3" strokeWidth="0.4" />
-        <line x1="0" y1="20" x2="20" y2="20" stroke="#9dbcd3" strokeWidth="0.4" />
+        <rect width="20" height="20" fill="#cddbe8" />
+        <line x1="20" y1="0" x2="20" y2="20" stroke="#7aa0bd" strokeWidth="0.5" />
+        <line x1="0" y1="20" x2="20" y2="20" stroke="#7aa0bd" strokeWidth="0.5" />
       </pattern>
 
       {/* Small tile (bathroom) */}

@@ -50,35 +50,44 @@ class TemplateSelector:
                 dimensions=1536,
             ).data[0].embedding
 
-        # 2. Vector search
-        candidates = await search_compatible_templates(
-            self.session, query_embedding=emb,
-            typologie=slot.target_typologie.value, limit=10,
-        )
-        if not candidates:
-            return None
-
-        # 3. Filter by hard constraints
+        # 2. Vector search — try target typo first, then adjacent typos.
+        # A 65 m² slot may be tagged T4 by surface but have a T3-compatible
+        # width; widening the typo pool keeps slots that would otherwise
+        # be dropped for missing templates.
         minx, miny, maxx, maxy = slot.polygon.bounds
         slot_width = maxx - minx
         slot_depth = maxy - miny
 
-        # Dimension tolerance mirrors TemplateAdapter._STRETCH bounds (0.85–1.15)
-        # so the selector does not reject slots the adapter can still fit.
+        _TYPO_ORDER = ["studio", "T1", "T2", "T3", "T4", "T5"]
+        target = slot.target_typologie.value
+        try_order: list[str] = [target]
+        if target in _TYPO_ORDER:
+            i = _TYPO_ORDER.index(target)
+            # Prefer going DOWN one typo first (narrower slot → smaller typo),
+            # then UP, then further out.
+            for delta in (-1, 1, -2, 2):
+                j = i + delta
+                if 0 <= j < len(_TYPO_ORDER):
+                    try_order.append(_TYPO_ORDER[j])
+
         filtered: list[TemplateCandidate] = []
-        for c in candidates:
-            dim = c.template.dimensions_grille
-            if not (dim.largeur_min_m * 0.85 <= slot_width <= dim.largeur_max_m * 1.15):
-                continue
-            if not (dim.profondeur_min_m * 0.85 <= slot_depth <= dim.profondeur_max_m * 1.15):
-                continue
-            # Surface filter is loose: core/buffer may clip slot area below the
-            # template's shab range, but the adapter still produces a valid
-            # apartment. Accept if any overlap with a ±30% window.
-            lo, hi = c.template.surface_shab_range
-            if slot.surface_m2 > hi * 1.3:
-                continue  # oversized slot — template really can't cover it
-            filtered.append(c)
+        for typo_try in try_order:
+            candidates = await search_compatible_templates(
+                self.session, query_embedding=emb,
+                typologie=typo_try, limit=10,
+            )
+            for c in candidates:
+                dim = c.template.dimensions_grille
+                if not (dim.largeur_min_m * 0.85 <= slot_width <= dim.largeur_max_m * 1.15):
+                    continue
+                if not (dim.profondeur_min_m * 0.85 <= slot_depth <= dim.profondeur_max_m * 1.15):
+                    continue
+                lo, hi = c.template.surface_shab_range
+                if slot.surface_m2 > hi * 1.3:
+                    continue
+                filtered.append(c)
+            if filtered:
+                break  # Got matches from this typo tier
 
         if not filtered:
             return None

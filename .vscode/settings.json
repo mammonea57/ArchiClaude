@@ -21,5 +21,13 @@
     "editor.formatOnSave": true
   },
   "typescript.tsdk": "node_modules/typescript/lib",
-  "eslint.workingDirectories": [{ "pattern": "apps/frontend" }]
+  "eslint.workingDirectories": [{ "pattern": "apps/frontend" }],
+  "git.enabled": true,
+  "git.path": "/usr/bin/git",
+  "git.autoRepositoryDetection": true,
+  "git.autofetch": true,
+  "git.detectSubmodules": true,
+  "git.openRepositoryInParentFolders": "always",
+  "security.workspace.trust.enabled": false,
+  "git-graph.repository.useGlobalGitConfig": true
 }

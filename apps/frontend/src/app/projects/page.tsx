@@ -1,7 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
+import { Pencil } from "lucide-react";
 import { useProjects } from "@/lib/hooks/useProjects";
+import { apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Project } from "@/lib/types";
@@ -55,6 +58,70 @@ function formatDate(iso: string): string {
     month: "short",
     year: "numeric",
   }).format(new Date(iso));
+}
+
+function ProjectNameCell({ project }: { project: Project }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(project.name);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    const newName = value.trim();
+    if (!newName || newName === project.name) {
+      setEditing(false);
+      setValue(project.name);
+      return;
+    }
+    setSaving(true);
+    try {
+      await apiFetch(`/projects/${project.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: newName }),
+      });
+      project.name = newName; // optimistic
+      setEditing(false);
+    } catch {
+      setValue(project.name);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={value}
+        disabled={saving}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+          if (e.key === "Escape") { setEditing(false); setValue(project.name); }
+        }}
+        className="font-medium text-slate-900 border border-slate-300 rounded px-2 py-0.5 w-full max-w-xs focus:outline-none focus:border-slate-500"
+      />
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2 group">
+      <Link
+        href={`/projects/${project.id}`}
+        className="font-medium text-slate-900 hover:underline"
+        style={{ textDecorationColor: "var(--ac-primary)" }}
+      >
+        {project.name}
+      </Link>
+      <button
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(true); }}
+        className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-slate-700"
+        title="Renommer"
+      >
+        <Pencil className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
 }
 
 export default function ProjectsPage() {
@@ -156,13 +223,7 @@ export default function ProjectsPage() {
                     }`}
                   >
                     <td className="px-5 py-4">
-                      <Link
-                        href={`/projects/${project.id}`}
-                        className="font-medium text-slate-900 hover:underline"
-                        style={{ textDecorationColor: "var(--ac-primary)" }}
-                      >
-                        {project.name}
-                      </Link>
+                      <ProjectNameCell project={project} />
                     </td>
                     <td className="px-5 py-4">
                       <StatusBadge status={project.status} />
