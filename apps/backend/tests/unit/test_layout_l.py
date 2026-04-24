@@ -2,7 +2,7 @@ import math
 
 from shapely.geometry import Polygon
 
-from core.building_model.layout_l import build_l_corridor, decompose_l, LDecomposition, place_core_at_elbow
+from core.building_model.layout_l import build_l_corridor, compute_l_quadrants, decompose_l, LDecomposition, place_core_at_elbow
 
 
 def test_decompose_l_inner_corner_nw():
@@ -100,3 +100,25 @@ def test_place_core_at_elbow_size_and_position():
     assert abs(cy - d.elbow[1]) < 0.3
     # Core lies inside footprint
     assert footprint.buffer(0.1).contains(core_poly)
+
+
+def test_compute_l_quadrants_five_rects():
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    d = decompose_l(footprint)
+    quadrants = compute_l_quadrants(d, corridor_width=1.6)
+    assert len(quadrants) == 5
+    names = {q.name for q in quadrants}
+    assert names == {"south_bar", "nw_bar", "ne_bar", "leg_west", "leg_east"}
+    # south_bar runs full bar width below corridor
+    south = next(q for q in quadrants if q.name == "south_bar")
+    sx0, sy0, sx1, sy1 = south.rect.bounds
+    assert abs(sx1 - sx0 - 21.9) < 0.2  # full bar width
+    assert abs(sy1 - sy0 - (7.5 - 0.8)) < 0.2  # depth ≈ 6.7 m
+    # leg_east: 6.7m deep, 17.4m long
+    le = next(q for q in quadrants if q.name == "leg_east")
+    ex0, ey0, ex1, ey1 = le.rect.bounds
+    assert abs(ex1 - ex0 - (21.9 - 14.4 - 0.8)) < 0.2
+    assert abs(ey1 - ey0 - 17.4) < 0.2

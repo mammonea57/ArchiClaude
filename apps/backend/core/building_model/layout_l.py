@@ -197,3 +197,91 @@ def place_core_at_elbow(
     cy = max(by0 + side / 2, min(by1 - side / 2, cy))
 
     return shp_box(cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2)
+
+
+@dataclass(frozen=True)
+class LQuadrant:
+    """A rectangular apartment zone surrounding the L-corridor.
+
+    - name: canonical label ("south_bar", "nw_bar", "ne_bar",
+      "leg_west", "leg_east")
+    - rect: axis-aligned rectangle polygon
+    - long_axis: "horizontal" or "vertical" — direction along which
+      apts are sliced
+    - facade_sides: exterior sides of this quadrant touching a street
+      or jardin ("sud", "nord", "est", "ouest")
+    """
+    name: str
+    rect: ShapelyPolygon
+    long_axis: str
+    facade_sides: tuple[str, ...]
+
+
+def compute_l_quadrants(
+    d: LDecomposition, corridor_width: float = 1.6,
+) -> list[LQuadrant]:
+    """Return the 5 rectangular apartment zones around the L-corridor.
+
+    Works for all 4 canonical L orientations. The quadrant NAMES are
+    always the same (south_bar, nw_bar, etc.) but the actual rectangle
+    coordinates reflect the specific orientation of this L.
+
+    For inner-corner NW (bar south, leg east, outer corner NE):
+    - south_bar: bar below corridor
+    - nw_bar: bar above corridor, west of leg x
+    - ne_bar: bar above corridor, east of leg x (small corner)
+    - leg_west: leg west of leg corridor
+    - leg_east: leg east of leg corridor
+    """
+    half = corridor_width / 2
+    bx0, by0, bx1, by1 = d.bar.bounds
+    lx0, ly0, lx1, ly1 = d.leg.bounds
+    cx_leg, cy_bar = d.elbow
+
+    # Determine orientation: is leg ABOVE or BELOW bar centerline?
+    leg_above = ly0 >= cy_bar
+    # Is leg EAST or WEST of bar centerline?
+    cx_bar = (bx0 + bx1) / 2
+    leg_east_of_center = cx_leg >= cx_bar
+
+    # Bar splits into "below-corridor" and "above-corridor" strips
+    bar_south = shp_box(bx0, by0, bx1, cy_bar - half)
+    bar_north = shp_box(bx0, cy_bar + half, bx1, by1)
+    # Above-bar strip splits at x=cx_leg ± half into west/east
+    bar_above_west = shp_box(bx0, cy_bar + half, cx_leg - half, by1)
+    bar_above_east = shp_box(cx_leg + half, cy_bar + half, bx1, by1)
+    # For inner-corner NW, leg is above bar → nw_bar = bar_above_west,
+    # ne_bar = bar_above_east, south_bar = bar_south.
+    # For inner-corner SW (leg below bar), swap: south_bar becomes
+    # bar_above (above corridor), nw_bar becomes bar_below_west.
+    if leg_above:
+        south_rect = bar_south
+        nw_rect = bar_above_west
+        ne_rect = bar_above_east
+    else:
+        # Leg below: bar's "other" strip is ABOVE the corridor.
+        south_rect = bar_north  # "opposite to leg" side
+        # Below-corridor splits analogously
+        nw_rect = shp_box(bx0, by0, cx_leg - half, cy_bar - half)
+        ne_rect = shp_box(cx_leg + half, by0, bx1, cy_bar - half)
+
+    # Leg splits at x=cx_leg ± half into west/east columns
+    leg_west_rect = shp_box(lx0, ly0, cx_leg - half, ly1)
+    leg_east_rect = shp_box(cx_leg + half, ly0, lx1, ly1)
+
+    # Facade sides (based on bbox orientation — the owner's polygon
+    # tells us which sides touch the outside). For inner-corner-NW:
+    # south_bar touches "sud", leg_east touches "est", etc. The dispatcher
+    # is responsible for translating to voirie/jardin labels upstream.
+    quadrants: list[LQuadrant] = []
+    # Suppress zero-area rects (when leg_w ≤ corridor_width etc.)
+    for name, rect, axis, sides in [
+        ("south_bar", south_rect, "horizontal", ("sud",)),
+        ("nw_bar", nw_rect, "horizontal", ("ouest", "nord")),
+        ("ne_bar", ne_rect, "horizontal", ("est", "nord")),
+        ("leg_west", leg_west_rect, "vertical", ("ouest",)),
+        ("leg_east", leg_east_rect, "vertical", ("est",)),
+    ]:
+        if rect.area > 1.0:  # drop slivers
+            quadrants.append(LQuadrant(name=name, rect=rect, long_axis=axis, facade_sides=sides))
+    return quadrants
