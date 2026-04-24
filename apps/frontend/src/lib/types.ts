@@ -95,6 +95,10 @@ export interface BuildingModelCellule {
   rooms: BuildingModelRoom[];
   walls: BuildingModelWall[];
   openings: BuildingModelOpening[];
+  /** Explicit axis-aligned jardin polygon for RDC logements. When set,
+   *  the frontend renders this polygon directly instead of extruding
+   *  the jardin from the apt's exterior walls. */
+  jardin_polygon_xy?: Array<[number, number]> | null;
 }
 
 export interface BuildingModelCirculation {

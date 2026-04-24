@@ -182,6 +182,12 @@ class Cellule(BaseModel):
     rooms: list[Room] = Field(default_factory=list)
     walls: list[Wall] = Field(default_factory=list)
     openings: list[Opening] = Field(default_factory=list)
+    # Explicit axis-aligned jardin polygon for RDC logements. When set,
+    # the frontend renders this polygon directly instead of extruding the
+    # jardin from the apt's exterior walls. Needed to correctly tile
+    # exterior "pocket" zones (e.g. an L-notch shared between two apts)
+    # where the naive per-wall extrusion overlaps or misses the zone.
+    jardin_polygon_xy: list[tuple[float, float]] | None = None
 
     @field_validator("typologie")
     @classmethod

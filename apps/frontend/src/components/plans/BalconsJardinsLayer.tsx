@@ -44,6 +44,12 @@ export function BalconsJardinsLayer({
 
   for (const cell of niveau.cellules) {
     if (cell.type !== "logement") continue;
+    // Explicit tiled jardin polygon (RDC notch tiling) — skip extrusion
+    // for this cellule; it will be rendered directly below from its
+    // `jardin_polygon_xy` field.
+    if (isRdc && cell.jardin_polygon_xy && cell.jardin_polygon_xy.length >= 3) {
+      continue;
+    }
     // For each wall of the cellule, check if it's on the footprint perimeter
     // AND has a porte-fenêtre (else no balcony/garden access).
     for (const wall of cell.walls ?? []) {
@@ -131,79 +137,21 @@ export function BalconsJardinsLayer({
     return { ex, bbox };
   });
 
-  // Clip each strip's along-wall extent to avoid overlapping with any other
-  // strip's bbox. Handles the L-notch case where apt 5's north-extruded
-  // jardin and apt 3's west-extruded jardin would otherwise both claim the
-  // reflex-corner quadrant. Each strip shrinks along its wall direction until
-  // its bbox no longer intersects its neighbour's bbox (a hedge separator is
-  // then drawn at the wall's trimmed endpoint).
-  const TOLC = 0.15;
+  // No clipping between jardins — each extrudes fully perpendicular to its
+  // wall. In L-notch configs jardins may overlap at the reflex corner;
+  // that's intentional. The per-jardin hedge/haie is drawn at strip
+  // endpoints so the visual separation reads clearly even through the
+  // overlap.
   const strips = rawStrips.map((rs) => {
     const { ex } = rs;
-    let aCur: Coord = ex.a;
-    let bCur: Coord = ex.b;
-    const horizontalWall = Math.abs(ex.b[1] - ex.a[1]) < TOLC;
-    const verticalWall = Math.abs(ex.b[0] - ex.a[0]) < TOLC;
-    if (horizontalWall || verticalWall) {
-      for (const other of rawStrips) {
-        if (other.ex.cellId === ex.cellId) continue;
-        // Compute current strip bbox (may have shrunk from earlier iterations).
-        const curA1: Coord = [aCur[0] + ex.outward[0] * ex.depth, aCur[1] + ex.outward[1] * ex.depth];
-        const curB1: Coord = [bCur[0] + ex.outward[0] * ex.depth, bCur[1] + ex.outward[1] * ex.depth];
-        const minx = Math.min(aCur[0], bCur[0], curA1[0], curB1[0]);
-        const miny = Math.min(aCur[1], bCur[1], curA1[1], curB1[1]);
-        const maxx = Math.max(aCur[0], bCur[0], curA1[0], curB1[0]);
-        const maxy = Math.max(aCur[1], bCur[1], curA1[1], curB1[1]);
-        const ob = other.bbox;
-        // Must actually overlap in both axes to need clipping.
-        if (maxx <= ob.minx + TOLC || minx >= ob.maxx - TOLC) continue;
-        if (maxy <= ob.miny + TOLC || miny >= ob.maxy - TOLC) continue;
-        // Shrink along the wall direction to exit the overlap.
-        if (horizontalWall) {
-          const y0 = aCur[1];
-          const aX0 = Math.min(aCur[0], bCur[0]);
-          const aX1 = Math.max(aCur[0], bCur[0]);
-          const leftLen = Math.max(0, ob.minx - aX0);
-          const rightLen = Math.max(0, aX1 - ob.maxx);
-          if (leftLen >= rightLen && leftLen > 0.3) {
-            aCur = [aX0, y0]; bCur = [ob.minx, y0];
-          } else if (rightLen > 0.3) {
-            aCur = [ob.maxx, y0]; bCur = [aX1, y0];
-          } else {
-            aCur = [aX0, y0]; bCur = [aX0, y0]; // collapse
-            break;
-          }
-        } else {
-          const x0 = aCur[0];
-          const aY0 = Math.min(aCur[1], bCur[1]);
-          const aY1 = Math.max(aCur[1], bCur[1]);
-          const lowLen = Math.max(0, ob.miny - aY0);
-          const highLen = Math.max(0, aY1 - ob.maxy);
-          if (lowLen >= highLen && lowLen > 0.3) {
-            aCur = [x0, aY0]; bCur = [x0, ob.miny];
-          } else if (highLen > 0.3) {
-            aCur = [x0, ob.maxy]; bCur = [x0, aY1];
-          } else {
-            aCur = [x0, aY0]; bCur = [x0, aY0];
-            break;
-          }
-        }
-      }
-    }
-    const a1: Coord = [aCur[0] + ex.outward[0] * ex.depth, aCur[1] + ex.outward[1] * ex.depth];
-    const b1: Coord = [bCur[0] + ex.outward[0] * ex.depth, bCur[1] + ex.outward[1] * ex.depth];
+    const a1: Coord = [ex.a[0] + ex.outward[0] * ex.depth, ex.a[1] + ex.outward[1] * ex.depth];
+    const b1: Coord = [ex.b[0] + ex.outward[0] * ex.depth, ex.b[1] + ex.outward[1] * ex.depth];
     return {
       ...ex,
-      a: aCur,
-      b: bCur,
-      poly: [aCur, bCur, b1, a1] as Coord[],
+      poly: [ex.a, ex.b, b1, a1] as Coord[],
       outerA: a1,
       outerB: b1,
     };
-  }).filter((s) => {
-    const dx = s.b[0] - s.a[0];
-    const dy = s.b[1] - s.a[1];
-    return Math.hypot(dx, dy) > 0.4; // drop degenerate strips
   });
 
   const toPath = (pts: Coord[]): string => {
@@ -360,6 +308,148 @@ export function BalconsJardinsLayer({
           </g>
         );
       })}
+
+      {/* Explicit tiled jardins for RDC apts whose backend provided a
+          jardin_polygon_xy (e.g. L-notch tiling). Renders the polygon
+          directly, plus a terrasse strip along the apt's adjacent wall
+          and hedges on the non-apt-wall sides to signal privacy
+          between neighbouring jardins. */}
+      {isRdc && niveau.cellules.map((cell) => {
+        if (cell.type !== "logement") return null;
+        const poly = cell.jardin_polygon_xy;
+        if (!poly || poly.length < 3) return null;
+        const jBbox = bboxOf(poly as Coord[]);
+        if (!jBbox) return null;
+        // Apt bbox, used to find which edge of the jardin rect touches
+        // the apt wall. That edge hosts the terrasse; the remaining
+        // three edges host hedges.
+        const aBbox = bboxOf(cell.polygon_xy as Coord[]);
+        if (!aBbox) return null;
+        const TOL = 0.3;
+        type Side = "south" | "north" | "west" | "east";
+        let aptSide: Side | null = null;
+        if (Math.abs(jBbox.miny - aBbox.maxy) < TOL) aptSide = "south";
+        else if (Math.abs(jBbox.maxy - aBbox.miny) < TOL) aptSide = "north";
+        else if (Math.abs(jBbox.minx - aBbox.maxx) < TOL) aptSide = "west";
+        else if (Math.abs(jBbox.maxx - aBbox.minx) < TOL) aptSide = "east";
+
+        // Terrasse strip 1.5 m deep along the apt-facing edge.
+        const terrasseDepth = 1.5;
+        let terrasse: Coord[] | null = null;
+        if (aptSide === "south") {
+          terrasse = [
+            [jBbox.minx, jBbox.miny],
+            [jBbox.maxx, jBbox.miny],
+            [jBbox.maxx, jBbox.miny + terrasseDepth],
+            [jBbox.minx, jBbox.miny + terrasseDepth],
+          ];
+        } else if (aptSide === "north") {
+          terrasse = [
+            [jBbox.minx, jBbox.maxy - terrasseDepth],
+            [jBbox.maxx, jBbox.maxy - terrasseDepth],
+            [jBbox.maxx, jBbox.maxy],
+            [jBbox.minx, jBbox.maxy],
+          ];
+        } else if (aptSide === "west") {
+          terrasse = [
+            [jBbox.minx, jBbox.miny],
+            [jBbox.minx + terrasseDepth, jBbox.miny],
+            [jBbox.minx + terrasseDepth, jBbox.maxy],
+            [jBbox.minx, jBbox.maxy],
+          ];
+        } else if (aptSide === "east") {
+          terrasse = [
+            [jBbox.maxx - terrasseDepth, jBbox.miny],
+            [jBbox.maxx, jBbox.miny],
+            [jBbox.maxx, jBbox.maxy],
+            [jBbox.maxx - terrasseDepth, jBbox.maxy],
+          ];
+        }
+
+        // Hedges on every side EXCEPT the apt-facing side.
+        const hedgeThickness = 0.25;
+        const hedges: Coord[][] = [];
+        const addHedge = (side: Side) => {
+          if (side === aptSide) return;
+          if (side === "south") {
+            hedges.push([
+              [jBbox.minx, jBbox.miny],
+              [jBbox.maxx, jBbox.miny],
+              [jBbox.maxx, jBbox.miny + hedgeThickness],
+              [jBbox.minx, jBbox.miny + hedgeThickness],
+            ]);
+          } else if (side === "north") {
+            hedges.push([
+              [jBbox.minx, jBbox.maxy - hedgeThickness],
+              [jBbox.maxx, jBbox.maxy - hedgeThickness],
+              [jBbox.maxx, jBbox.maxy],
+              [jBbox.minx, jBbox.maxy],
+            ]);
+          } else if (side === "west") {
+            hedges.push([
+              [jBbox.minx, jBbox.miny],
+              [jBbox.minx + hedgeThickness, jBbox.miny],
+              [jBbox.minx + hedgeThickness, jBbox.maxy],
+              [jBbox.minx, jBbox.maxy],
+            ]);
+          } else {
+            hedges.push([
+              [jBbox.maxx - hedgeThickness, jBbox.miny],
+              [jBbox.maxx, jBbox.miny],
+              [jBbox.maxx, jBbox.maxy],
+              [jBbox.maxx - hedgeThickness, jBbox.maxy],
+            ]);
+          }
+        };
+        (["south", "north", "west", "east"] as Side[]).forEach(addHedge);
+
+        const cx = (jBbox.minx + jBbox.maxx) / 2;
+        const cy = (jBbox.miny + jBbox.maxy) / 2;
+        const [lx, ly] = project([cx, cy]);
+        return (
+          <g key={`tiled-jardin-${cell.id}`}>
+            {/* Lawn fill on the full jardin polygon */}
+            <path
+              d={toPath(poly as Coord[])}
+              fill="url(#pat-lawn-bj)"
+              stroke="#4f6d3a"
+              strokeWidth={0.6}
+              opacity={0.92}
+            />
+            {/* Terrasse bois along the apt wall */}
+            {terrasse && (
+              <path
+                d={toPath(terrasse)}
+                fill="url(#pat-terrasse-bois)"
+                stroke="#8a6c44"
+                strokeWidth={0.5}
+              />
+            )}
+            {/* Hedges on the 3 non-apt-wall sides */}
+            {hedges.map((h, hi) => (
+              <path
+                key={`hedge-${cell.id}-${hi}`}
+                d={toPath(h)}
+                fill="#4f6d3a"
+                stroke="#1e3a23"
+                strokeWidth={0.5}
+              />
+            ))}
+            <text
+              x={lx}
+              y={ly}
+              fontSize={7}
+              fill="#1e3a23"
+              textAnchor="middle"
+              opacity={0.85}
+              fontWeight={600}
+            >
+              jardin privatif
+            </text>
+          </g>
+        );
+      })}
+
       {/* Silence unused parcelle param for now (future clip target) */}
       {parcelle?.length === -1 ? null : null}
     </g>
