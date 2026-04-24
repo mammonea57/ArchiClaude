@@ -179,40 +179,69 @@ def build_l_corridor(
 def place_core_at_elbow(
     d: LDecomposition, core_surface_m2: float,
 ) -> ShapelyPolygon:
-    """Place the core (stairs + lift + shafts) aligned along the connector.
+    """Place the core (stairs + lift + shafts) inside the ne_bar zone.
 
-    The core is a 3m-wide rectangle (perpendicular to the connector axis)
-    extending along the vertical connector zone between bar centerline
-    and leg base. This keeps the core INSIDE the connector strip — which
-    is already corridor/circulation — instead of eating into adjacent
-    apartment zones as a square centred on the elbow would.
+    The ne_bar (small corner quadrant at the corridor elbow) is
+    sacrificed to host the core. This eliminates lateral intrusion into
+    neighboring apartments — the core occupies a zone that is no longer
+    sliced into apt slots.
 
-    - Width (x-direction) = 3.0 m, centred on cx_leg (the leg axis).
-    - Length (y-direction) = core_surface_m2 / 3.0 m, running from
-      cy_bar into the connector zone (upward if leg is above bar,
-      downward if leg is below).
+    Position (for inner-corner NW, leg above bar):
+    - SW corner of core at (cx_leg + half, cy_bar + half) — the corridor
+      intersection point, so the core touches both arms of the L.
+    - Width (x-direction) = 3.0 m.
+    - Length (y-direction) = core_surface_m2 / 3.0 m, clamped to fit
+      inside ne_bar.
+
+    For inner-corner SW (leg below bar) the core is flipped below the
+    bar corridor instead.
     """
     CORE_WIDTH = 3.0
-    length = core_surface_m2 / CORE_WIDTH
+    CORRIDOR_WIDTH = 1.6
+    half = CORRIDOR_WIDTH / 2
     cx_leg, cy_bar = d.elbow
     bx0, by0, bx1, by1 = d.bar.bounds
     ly0 = d.leg.bounds[1]
     ly1 = d.leg.bounds[3]
 
-    # Clamp x-center so the 3m-wide core fits inside the bar
-    x_center = max(bx0 + CORE_WIDTH / 2, min(bx1 - CORE_WIDTH / 2, cx_leg))
-    x0 = x_center - CORE_WIDTH / 2
-    x1 = x_center + CORE_WIDTH / 2
-
-    # Leg above bar (inner-corner NW or NE) → extend upward from cy_bar
-    # Leg below bar (inner-corner SW or SE) → extend downward from cy_bar
+    # Detect L orientation: leg above or below bar
     leg_above = ly0 > by1 - 0.5
+
+    # ne_bar corner zone:
+    #   leg_above (NW/NE inner corner):
+    #       x in [cx_leg + half, bx1], y in [cy_bar + half, by1]
+    #   leg_below (SW/SE inner corner):
+    #       x in [cx_leg + half, bx1], y in [by0, cy_bar - half]
+    ne_x0 = cx_leg + half
+    ne_x1 = bx1
     if leg_above:
-        y0 = cy_bar
-        y1 = cy_bar + length
+        ne_y0 = cy_bar + half
+        ne_y1 = by1
     else:
-        y0 = cy_bar - length
-        y1 = cy_bar
+        ne_y0 = by0
+        ne_y1 = cy_bar - half
+
+    ne_width = ne_x1 - ne_x0
+    ne_height = ne_y1 - ne_y0
+
+    # Core fits inside ne_bar. Width perpendicular to leg corridor = 3m,
+    # clamped to ne_bar width. Length along leg corridor = target length,
+    # clamped to ne_bar height.
+    core_w = min(CORE_WIDTH, max(0.1, ne_width))
+    target_length = core_surface_m2 / CORE_WIDTH
+    core_l = min(target_length, max(0.1, ne_height))
+
+    # Core SW corner at corridor intersection for leg_above;
+    # NW corner at corridor intersection for leg_below (flipped upward
+    # from cy_bar - half).
+    x0 = ne_x0
+    x1 = x0 + core_w
+    if leg_above:
+        y0 = ne_y0
+        y1 = y0 + core_l
+    else:
+        y1 = ne_y1
+        y0 = y1 - core_l
 
     return shp_box(x0, y0, x1, y1)
 
@@ -444,11 +473,14 @@ def compute_l_layout(
     corridor = build_l_corridor(d, corridor_width=corridor_width)
     core = place_core_at_elbow(d, core_surface_m2=core_surface_m2)
     quadrants = compute_l_quadrants(d, footprint, corridor_width=corridor_width)
+    # ne_bar is sacrificed to host the core → don't slice it into apt slots.
+    # This eliminates lateral core intrusion into neighbor apts: the corner
+    # quadrant (poor facade ratio anyway) becomes pure circulation.
+    apt_quadrants = [q for q in quadrants if q.name != "ne_bar"]
 
     # Assign typology per quadrant based on mix and quadrant size.
     # South bar (large, facing voirie) → T2 priority for units count.
     # Leg arms (medium) → T3 priority for family apts.
-    # Small NE corner → T2 fill.
     T2_share = mix_typologique.get(Typologie.T2, 0.0)
     T3_share = mix_typologique.get(Typologie.T3, 0.0)
     total = T2_share + T3_share
@@ -456,7 +488,7 @@ def compute_l_layout(
         return None
 
     slots: list[ApartmentSlot] = []
-    for q in quadrants:
+    for q in apt_quadrants:
         # Bar quadrants (horizontal long axis) → T2 target; leg → T3 target
         if q.long_axis == "horizontal":
             typo = Typologie.T2 if T2_share >= T3_share * 0.3 else Typologie.T3

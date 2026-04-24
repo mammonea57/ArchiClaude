@@ -92,19 +92,19 @@ def test_place_core_at_elbow_size_and_position():
     ])
     d = decompose_l(footprint)
     core_poly = place_core_at_elbow(d, core_surface_m2=22.0)
-    # Surface within ±5%
-    assert 20.9 <= core_poly.area <= 23.1
-    # Rectangular core aligned with connector: 3m wide × ~7.3m long
+    # Core placed in ne_bar SW corner; area slightly less than 22 allowed
+    # when constrained by ne_bar height.
+    assert 18.0 <= core_poly.area <= 22.5, f"got area {core_poly.area}"
+    # Rectangular core: 3m wide × ~7.3m long (length may be clamped)
     cx0, cy0, cx1, cy1 = core_poly.bounds
     width = cx1 - cx0
-    length = cy1 - cy0
     assert abs(width - 3.0) < 0.1, f"core width should be 3m, got {width}"
-    assert 7.0 <= length <= 8.0, f"core length should be ~7.3m, got {length}"
-    # x-center aligned with connector (d.elbow[0] = cx_leg = 14.4)
-    assert abs((cx0 + cx1) / 2 - d.elbow[0]) < 0.3
-    # y-range touches cy_bar (leg above → core extends from cy_bar upward)
-    cy_bar = d.elbow[1]
-    assert abs(cy0 - cy_bar) < 0.3, f"core y0 should start at cy_bar={cy_bar}, got {cy0}"
+    # SW corner at corridor intersection (cx_leg + half, cy_bar + half)
+    # = (14.4 + 0.8, 7.5 + 0.8) = (15.2, 8.3)
+    assert core_poly.bounds[0] >= 15.0, f"west edge should be ≥ 15.0, got {core_poly.bounds[0]}"
+    assert core_poly.bounds[1] >= 8.0, f"south edge should be ≥ 8.0, got {core_poly.bounds[1]}"
+    assert core_poly.bounds[2] <= 21.9 + 0.1, f"east edge inside bar, got {core_poly.bounds[2]}"
+    assert core_poly.bounds[3] <= 15.0 + 0.1, f"north edge inside bar, got {core_poly.bounds[3]}"
     # Core lies inside footprint
     assert footprint.buffer(0.1).contains(core_poly)
 
@@ -183,16 +183,15 @@ def test_compute_l_layout_nogent_style_footprint():
         core_surface_m2=22.0,
         corridor_width=1.6,
     )
-    # Core aligned with connector: x-center at cx_leg=14.4; rectangular
-    # 3m × ~7.3m extending upward from cy_bar=7.5 into the connector zone.
-    assert abs(result.core.centroid.x - 14.4) < 0.5
+    # Core placed inside ne_bar SW corner (sacrificing ne_bar for core):
+    # 3m wide, length up to ne_bar height.
     cx0, cy0, cx1, cy1 = result.core.bounds
     assert abs((cx1 - cx0) - 3.0) < 0.1
-    assert abs(cy0 - 7.5) < 0.3  # starts at cy_bar
     # Corridor is a single connected polygon
     assert result.corridor.geom_type == "Polygon"
-    # Apartment count: target 10/niveau
-    assert 8 <= len(result.slots) <= 13, f"got {len(result.slots)} slots"
+    # Apartment count: target 9/niveau (one less than 10 since ne_bar
+    # is no longer sliced into apt slots).
+    assert 7 <= len(result.slots) <= 11, f"got {len(result.slots)} slots"
     # All slots inside footprint
     for s in result.slots:
         assert footprint.buffer(0.1).contains(s.polygon)
@@ -201,6 +200,27 @@ def test_compute_l_layout_nogent_style_footprint():
     for s in result.slots:
         overlap = s.polygon.intersection(occupied).area
         assert overlap < 0.5, f"slot {s.id} overlaps circulation"
+
+
+def test_compute_l_layout_ne_bar_is_sacrificed_for_core():
+    """ne_bar zone is NOT sliced into apt slots — it hosts the core."""
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    result = compute_l_layout(
+        footprint,
+        mix_typologique={Typologie.T2: 0.3, Typologie.T3: 0.4, Typologie.T4: 0.2, Typologie.T5: 0.1},
+        core_surface_m2=22.0,
+        corridor_width=1.6,
+    )
+    # No slot IDs starting with "ne_bar"
+    ne_bar_slots = [s for s in result.slots if "ne_bar" in s.id]
+    assert len(ne_bar_slots) == 0, f"ne_bar should not produce apt slots: found {[s.id for s in ne_bar_slots]}"
+    # Core sits inside ne_bar zone (x in [15.2, 21.9], y in [8.3, 15])
+    core_cx, core_cy = result.core.centroid.x, result.core.centroid.y
+    assert 15.0 <= core_cx <= 21.9, f"core cx {core_cx} should be in ne_bar x range"
+    assert 8.0 <= core_cy <= 15.0, f"core cy {core_cy} should be in ne_bar y range"
 
 
 def test_ne_bar_facade_excludes_interior_north():
