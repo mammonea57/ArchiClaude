@@ -159,3 +159,35 @@ def test_slice_leg_east_into_T3():
         le, target_typo=Typologie.T3, target_surface=58.0,
     )
     assert len(slots) >= 2
+
+
+from core.building_model.layout_l import compute_l_layout
+
+
+def test_compute_l_layout_nogent_style_footprint():
+    # User's real project: L canonical inner-corner NW
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    result = compute_l_layout(
+        footprint,
+        mix_typologique={Typologie.T2: 0.4, Typologie.T3: 0.6},
+        core_surface_m2=22.0,
+        corridor_width=1.6,
+    )
+    # Core at elbow
+    assert abs(result.core.centroid.x - 14.4) < 0.5
+    assert abs(result.core.centroid.y - 7.5) < 0.5
+    # Corridor is a single connected polygon
+    assert result.corridor.geom_type == "Polygon"
+    # Apartment count: target 10/niveau
+    assert 8 <= len(result.slots) <= 13, f"got {len(result.slots)} slots"
+    # All slots inside footprint
+    for s in result.slots:
+        assert footprint.buffer(0.1).contains(s.polygon)
+    # No slot overlaps corridor or core
+    occupied = result.corridor.union(result.core)
+    for s in result.slots:
+        overlap = s.polygon.intersection(occupied).area
+        assert overlap < 0.5, f"slot {s.id} overlaps circulation"

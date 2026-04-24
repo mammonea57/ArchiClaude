@@ -353,3 +353,78 @@ def slice_quadrant_into_apts(
             position_in_floor=position,
         ))
     return slots
+
+
+@dataclass(frozen=True)
+class LLayoutResult:
+    core: ShapelyPolygon
+    corridor: ShapelyPolygon
+    slots: list[ApartmentSlot]
+    decomposition: LDecomposition
+
+
+def compute_l_layout(
+    footprint: ShapelyPolygon,
+    mix_typologique: dict[Typologie, float],
+    core_surface_m2: float,
+    corridor_width: float = 1.6,
+    id_prefix: str = "",
+) -> LLayoutResult | None:
+    """Generate core + L-corridor + apt slots for an L-shaped footprint.
+
+    Returns None if the footprint is not a clean L (caller should fall
+    back to legacy wing-par-wing layout).
+    """
+    d = decompose_l(footprint)
+    if d is None:
+        return None
+
+    corridor = build_l_corridor(d, corridor_width=corridor_width)
+    core = place_core_at_elbow(d, core_surface_m2=core_surface_m2)
+    quadrants = compute_l_quadrants(d, corridor_width=corridor_width)
+
+    # Assign typology per quadrant based on mix and quadrant size.
+    # South bar (large, facing voirie) → T2 priority for units count.
+    # Leg arms (medium) → T3 priority for family apts.
+    # Small NE corner → T2 fill.
+    T2_share = mix_typologique.get(Typologie.T2, 0.0)
+    T3_share = mix_typologique.get(Typologie.T3, 0.0)
+    total = T2_share + T3_share
+    if total <= 0:
+        return None
+
+    slots: list[ApartmentSlot] = []
+    for q in quadrants:
+        # Bar quadrants (horizontal long axis) → T2 target; leg → T3 target
+        if q.long_axis == "horizontal":
+            typo = Typologie.T2 if T2_share >= T3_share * 0.3 else Typologie.T3
+            surface = 48.0 if typo == Typologie.T2 else 58.0
+        else:
+            typo = Typologie.T3 if T3_share > 0 else Typologie.T2
+            surface = 58.0 if typo == Typologie.T3 else 48.0
+        slots.extend(slice_quadrant_into_apts(
+            quadrant=q, target_typo=typo, target_surface=surface,
+            id_prefix=id_prefix,
+        ))
+
+    # Clip any slot that overlaps circulation (safety net)
+    occupied = corridor.union(core)
+    clipped_slots: list[ApartmentSlot] = []
+    for s in slots:
+        clean = s.polygon.difference(occupied)
+        if clean.is_empty or clean.area < 20.0:
+            continue
+        if clean.geom_type == "MultiPolygon":
+            clean = max(clean.geoms, key=lambda g: g.area)
+        clipped_slots.append(ApartmentSlot(
+            id=s.id,
+            polygon=clean,
+            surface_m2=clean.area,
+            target_typologie=s.target_typologie,
+            orientations=s.orientations,
+            position_in_floor=s.position_in_floor,
+        ))
+
+    return LLayoutResult(
+        core=core, corridor=corridor, slots=clipped_slots, decomposition=d,
+    )
