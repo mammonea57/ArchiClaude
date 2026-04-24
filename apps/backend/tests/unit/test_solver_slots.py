@@ -34,6 +34,7 @@ def test_slots_have_orientation():
 
 
 def test_compute_slots_on_l_footprint_uses_dispatcher():
+    from core.building_model.layout_dispatcher import dispatch_layout
     from core.building_model.schemas import Typologie
     from core.building_model.solver import (
         build_modular_grid, compute_apartment_slots, place_core,
@@ -49,8 +50,16 @@ def test_compute_slots_on_l_footprint_uses_dispatcher():
         voirie_side="sud",
     )
     # Dispatcher L handler delivers at least 7 apts per niveau
-    # (ne_bar sacrificed to core → 9 apts/niveau for this footprint)
+    # (landlocked slot sacrificed to core → 9 apts/niveau for this footprint)
     assert len(slots) >= 7, f"got {len(slots)} slots (expected >= 7)"
-    # No slot overlaps the core
+    # No slot overlaps the ACTUAL dispatcher-placed core (right-half of
+    # landlocked slot), not the heuristic `place_core` output — the
+    # pipeline swaps in the dispatcher's core before rendering.
+    l_res = dispatch_layout(
+        footprint=footprint,
+        mix_typologique={Typologie.T2: 0.4, Typologie.T3: 0.6},
+        core_surface_m2=22.0,
+    )
+    assert l_res is not None
     for s in slots:
-        assert s.polygon.intersection(core.polygon).area < 0.5
+        assert s.polygon.intersection(l_res.core).area < 0.5

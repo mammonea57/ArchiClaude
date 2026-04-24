@@ -459,96 +459,22 @@ def _place_core_in_landlocked_slot(
     corridor: ShapelyPolygon,
     core_surface_m2: float,
 ) -> tuple[ShapelyPolygon, ShapelyPolygon | None]:
-    """Place the core inside a landlocked apartment slot, touching the corridor.
+    """Place the core at the RIGHT HALF of a landlocked apartment slot.
 
-    Returns (core_polygon, remainder_polygon_or_None).
+    Returns (core_polygon, remainder_polygon).
 
-    Logic: find which side of the slot the corridor sits on; place a 3m-wide
-    core band on the slot side CLOSEST to the corridor elbow (i.e. the side
-    that shares the corridor boundary). The remainder is the rest of the
-    slot, to be merged with an adjacent apt.
+    The core occupies the east half of the slot (full height); the
+    remainder is the west half, to be merged with the west neighbor apt.
+
+    ``core_surface_m2`` is ignored — core size is determined entirely by
+    the landlocked slot geometry (half of its area). The escalier + ASC
+    are arranged inside this rect at render time.
     """
-    CORE_WIDTH = 3.0
     sx0, sy0, sx1, sy1 = slot.polygon.bounds
-    slot_w = sx1 - sx0
-    slot_h = sy1 - sy0
-
-    # Which side of the slot does the corridor touch?
-    # Probe 0.3m outside each edge; if the corridor is there, that's the
-    # corridor-adjacent side.
-    from shapely.geometry import Point as _Pt
-    PROBE = 0.3
-    corr_buf = corridor.buffer(0.2)
-    adj_sides: list[str] = []
-    if corr_buf.contains(_Pt((sx0 + sx1) / 2, sy0 - PROBE)):
-        adj_sides.append("south")
-    if corr_buf.contains(_Pt((sx0 + sx1) / 2, sy1 + PROBE)):
-        adj_sides.append("north")
-    if corr_buf.contains(_Pt(sx0 - PROBE, (sy0 + sy1) / 2)):
-        adj_sides.append("west")
-    if corr_buf.contains(_Pt(sx1 + PROBE, (sy0 + sy1) / 2)):
-        adj_sides.append("east")
-
-    # Core orientation:
-    # - if corridor adjacent on south or north (horizontal corridor), core
-    #   runs vertically (full slot height, 3m wide band on east or west)
-    # - if adjacent on east or west (vertical corridor), core runs
-    #   horizontally (full slot width, 3m tall band on north or south)
-    # Prefer the east side for horizontal corridor (closer to the elbow
-    # for inner-corner-NW L), and the south side for vertical corridor.
-    has_horiz = "south" in adj_sides or "north" in adj_sides
-    has_vert = "east" in adj_sides or "west" in adj_sides
-
-    if has_horiz and slot_h >= 4.0:
-        # Corridor on a horizontal side. Core is a 3m-wide vertical band.
-        # Place on east side (closer to leg corridor in inner-NW L).
-        core_w = min(CORE_WIDTH, max(0.1, slot_w))
-        core_l = min(core_surface_m2 / CORE_WIDTH, slot_h)
-        cx1 = sx1
-        cx0 = cx1 - core_w
-        # Core band runs full slot height (touches the corridor side).
-        cy0 = sy0
-        cy1 = sy0 + core_l if core_l < slot_h - 0.1 else sy1
-        # If we don't span full height, snap to the corridor side to stay
-        # adjacent: if corridor is south, keep cy0=sy0. Otherwise cy1=sy1.
-        if "south" in adj_sides:
-            cy0, cy1 = sy0, sy0 + core_l if core_l < slot_h - 0.1 else sy1
-        elif "north" in adj_sides:
-            cy1, cy0 = sy1, sy1 - core_l if core_l < slot_h - 0.1 else sy0
-        core_poly = shp_box(cx0, cy0, cx1, cy1)
-        # Remainder: slot minus core. If core spans full height, remainder
-        # is rectangle (sx0, sy0, cx0, sy1).
-        if abs(cy1 - cy0 - slot_h) < 0.5:
-            remainder = shp_box(sx0, sy0, cx0, sy1) if cx0 > sx0 + 0.1 else None
-        else:
-            # Core is at a corner; remainder is L-shaped — pick dominant piece
-            remainder = slot.polygon.difference(core_poly.buffer(0.01))
-            if remainder.geom_type == "MultiPolygon":
-                remainder = max(remainder.geoms, key=lambda g: g.area)
-            if remainder.is_empty or remainder.area < 1.0:
-                remainder = None
-        return core_poly, remainder
-
-    if has_vert and slot_w >= 4.0:
-        core_l = min(CORE_WIDTH, max(0.1, slot_h))
-        core_w_span = min(core_surface_m2 / CORE_WIDTH, slot_w)
-        cy1 = sy1
-        cy0 = cy1 - core_l
-        # Full width band along a horizontal edge of the slot
-        if "east" in adj_sides:
-            cx1, cx0 = sx1, sx1 - core_w_span
-        else:
-            cx0, cx1 = sx0, sx0 + core_w_span
-        core_poly = shp_box(cx0, cy0, cx1, cy1)
-        remainder = shp_box(sx0, sy0, sx1, cy0) if cy0 > sy0 + 0.1 else None
-        return core_poly, remainder
-
-    # Fallback: place core at east strip (no corridor detected — shouldn't
-    # happen for a landlocked slot, but keep safe).
-    core_w = min(CORE_WIDTH, max(0.1, slot_w))
-    core_poly = shp_box(sx1 - core_w, sy0, sx1, sy1)
-    remainder = shp_box(sx0, sy0, sx1 - core_w, sy1) if sx1 - core_w > sx0 + 0.1 else None
-    return core_poly, remainder
+    mid_x = (sx0 + sx1) / 2
+    core = shp_box(mid_x, sy0, sx1, sy1)
+    remainder = shp_box(sx0, sy0, mid_x, sy1)
+    return core, remainder
 
 
 def _merge_remainder_with_neighbor(

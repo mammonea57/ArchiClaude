@@ -344,6 +344,7 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
                             niveau={niv}
                             corePosition={buildingModel.model_json.core.position_xy}
                             coreSurfaceM2={buildingModel.model_json.core.surface_m2}
+                            corePolygonXy={buildingModel.model_json.core.polygon_xy ?? null}
                             hasAscenseur={!!buildingModel.model_json.core.ascenseur}
                             voirieSide={buildingModel.model_json.site.voirie_orientations?.[0] ?? "sud"}
                             isRdc={niv.index === 0}
@@ -597,6 +598,7 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
                   niveau={openNiveau}
                   corePosition={buildingModel.model_json.core.position_xy}
                   coreSurfaceM2={buildingModel.model_json.core.surface_m2}
+                  corePolygonXy={buildingModel.model_json.core.polygon_xy ?? null}
                   hasAscenseur={!!buildingModel.model_json.core.ascenseur}
                   voirieSide={buildingModel.model_json.site.voirie_orientations?.[0] ?? "sud"}
                   isRdc={openNiveau.index === 0}

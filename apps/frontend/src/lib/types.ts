@@ -149,7 +149,16 @@ export interface BuildingModelPayload {
     hauteur_rdc_m: number;
     hauteur_etage_courant_m: number;
   };
-  core: { position_xy: [number, number]; surface_m2: number; ascenseur: unknown };
+  core: {
+    position_xy: [number, number];
+    surface_m2: number;
+    ascenseur: unknown;
+    /** Actual rectangular polygon of the core (4 corner tuples). Provided
+     * when the core was placed by a topology-aware handler (e.g. L-layout
+     * right-half-of-landlocked-slot rule). Absent for legacy heuristic
+     * placements. */
+    polygon_xy?: [number, number][] | null;
+  };
   niveaux: BuildingModelNiveau[];
   conformite_check?: BuildingModelConformiteCheck;
 }

@@ -30,6 +30,12 @@ interface NiveauPlanProps {
   niveau: BuildingModelNiveau;
   corePosition?: [number, number];
   coreSurfaceM2?: number;
+  /** Full rectangular polygon of the core (4 corners in world meters).
+   * Populated when the backend used a topology-aware handler (L-layout)
+   * that placed the core at a known rect. When provided, the frontend
+   * draws escalier + ASC inside this rect instead of deriving a square
+   * from sqrt(surface_m2). */
+  corePolygonXy?: [number, number][] | null;
   hasAscenseur?: boolean;
   voirieSide?: string;
   isRdc?: boolean;
@@ -109,6 +115,7 @@ export function NiveauPlan({
   niveau,
   corePosition,
   coreSurfaceM2 = 22,
+  corePolygonXy,
   hasAscenseur = true,
   voirieSide = "sud",
   isRdc = false,
@@ -290,6 +297,7 @@ export function NiveauPlan({
         <CoreLayer
           position={corePosition}
           surfaceM2={coreSurfaceM2}
+          polygonXy={corePolygonXy ?? undefined}
           hasAscenseur={hasAscenseur}
           scale={scale}
           project={project}
@@ -1070,6 +1078,7 @@ function PalierLayer({ circulation, scale, project }: {
 function CoreLayer({
   position,
   surfaceM2,
+  polygonXy,
   hasAscenseur,
   scale,
   project,
@@ -1089,11 +1098,14 @@ function CoreLayer({
 }: {
   position: [number, number];
   surfaceM2: number;
+  polygonXy?: [number, number][] | null;
   hasAscenseur: boolean;
   scale: number;
   project: (c: Coord) => Coord;
   escalierCenter?: [number, number];
   ascCenter?: [number, number];
+  /** @deprecated palier is no longer rendered — corridor serves that
+   * role. Kept for backward API compatibility. */
   palierCenter?: [number, number];
   selectedCoreElement?: "escalier" | "ascenseur" | "palier" | null;
   onSelectCoreElement?: (el: "escalier" | "ascenseur" | "palier" | null) => void;
@@ -1109,34 +1121,71 @@ function CoreLayer({
   onSelectCoreSide?: (el: "escalier" | "ascenseur" | "palier", side: "nord" | "sud" | "est" | "ouest") => void;
   selectedCoreSide?: { el: "escalier" | "ascenseur" | "palier"; side: string } | null;
 }) {
-  // Layout convention — 3 distinct blocks with visible gaps (no touching
-  // edges, no "gros patté"):
-  //   South strip : palier (28 % height, 92 % width centered)
-  //   North top-left : escalier (60 % height, 46 % width)
-  //   North top-right : ASC (52 % height, 40 % width)
-  // Inter-block gaps ≥ 0.06 s so walls read separately in the render.
-  const side = Math.sqrt(surfaceM2);
+  // Silence unused-prop lints for deprecated palier inputs — kept on the
+  // interface for backward API compatibility but the palier is no longer
+  // rendered (the corridor plays that role now).
+  void palierCenter; void palierHiddenSides; void palierRemoved;
+
+  // Step 1 — determine core rect (xMin,yMin,xMax,yMax) in world meters.
+  // If the backend provided the actual polygon (L-layout dispatcher), use
+  // its bbox. Otherwise fall back to a sqrt(surface) square centered on
+  // `position` (legacy heuristic cores).
   const [cxM, cyM] = position;
+  let xMin: number, yMin: number, xMax: number, yMax: number;
+  if (polygonXy && polygonXy.length >= 3) {
+    xMin = Math.min(...polygonXy.map((p) => p[0]));
+    yMin = Math.min(...polygonXy.map((p) => p[1]));
+    xMax = Math.max(...polygonXy.map((p) => p[0]));
+    yMax = Math.max(...polygonXy.map((p) => p[1]));
+  } else {
+    const side = Math.sqrt(surfaceM2);
+    xMin = cxM - side / 2;
+    yMin = cyM - side / 2;
+    xMax = cxM + side / 2;
+    yMax = cyM + side / 2;
+  }
+  const coreW = xMax - xMin;
+  const coreH = yMax - yMin;
+  const cxCore = (xMin + xMax) / 2;
+  const cyCore = (yMin + yMax) / 2;
 
-  // Element sizes in world meters — each strictly smaller than its zone so
-  // a gap appears between blocks.
-  const STAIR_W_M = side * 0.46;
-  const STAIR_H_M = side * 0.60;
-  const ASC_W_M = side * 0.40;
-  const ASC_H_M = side * 0.52;
-  const PAL_W_M = side * 0.92;
-  const PAL_H_M = side * 0.28;
+  // Step 2 — arrange escalier + ASC inside the core rect.
+  // Portrait (taller than wide): escalier west half, ASC east half.
+  // Landscape (wider than tall): escalier south half, ASC north half.
+  // Gap ~0.04 along the split axis so walls read separately.
+  const portrait = coreH >= coreW;
+  let stairC: [number, number];
+  let ascC: [number, number];
+  let STAIR_W_M: number;
+  let STAIR_H_M: number;
+  let ASC_W_M: number;
+  let ASC_H_M: number;
 
-  // Default centers: palier at south, escalier top-left, ASC top-right.
-  // Gap between palier↔(escalier|ASC) = 0.06 s  (y-axis).
-  // Gap between escalier↔ASC          = 0.06 s  (x-axis).
-  const defStairC: [number, number] = [cxM - side * 0.24, cyM + side * 0.17];
-  const defAscC: [number, number] = [cxM + side * 0.27, cyM + side * 0.21];
-  const defPalC: [number, number] = [cxM, cyM - side * 0.34];
+  if (portrait) {
+    // Escalier = west half (minus 0.04*coreW gap); spans ~96 % of height.
+    STAIR_W_M = coreW * 0.48;
+    STAIR_H_M = coreH * 0.96;
+    // ASC = 2.0 m cabine centered on east half, centered vertically.
+    const ASC_FIXED = Math.min(2.0, coreW * 0.48);
+    ASC_W_M = ASC_FIXED;
+    ASC_H_M = ASC_FIXED;
+    stairC = [xMin + coreW * 0.25, cyCore];
+    ascC = [xMax - ASC_FIXED / 2 - Math.max(0.1, coreW * 0.04), cyCore];
+  } else {
+    // Landscape: escalier south row, ASC north row (closer to apt
+    // perimeter) — keeps corridor access clean on south.
+    STAIR_W_M = coreW * 0.96;
+    STAIR_H_M = coreH * 0.48;
+    const ASC_FIXED = Math.min(2.0, coreH * 0.48);
+    ASC_W_M = ASC_FIXED;
+    ASC_H_M = ASC_FIXED;
+    stairC = [cxCore, yMin + coreH * 0.25];
+    ascC = [cxCore, yMax - ASC_FIXED / 2 - Math.max(0.1, coreH * 0.04)];
+  }
 
-  const stairC = escalierCenter ?? defStairC;
-  const ascC = ascCenter ?? defAscC;
-  const palC = palierCenter ?? defPalC;
+  // Allow explicit overrides (drag handles) if provided.
+  stairC = escalierCenter ?? stairC;
+  ascC = ascCenter ?? ascC;
 
   // Helper: convert center+size (world) to pixel rect {x,y,w,h}
   const toPixelRect = (c: [number, number], wM: number, hM: number) => {
@@ -1152,12 +1201,10 @@ function CoreLayer({
 
   const stairRect = toPixelRect(stairC, STAIR_W_M, STAIR_H_M);
   const elevRect = toPixelRect(ascC, ASC_W_M, ASC_H_M);
-  const palierRect = toPixelRect(palC, PAL_W_M, PAL_H_M);
 
   const NB_TREADS = 11;
   const selEscalier = selectedCoreElement === "escalier";
   const selAsc = selectedCoreElement === "ascenseur";
-  const selPalier = selectedCoreElement === "palier";
 
   const clickable = !!onSelectCoreElement;
 
@@ -1214,25 +1261,6 @@ function CoreLayer({
 
   return (
     <g>
-      {/* Palier strip (clickable) */}
-      {!palierRemoved && (
-      <g
-        style={clickable ? { cursor: "pointer" } : undefined}
-        onClick={clickable ? (e) => {
-          e.stopPropagation();
-          onSelectCoreElement!(selPalier ? null : "palier");
-        } : undefined}
-      >
-        <rect
-          x={palierRect.x} y={palierRect.y}
-          width={palierRect.w} height={palierRect.h}
-          fill="url(#pat-tiles)"
-          stroke="none"
-        />
-        <RectSides rect={palierRect} hidden={palierHiddenSides} el="palier" selected={selPalier} baseStrokeWidth={1.2} />
-      </g>
-      )}
-
       {/* Stairs rectangle (clickable) */}
       {!escalierRemoved && (
       <g
@@ -1335,32 +1363,6 @@ function CoreLayer({
         </g>
       )}
 
-      {/* Palier label (centered on palier rect) */}
-      {!palierRemoved && (
-        <>
-          <text
-            x={palierRect.x + palierRect.w / 2}
-            y={palierRect.y + palierRect.h / 2 - 2}
-            textAnchor="middle"
-            fontSize={9.5}
-            fontWeight={600}
-            fill="#334155"
-            pointerEvents="none"
-          >
-            palier
-          </text>
-          <text
-            x={palierRect.x + palierRect.w / 2}
-            y={palierRect.y + palierRect.h / 2 + 10}
-            textAnchor="middle"
-            fontSize={8}
-            fill="#64748b"
-            pointerEvents="none"
-          >
-            140 cm
-          </text>
-        </>
-      )}
     </g>
   );
 }

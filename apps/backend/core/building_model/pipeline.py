@@ -759,6 +759,32 @@ async def generate_building_model(
 
     base_mix = inputs.brief.mix_typologique  # dict[str, float]
 
+    # Topology-aware short-circuit: if the footprint is an L, the
+    # L-layout dispatcher places the core at the right half of the
+    # landlocked slot. Override the heuristic `place_core` result so
+    # the rest of the pipeline (corridors, entries, Core schema) uses
+    # the exact polygon the dispatcher chose.
+    try:
+        from core.building_model.layout_dispatcher import dispatch_layout
+        _l_preview = dispatch_layout(
+            footprint=footprint,
+            mix_typologique=base_mix,
+            core_surface_m2=core.surface_m2,
+        )
+    except Exception:
+        _l_preview = None
+    l_core_polygon = None
+    if _l_preview is not None and _l_preview.core is not None:
+        l_core_polygon = _l_preview.core
+        _cx = (l_core_polygon.bounds[0] + l_core_polygon.bounds[2]) / 2
+        _cy = (l_core_polygon.bounds[1] + l_core_polygon.bounds[3]) / 2
+        from core.building_model.solver import CorePlacement as _CP
+        core = _CP(
+            position_xy=(_cx, _cy),
+            polygon=l_core_polygon,
+            surface_m2=l_core_polygon.area,
+        )
+
     # --- Étape 3-4: Select template per slot + adapt ---
     selector = TemplateSelector(session=session)
     adapter = TemplateAdapter()
@@ -989,12 +1015,25 @@ async def generate_building_model(
     if inputs.niveaux_recommandes - 1 >= 2:
         ascenseur = Ascenseur(type="Schindler 3300", cabine_l_cm=110, cabine_p_cm=140, norme_pmr=True)
 
+    # Extract the 4 rectangular corners of the core polygon so the
+    # frontend can render a true rect (not a sqrt(surface) square).
+    _core_polygon_xy: list[tuple[float, float]] | None = None
+    try:
+        if core.polygon is not None and not core.polygon.is_empty:
+            _cx0, _cy0, _cx1, _cy1 = core.polygon.bounds
+            _core_polygon_xy = [
+                (_cx0, _cy0), (_cx1, _cy0), (_cx1, _cy1), (_cx0, _cy1),
+            ]
+    except Exception:
+        _core_polygon_xy = None
+
     core_schema = Core(
         position_xy=core.position_xy,
         surface_m2=core.surface_m2,
         escalier=Escalier(type="quart_tournant", giron_cm=28, hauteur_marche_cm=17, nb_marches_par_niveau=18),
         ascenseur=ascenseur,
         gaines_techniques=[],
+        polygon_xy=_core_polygon_xy,
     )
 
     # --- Assemble BuildingModel ---

@@ -116,6 +116,12 @@ class Core(BaseModel):
     escalier: Escalier
     ascenseur: Ascenseur | None = None
     gaines_techniques: list[GaineTechnique] = Field(default_factory=list)
+    # Actual rectangular polygon of the core (4 corner tuples). Present
+    # when the core was computed by a topology-aware handler (e.g. the
+    # L-layout dispatcher which places the core at the right half of a
+    # landlocked slot). Absent for legacy heuristic placements — the
+    # frontend then falls back to a `sqrt(surface_m2)` square.
+    polygon_xy: list[tuple[float, float]] | None = None
 
 
 class Wall(BaseModel):

@@ -183,10 +183,12 @@ def test_compute_l_layout_nogent_style_footprint():
         core_surface_m2=22.0,
         corridor_width=1.6,
     )
-    # Core placed inside ne_bar SW corner (sacrificing ne_bar for core):
-    # 3m wide, length up to ne_bar height.
+    # Core placed at the RIGHT HALF of the sacrificed landlocked slot.
+    # The slot is roughly (6.9, 8.3)-(21.9, 15) so the right half is
+    # roughly (14.4, 8.3)-(21.9, 15) = ~7.5 × 6.7 m.
     cx0, cy0, cx1, cy1 = result.core.bounds
-    assert abs((cx1 - cx0) - 3.0) < 0.1
+    assert cx1 - cx0 > 1.5, f"core width too small: {cx1 - cx0}"
+    assert cy1 - cy0 > 1.5, f"core height too small: {cy1 - cy0}"
     # Corridor is a single connected polygon
     assert result.corridor.geom_type == "Polygon"
     # Apartment count: target 9/niveau (one less than 10 since ne_bar
