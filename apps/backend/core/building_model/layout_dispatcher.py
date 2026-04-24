@@ -11,6 +11,9 @@ from typing import Literal
 
 from shapely.geometry import Polygon as ShapelyPolygon
 
+from core.building_model.layout_l import LLayoutResult, compute_l_layout
+from core.building_model.schemas import Typologie
+
 Topology = Literal["rect", "L", "T", "U", "other"]
 
 
@@ -58,3 +61,32 @@ def classify_footprint_topology(footprint: ShapelyPolygon) -> Topology:
     if reflex_count == 1:
         return "L"
     return "other"
+
+
+def dispatch_layout(
+    footprint: ShapelyPolygon,
+    mix_typologique: dict[Typologie, float],
+    core_surface_m2: float,
+    corridor_width: float = 1.6,
+    id_prefix: str = "",
+) -> LLayoutResult | None:
+    """Topology-aware layout dispatcher.
+
+    Returns an LLayoutResult when the footprint maps to a handler
+    (currently: L). Returns None for "rect", "T", "U", "other" — the
+    caller should fall back to the legacy wing-par-wing pipeline.
+
+    Each topology handler is self-contained and guarantees that core,
+    corridor, and slots form a coherent layout (no overlaps, corridor
+    connects the entire floor, core is reachable from every slot).
+    """
+    topology = classify_footprint_topology(footprint)
+    if topology == "L":
+        return compute_l_layout(
+            footprint=footprint,
+            mix_typologique=mix_typologique,
+            core_surface_m2=core_surface_m2,
+            corridor_width=corridor_width,
+            id_prefix=id_prefix,
+        )
+    return None

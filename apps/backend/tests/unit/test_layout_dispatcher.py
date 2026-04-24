@@ -25,3 +25,31 @@ def test_u_shape_is_other():
         (0, 20),
     ])
     assert classify_footprint_topology(footprint) == "other"
+
+
+from core.building_model.schemas import Typologie
+from core.building_model.layout_dispatcher import dispatch_layout
+
+
+def test_dispatch_l_returns_l_result():
+    footprint = Polygon([
+        (0, 0), (21.9, 0), (21.9, 32.4),
+        (6.9, 32.4), (6.9, 15), (0, 15),
+    ])
+    result = dispatch_layout(
+        footprint,
+        mix_typologique={Typologie.T2: 0.4, Typologie.T3: 0.6},
+        core_surface_m2=22.0,
+    )
+    assert result is not None
+    assert len(result.slots) >= 8
+
+
+def test_dispatch_rect_returns_none():
+    footprint = Polygon([(0, 0), (20, 0), (20, 12), (0, 12)])
+    result = dispatch_layout(
+        footprint,
+        mix_typologique={Typologie.T2: 0.5, Typologie.T3: 0.5},
+        core_surface_m2=22.0,
+    )
+    assert result is None  # rect → caller uses legacy wing-par-wing
