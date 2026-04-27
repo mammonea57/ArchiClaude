@@ -143,24 +143,37 @@ export function CoupeElevation({
       <rect x={12} y={12} width={width - 24} height={height - 24} fill="white" stroke="#0f172a" strokeWidth={0.6} />
 
       {/* Ground + below-ground hatch */}
-      <rect
-        x={padLeft - 30}
-        y={by0}
-        width={innerW + 60}
-        height={groundDepthM * scale}
-        fill="url(#pat-ground)"
-        stroke="#0f172a"
-        strokeWidth={0.7}
-      />
-      {/* Ground surface line */}
-      <line
-        x1={padLeft - 30}
-        y1={by0}
-        x2={padLeft + innerW + 30}
-        y2={by0}
-        stroke="#0f172a"
-        strokeWidth={1.3}
-      />
+      {mode === "coupe" ? (
+        <CoupeGroundProfile
+          x={padLeft - 30}
+          width={innerW + 60}
+          y={by0}
+          depthPx={groundDepthM * scale}
+          scale={scale}
+          buildingX0={bx0}
+          buildingX1={bx0 + spanPx}
+        />
+      ) : (
+        <>
+          <rect
+            x={padLeft - 30}
+            y={by0}
+            width={innerW + 60}
+            height={groundDepthM * scale}
+            fill="url(#pat-ground)"
+            stroke="#0f172a"
+            strokeWidth={0.7}
+          />
+          <line
+            x1={padLeft - 30}
+            y1={by0}
+            x2={padLeft + innerW + 30}
+            y2={by0}
+            stroke="#0f172a"
+            strokeWidth={1.3}
+          />
+        </>
+      )}
 
       {/* Sky fade above */}
       <rect x={padLeft - 30} y={padTop - 10} width={innerW + 60} height={by0 - padTop + 10} fill="#f8fafc" />
@@ -214,6 +227,22 @@ export function CoupeElevation({
         stories={stories}
         worldToPx={worldToPx}
       />
+
+      {/* NGT altimetric scale (right edge — coupe mode only) */}
+      {mode === "coupe" && (
+        <NGTScale
+          x={width - padRight + 8}
+          yGround={by0}
+          stories={stories}
+          worldToPx={worldToPx}
+          totalHeightM={env.hauteur_totale_m}
+        />
+      )}
+
+      {/* Légende matériaux (coupe mode only) */}
+      {mode === "coupe" && (
+        <LegendeMateriaux x={padLeft - 30} y={height - 78} />
+      )}
 
       {/* Story codes on the left */}
       {stories.map((s, i) => {
@@ -328,8 +357,16 @@ function CoupeBody({
   const footprintIntervals = polygonLineIntersectIntervals(footprint, perpAxis, cutPos);
 
   const niveaux = [...bm.niveaux].sort((a, b) => a.index - b.index);
-  const wallW = Math.max(4, 0.25 * scale);
-  const slabH = 0.25 * scale;
+  // Murs porteurs externes : 20 cm béton + isolation (rendus en hachuré)
+  const wallW = Math.max(4, 0.20 * scale);
+  // Refends inter-apts : 18 cm béton armé
+  const refendW = Math.max(3.5, 0.18 * scale);
+  // Dalle béton banché : 22 cm
+  const slabH = Math.max(3.5, 0.22 * scale);
+  // Acrotère : 110 cm haut × 30 cm épais + couvertine 5 cm
+  const acrotereHpx = 1.10 * scale;
+  const acrotereWpx = Math.max(5, 0.30 * scale);
+  const couvertineHpx = Math.max(2.5, 0.05 * scale);
 
   // Core for stair profile: we only draw the stair run if the cut line actually
   // intersects the core's escalier footprint. We assume stair has the same
@@ -381,19 +418,23 @@ function CoupeBody({
         const [, yTopTop] = worldToPx(sA, topStory.yBase + topStory.height);
         return (
           <g key={`seg-${segIdx}`}>
-            {/* Outer walls on both ends */}
+            {/* Outer walls (béton + isolation, hachurés) on both ends */}
             {stories.map((s, i) => {
               const [, yB] = worldToPx(sA, s.yBase);
               const [, yT] = worldToPx(sA, s.yBase + s.height);
               return (
                 <g key={`ow-${segIdx}-${i}`}>
-                  <rect x={xA} y={yT} width={wallW} height={yB - yT} fill="url(#pat-concrete)" stroke="#0f172a" strokeWidth={0.7} />
-                  <rect x={xB - wallW} y={yT} width={wallW} height={yB - yT} fill="url(#pat-concrete)" stroke="#0f172a" strokeWidth={0.7} />
+                  {/* Mur gauche : béton (extérieur) + isolation (intérieur) */}
+                  <rect x={xA} y={yT} width={wallW * 0.7} height={yB - yT} fill="url(#pat-beton-arme)" stroke="#0f172a" strokeWidth={0.7} />
+                  <rect x={xA + wallW * 0.7} y={yT} width={wallW * 0.3} height={yB - yT} fill="url(#pat-isolation)" stroke="#0f172a" strokeWidth={0.4} />
+                  {/* Mur droit : isolation (intérieur) + béton (extérieur) */}
+                  <rect x={xB - wallW} y={yT} width={wallW * 0.3} height={yB - yT} fill="url(#pat-isolation)" stroke="#0f172a" strokeWidth={0.4} />
+                  <rect x={xB - wallW * 0.7} y={yT} width={wallW * 0.7} height={yB - yT} fill="url(#pat-beton-arme)" stroke="#0f172a" strokeWidth={0.7} />
                 </g>
               );
             })}
 
-            {/* Slabs between stories */}
+            {/* Slabs between stories — béton banché 22 cm, hachures horizontales */}
             {stories.map((s, i) => {
               const [, yB] = worldToPx(sA, s.yBase);
               return (
@@ -403,18 +444,79 @@ function CoupeBody({
                   y={yB - slabH}
                   width={segPx + 4}
                   height={slabH}
-                  fill="url(#pat-concrete)"
+                  fill="url(#pat-beton-banche)"
                   stroke="#0f172a"
-                  strokeWidth={0.6}
+                  strokeWidth={0.7}
                 />
               );
             })}
 
-            {/* Top slab + parapet */}
+            {/* Toiture + acrotère détaillé */}
             <g>
-              <rect x={xA - 2} y={yTopTop - slabH * 1.2} width={segPx + 4} height={slabH * 1.2} fill="url(#pat-concrete)" stroke="#0f172a" strokeWidth={0.6} />
-              <rect x={xA - 2} y={yTopTop - slabH * 1.2 - parapetPx} width={segPx + 4} height={parapetPx} fill="#e7e5e4" stroke="#0f172a" strokeWidth={0.6} />
-              <rect x={xA - 2} y={yTopTop - slabH * 1.2 - parapetPx} width={segPx + 4} height={2} fill="#78716c" />
+              {/* Dalle haute (toit-terrasse) — béton banché */}
+              <rect x={xA - 2} y={yTopTop - slabH} width={segPx + 4} height={slabH} fill="url(#pat-beton-banche)" stroke="#0f172a" strokeWidth={0.7} />
+              {/* Membrane d'étanchéité sur la dalle (3 cm) */}
+              <rect x={xA - 2} y={yTopTop - slabH - Math.max(2, 0.03 * scale)} width={segPx + 4} height={Math.max(2, 0.03 * scale)} fill="url(#pat-etancheite)" />
+              {/* Acrotère gauche : strip vertical béton 30 cm × 110 cm */}
+              <rect
+                x={xA}
+                y={yTopTop - slabH - acrotereHpx}
+                width={acrotereWpx}
+                height={acrotereHpx}
+                fill="url(#pat-beton-arme)"
+                stroke="#0f172a"
+                strokeWidth={0.7}
+              />
+              {/* Acrotère droite */}
+              <rect
+                x={xB - acrotereWpx}
+                y={yTopTop - slabH - acrotereHpx}
+                width={acrotereWpx}
+                height={acrotereHpx}
+                fill="url(#pat-beton-arme)"
+                stroke="#0f172a"
+                strokeWidth={0.7}
+              />
+              {/* Couvertine zinc gauche — débord 1 cm avec larmier */}
+              <rect
+                x={xA - 1.5}
+                y={yTopTop - slabH - acrotereHpx - couvertineHpx}
+                width={acrotereWpx + 3}
+                height={couvertineHpx}
+                fill="#52525b"
+                stroke="#18181b"
+                strokeWidth={0.5}
+              />
+              {/* Larmier (drip-edge) gauche */}
+              <line x1={xA - 1.5} y1={yTopTop - slabH - acrotereHpx} x2={xA - 1.5} y2={yTopTop - slabH - acrotereHpx + 2} stroke="#18181b" strokeWidth={0.7} />
+              {/* Couvertine zinc droite */}
+              <rect
+                x={xB - acrotereWpx - 1.5}
+                y={yTopTop - slabH - acrotereHpx - couvertineHpx}
+                width={acrotereWpx + 3}
+                height={couvertineHpx}
+                fill="#52525b"
+                stroke="#18181b"
+                strokeWidth={0.5}
+              />
+              {/* Larmier (drip-edge) droit */}
+              <line x1={xB + 1.5} y1={yTopTop - slabH - acrotereHpx} x2={xB + 1.5} y2={yTopTop - slabH - acrotereHpx + 2} stroke="#18181b" strokeWidth={0.7} />
+              {/* Étanchéité face intérieure acrotère gauche (relevé) */}
+              <rect
+                x={xA + acrotereWpx}
+                y={yTopTop - slabH - acrotereHpx * 0.8}
+                width={Math.max(1.5, 0.03 * scale)}
+                height={acrotereHpx * 0.8}
+                fill="url(#pat-etancheite)"
+              />
+              {/* Étanchéité face intérieure acrotère droite */}
+              <rect
+                x={xB - acrotereWpx - Math.max(1.5, 0.03 * scale)}
+                y={yTopTop - slabH - acrotereHpx * 0.8}
+                width={Math.max(1.5, 0.03 * scale)}
+                height={acrotereHpx * 0.8}
+                fill="url(#pat-etancheite)"
+              />
             </g>
 
             {/* Per-story contents: rooms (actual intersections) + interior-wall ticks */}
@@ -523,25 +625,33 @@ function CoupeBody({
                             {p.label}
                           </text>
                         )}
-                        {/* Room-edge cloison tick */}
-                        <line x1={pxB} y1={innerY + 1} x2={pxB} y2={innerY + innerH - 1} stroke="#94a3b8" strokeWidth={0.6} />
+                        {/* Refend béton armé 18 cm (solide, hachuré) à la limite de la pièce */}
+                        <rect
+                          x={pxB - refendW / 2}
+                          y={innerY}
+                          width={refendW}
+                          height={innerH}
+                          fill="url(#pat-beton-arme)"
+                          stroke="#0f172a"
+                          strokeWidth={0.5}
+                        />
                       </g>
                     );
                   })}
 
-                  {/* Non-edge interior cloisons (dashed, light) */}
+                  {/* Refends inter-apts non-edge — solides 18 cm béton armé hachuré */}
                   {uniqueTicks.map((wt, wi) => {
                     const [xTick] = worldToPx(toSection(wt), 0);
                     return (
-                      <line
+                      <rect
                         key={`wt-${wi}`}
-                        x1={xTick}
-                        y1={innerY + 1}
-                        x2={xTick}
-                        y2={innerY + innerH - 1}
-                        stroke="#94a3b8"
-                        strokeWidth={0.6}
-                        strokeDasharray="3 2"
+                        x={xTick - refendW / 2}
+                        y={innerY}
+                        width={refendW}
+                        height={innerH}
+                        fill="url(#pat-beton-arme)"
+                        stroke="#0f172a"
+                        strokeWidth={0.5}
                       />
                     );
                   })}
@@ -562,6 +672,46 @@ function CoupeBody({
           </g>
         );
       })}
+
+      {/* Personnage échelle 1.75 m au RDC — silhouette pour donner l'échelle */}
+      {(() => {
+        const rdc = stories[0];
+        if (!rdc || footprintIntervals.length === 0) return null;
+        // Position à 1/4 du premier segment d'envelope
+        const [wA, wB] = footprintIntervals[0];
+        const personW = wB - wA;
+        const personPosWorld = wA + personW * 0.25;
+        const [pxFoot] = worldToPx(toSection(personPosWorld), 0);
+        const [, yFoot] = worldToPx(0, 0);
+        // Hauteur 1.75 m, largeur ~50 cm
+        const personHpx = 1.75 * scale;
+        const personWpx = 0.5 * scale;
+        const headR = personWpx * 0.32;
+        // Pieds reposent au-dessus de la dalle RDC (laisser place à la dalle)
+        const footY = yFoot - slabH;
+        const headCy = footY - personHpx + headR;
+        const cx = pxFoot;
+        return (
+          <g opacity={0.55} stroke="#1e293b" strokeWidth={0.9} fill="none">
+            {/* Tête */}
+            <circle cx={cx} cy={headCy} r={headR} />
+            {/* Corps + jambes */}
+            <path
+              d={`M ${cx} ${headCy + headR}
+                  L ${cx} ${footY - personHpx * 0.40}
+                  M ${cx} ${footY - personHpx * 0.40}
+                  L ${cx - personWpx * 0.35} ${footY}
+                  M ${cx} ${footY - personHpx * 0.40}
+                  L ${cx + personWpx * 0.35} ${footY}`}
+            />
+            {/* Bras */}
+            <path
+              d={`M ${cx - personWpx * 0.42} ${headCy + headR + personHpx * 0.12}
+                  L ${cx + personWpx * 0.42} ${headCy + headR + personHpx * 0.12}`}
+            />
+          </g>
+        );
+      })()}
 
       {/* Stair profile (diagonal stringer per flight, clean switchback) */}
       {stairCuts && (() => {
@@ -1016,6 +1166,197 @@ function FacadeOrientationBadge({
       <text x={cx} y={cy + 3} fontSize={9} fontWeight={700} fill="#0f172a" textAnchor="middle">
         {{ nord: "N", sud: "S", est: "E", ouest: "O" }[side]}
       </text>
+    </g>
+  );
+}
+
+/* ─────────── Coupe : profil TN + fondations + semelles ─────────── */
+
+function CoupeGroundProfile({
+  x, width, y, depthPx, scale, buildingX0, buildingX1,
+}: {
+  x: number; width: number; y: number; depthPx: number; scale: number;
+  buildingX0: number; buildingX1: number;
+}) {
+  // TN naturel — légèrement ondulé pour rappeler le terrain
+  const points: string[] = [];
+  const steps = 14;
+  const amp = 1.2; // amplitude TN
+  for (let i = 0; i <= steps; i++) {
+    const px = x + (i / steps) * width;
+    // Ondulation déterministe
+    const dy = Math.sin(i * 1.7) * amp + Math.cos(i * 0.9) * amp * 0.5;
+    points.push(`${px},${y + dy}`);
+  }
+  const tnPath = `M ${x},${y + depthPx} L ${points[0]} L ${points.slice(1).join(" L ")} L ${x + width},${y + depthPx} Z`;
+
+  // Semelles filantes : 50 cm × 30 cm sous chaque mur extérieur, à -1.0 m
+  const semelleW = 0.50 * scale;
+  const semelleH = 0.30 * scale;
+  const semelleY = y + 1.0 * scale;
+
+  return (
+    <g>
+      {/* Zone fondations / terre — pattern stippling */}
+      <path d={tnPath} fill="url(#pat-terre)" stroke="none" />
+      {/* TN line (slightly wavy) */}
+      <polyline
+        points={points.join(" ")}
+        fill="none"
+        stroke="#0f172a"
+        strokeWidth={1.3}
+      />
+      {/* Label "TN" */}
+      <text x={x + 4} y={y - 3} fontSize={8} fill="#475569" fontStyle="italic">
+        TN ±0.00
+      </text>
+      {/* Petit décaissement / nez de dalle (ressaut de 5 cm entre TN et dalle RDC) */}
+      <line
+        x1={buildingX0}
+        y1={y - 2}
+        x2={buildingX1}
+        y2={y - 2}
+        stroke="#0f172a"
+        strokeWidth={0.4}
+        strokeDasharray="2 1"
+      />
+      {/* Semelle filante gauche */}
+      <rect
+        x={buildingX0 - semelleW * 0.15}
+        y={semelleY}
+        width={semelleW}
+        height={semelleH}
+        fill="url(#pat-beton-arme)"
+        stroke="#0f172a"
+        strokeWidth={0.6}
+      />
+      {/* Semelle filante droite */}
+      <rect
+        x={buildingX1 - semelleW * 0.85}
+        y={semelleY}
+        width={semelleW}
+        height={semelleH}
+        fill="url(#pat-beton-arme)"
+        stroke="#0f172a"
+        strokeWidth={0.6}
+      />
+      {/* Cote de profondeur fondations */}
+      <line
+        x1={buildingX0 - semelleW - 6}
+        y1={y}
+        x2={buildingX0 - semelleW - 6}
+        y2={semelleY + semelleH}
+        stroke="#475569"
+        strokeWidth={0.4}
+        strokeDasharray="2 1.5"
+      />
+      <text
+        x={buildingX0 - semelleW - 8}
+        y={semelleY + semelleH / 2 + 3}
+        fontSize={7.5}
+        fill="#475569"
+        textAnchor="end"
+      >
+        −1.30
+      </text>
+      {/* Bordure inférieure profil */}
+      <line
+        x1={x}
+        y1={y + depthPx}
+        x2={x + width}
+        y2={y + depthPx}
+        stroke="#0f172a"
+        strokeWidth={0.5}
+      />
+    </g>
+  );
+}
+
+/* ─────────── NGT altimetric scale (right edge, coupe only) ─────────── */
+
+function NGTScale({
+  x, yGround, stories, worldToPx, totalHeightM,
+}: {
+  x: number; yGround: number;
+  stories: Array<{ code: string; yBase: number; height: number }>;
+  worldToPx: (xM: number, yM: number) => [number, number];
+  totalHeightM: number;
+}) {
+  // Niveaux NGT à afficher : TN (+0.00) puis chaque PHR (plancher haut)
+  type Tick = { yPx: number; alt: number; label: string; code: string };
+  const ticks: Tick[] = [{ yPx: yGround, alt: 0, label: "+0.00 NGT", code: "TN" }];
+  for (let i = 0; i < stories.length; i++) {
+    const s = stories[i];
+    const altTop = s.yBase + s.height;
+    const [, yTopPx] = worldToPx(0, altTop);
+    const phrCode = i === 0 ? "PHRDC" : `PHR+${i}`;
+    ticks.push({
+      yPx: yTopPx,
+      alt: altTop,
+      label: `+${altTop.toFixed(2)}`,
+      code: phrCode,
+    });
+  }
+
+  // Top tick is total height — ensure consistency
+  const topAlt = totalHeightM;
+  const [, yTopBld] = worldToPx(0, topAlt);
+
+  return (
+    <g style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+      {/* Axe vertical NGT */}
+      <line x1={x} y1={yTopBld - 8} x2={x} y2={yGround + 4} stroke="#0f172a" strokeWidth={0.5} />
+      {/* Label en-tête */}
+      <text x={x} y={yTopBld - 14} fontSize={7.5} fontWeight={700} fill="#0f172a" textAnchor="middle">
+        NGT
+      </text>
+      {ticks.map((t, i) => (
+        <g key={i}>
+          {/* Tick mark */}
+          <line x1={x - 4} y1={t.yPx} x2={x + 4} y2={t.yPx} stroke="#0f172a" strokeWidth={0.6} />
+          {/* Label altitude */}
+          <text x={x + 6} y={t.yPx + 2.6} fontSize={7.5} fill="#0f172a">
+            {t.label}
+          </text>
+          {/* Code PHR/TN au-dessus de la cote */}
+          <text x={x + 6} y={t.yPx - 3} fontSize={6.5} fill="#64748b">
+            {t.code}
+          </text>
+        </g>
+      ))}
+    </g>
+  );
+}
+
+/* ─────────── Légende matériaux (coupe only) ─────────── */
+
+function LegendeMateriaux({ x, y }: { x: number; y: number }) {
+  const w = 168;
+  const h = 70;
+  const swatchW = 18;
+  const swatchH = 9;
+  const rowH = 13;
+  const items: Array<{ pattern: string; label: string }> = [
+    { pattern: "url(#pat-beton-arme)", label: "Béton armé" },
+    { pattern: "url(#pat-isolation)", label: "Isolation" },
+    { pattern: "url(#pat-etancheite)", label: "Étanchéité" },
+    { pattern: "url(#pat-terre)", label: "Terre / fondations" },
+  ];
+  return (
+    <g>
+      <rect x={x} y={y} width={w} height={h} fill="white" stroke="#0f172a" strokeWidth={0.6} rx={2} />
+      <text x={x + 6} y={y + 11} fontSize={8.5} fontWeight={700} fill="#0f172a">
+        Légende matériaux
+      </text>
+      <line x1={x + 4} y1={y + 14} x2={x + w - 4} y2={y + 14} stroke="#cbd5e1" strokeWidth={0.4} />
+      {items.map((it, i) => (
+        <g key={i} transform={`translate(${x + 6}, ${y + 19 + i * rowH})`}>
+          <rect x={0} y={0} width={swatchW} height={swatchH} fill={it.pattern} stroke="#475569" strokeWidth={0.4} />
+          <text x={swatchW + 6} y={swatchH - 1} fontSize={8} fill="#0f172a">
+            {it.label}
+          </text>
+        </g>
+      ))}
     </g>
   );
 }

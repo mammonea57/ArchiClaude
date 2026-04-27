@@ -65,6 +65,48 @@ export function PlanPatterns() {
         <circle cx="5" cy="11" r="0.55" fill="#475569" />
       </pattern>
 
+      {/* Béton armé — diagonales 45° fines (mur en coupe) */}
+      <pattern id="pat-beton-arme" width="6" height="6" patternUnits="userSpaceOnUse">
+        <rect width="6" height="6" fill="#d6d3d1" />
+        <path d="M 0 6 L 6 0" stroke="#44403c" strokeWidth="0.45" />
+        <path d="M -1.5 1.5 L 1.5 -1.5" stroke="#44403c" strokeWidth="0.45" />
+        <path d="M 4.5 7.5 L 7.5 4.5" stroke="#44403c" strokeWidth="0.45" />
+      </pattern>
+
+      {/* Béton banché — hachures horizontales (dalle en coupe) */}
+      <pattern id="pat-beton-banche" width="8" height="3" patternUnits="userSpaceOnUse">
+        <rect width="8" height="3" fill="#cbd5e1" />
+        <line x1="0" y1="1.5" x2="8" y2="1.5" stroke="#475569" strokeWidth="0.35" />
+      </pattern>
+
+      {/* Étanchéité — hachures horizontales serrées */}
+      <pattern id="pat-etancheite" width="10" height="2" patternUnits="userSpaceOnUse">
+        <rect width="10" height="2" fill="#1f2937" />
+        <line x1="0" y1="1" x2="10" y2="1" stroke="#9ca3af" strokeWidth="0.35" />
+      </pattern>
+
+      {/* Isolation — petits points réguliers */}
+      <pattern id="pat-isolation" width="6" height="6" patternUnits="userSpaceOnUse">
+        <rect width="6" height="6" fill="#fef3c7" />
+        <circle cx="2" cy="2" r="0.5" fill="#b45309" />
+        <circle cx="5" cy="5" r="0.5" fill="#b45309" />
+      </pattern>
+
+      {/* Terre / fondations — stippling aléatoire (cailloux + remblais) */}
+      <pattern id="pat-terre" width="22" height="22" patternUnits="userSpaceOnUse">
+        <rect width="22" height="22" fill="#a8a29e" />
+        <circle cx="3" cy="4" r="0.7" fill="#57534e" />
+        <circle cx="14" cy="3" r="0.5" fill="#57534e" />
+        <circle cx="9" cy="9" r="0.6" fill="#44403c" />
+        <circle cx="18" cy="11" r="0.5" fill="#57534e" />
+        <circle cx="5" cy="14" r="0.55" fill="#44403c" />
+        <circle cx="13" cy="17" r="0.7" fill="#57534e" />
+        <circle cx="20" cy="19" r="0.45" fill="#44403c" />
+        <circle cx="2" cy="20" r="0.5" fill="#57534e" />
+        <ellipse cx="11" cy="13" rx="1.2" ry="0.6" fill="#78716c" opacity="0.6" />
+        <ellipse cx="6" cy="8" rx="0.9" ry="0.45" fill="#78716c" opacity="0.5" />
+      </pattern>
+
       {/* Vegetation canopy (mass) */}
       <pattern id="pat-veg" width="28" height="28" patternUnits="userSpaceOnUse">
         <rect width="28" height="28" fill="#a7dab0" />
