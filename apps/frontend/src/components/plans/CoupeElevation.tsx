@@ -7,7 +7,6 @@ import {
   coordsFromGeoJSON,
   polygonLineIntersectIntervals,
   roomLabelTiny,
-  roomStyle,
   segmentCrossAxis,
   type Coord,
 } from "./plan-utils";
@@ -243,9 +242,16 @@ export function CoupeElevation({
         />
       )}
 
-      {/* Légende matériaux (coupe mode only) — placed bottom-right above TitleBlock */}
+      {/* Légende matériaux (coupe mode only) — placed in the bottom strip
+          BETWEEN the scale bar (left) and the title block (right). This is
+          OUTSIDE the building drawing zone (below by0 + groundDepth) so it
+          never overlaps the section. Horizontal layout, compact height. */}
       {mode === "coupe" && (
-        <LegendeMateriaux x={width - 232} y={height - 148} />
+        <LegendeMateriaux
+          x={padLeft + 100}
+          y={height - 60}
+          maxWidth={width - padLeft - 100 - 240}
+        />
       )}
 
       {/* Story codes on the left */}
@@ -370,19 +376,42 @@ function CoupeBody({
   const footprintIntervals = polygonLineIntersectIntervals(footprint, perpAxis, cutPos);
 
   const niveaux = [...bm.niveaux].sort((a, b) => a.index - b.index);
-  // Murs porteurs externes : 20 cm béton + isolation (rendus en hachuré)
-  const wallW = Math.max(4, 0.20 * scale);
+
+  // Coupe-specific room palette — differentiates wet rooms, living areas,
+  // bedrooms, circulation. Lighter than the shared roomStyle palette so
+  // labels read clearly on the section.
+  const coupeRoomFill = (roomType: string, fallbackUsage?: string): string => {
+    const t = (roomType ?? "").toLowerCase();
+    const u = (fallbackUsage ?? "").toLowerCase();
+    if (["sejour", "sejour_cuisine", "cuisine"].includes(t)) return "#fff8e7";
+    if (["entree", "couloir", "palier", "circulation", "degagement"].includes(t)) return "#f1f5f9";
+    if (["chambre_parents", "chambre_enfant", "chambre_supp", "chambre"].includes(t)) return "#f0f4f8";
+    if (["sdb", "wc", "wc_sdb", "salle_de_douche"].includes(t)) return "#e0f4f4";
+    if (["loggia", "balcon", "terrasse"].includes(t)) return "#dcfce7";
+    // Fallback on usage_principal of the level (e.g. "habitation_collectif")
+    if (u.includes("habit")) return "#fff8e7";
+    return "#f8fafc";
+  };
+
+  // Murs porteurs externes : 20 cm béton + isolation (rendus en hachuré).
+  // Bumped visual minimum so the external walls read clearly against the
+  // interior rooms even when scale shrinks.
+  const wallW = Math.max(7, 0.20 * scale);
   // Refends inter-apts : 18 cm béton armé
-  const refendW = Math.max(3.5, 0.18 * scale);
+  const refendW = Math.max(4.5, 0.18 * scale);
   // Dalle béton banché : 22 cm
-  const slabH = Math.max(3.5, 0.22 * scale);
-  // Acrotère : 110 cm haut × 30 cm épais + couvertine 5 cm
-  const acrotereHpx = Math.max(11, 1.10 * scale);
-  const acrotereWpx = Math.max(5, 0.30 * scale);
-  const couvertineHpx = Math.max(3.5, 0.05 * scale);
-  // Bandeau (nez de dalle) — protrusion 5 cm aux deux extrémités du bâtiment
-  const bandeauProtrusionPx = Math.max(2, 0.05 * scale);
-  const bandeauHeightPx = Math.max(3, slabH);
+  const slabH = Math.max(4, 0.22 * scale);
+  // Acrotère : 110 cm haut × 30 cm épais + couvertine 5 cm.
+  // Visual minimums increased — at typical scale the logical 110 cm renders
+  // ~3 px which makes the acrotère imperceptible. Bump rendered min to 14 px
+  // (acrotère) and 4 px (couvertine) so the parapet reads at any zoom.
+  const acrotereHpx = Math.max(14, 1.10 * scale);
+  const acrotereWpx = Math.max(7, 0.30 * scale);
+  const couvertineHpx = Math.max(4, 0.05 * scale);
+  // Bandeau (nez de dalle) — protrusion 5 cm aux deux extrémités du bâtiment.
+  // Bumped minimum to 7 px so it's actually visible regardless of scale.
+  const bandeauProtrusionPx = Math.max(7, 0.05 * scale);
+  const bandeauHeightPx = Math.max(4, slabH);
 
   // Core for stair profile: we only draw the stair run if the cut line actually
   // intersects the core's escalier footprint. We assume stair has the same
@@ -440,12 +469,14 @@ function CoupeBody({
               const [, yT] = worldToPx(sA, s.yBase + s.height);
               return (
                 <g key={`ow-${segIdx}-${i}`}>
-                  {/* Mur gauche : béton (extérieur) + isolation (intérieur) */}
-                  <rect x={xA} y={yT} width={wallW * 0.7} height={yB - yT} fill="url(#pat-beton-arme)" stroke="#0f172a" strokeWidth={0.7} />
-                  <rect x={xA + wallW * 0.7} y={yT} width={wallW * 0.3} height={yB - yT} fill="url(#pat-isolation)" stroke="#0f172a" strokeWidth={0.4} />
+                  {/* Mur gauche : béton (extérieur) + isolation (intérieur).
+                      Stroke épaissi à 2.5 px côté extérieur pour que l'enveloppe
+                      soit lisible. */}
+                  <rect x={xA} y={yT} width={wallW * 0.7} height={yB - yT} fill="url(#pat-beton-arme)" stroke="#0a0a0a" strokeWidth={2.5} />
+                  <rect x={xA + wallW * 0.7} y={yT} width={wallW * 0.3} height={yB - yT} fill="url(#pat-isolation)" stroke="#0f172a" strokeWidth={0.5} />
                   {/* Mur droit : isolation (intérieur) + béton (extérieur) */}
-                  <rect x={xB - wallW} y={yT} width={wallW * 0.3} height={yB - yT} fill="url(#pat-isolation)" stroke="#0f172a" strokeWidth={0.4} />
-                  <rect x={xB - wallW * 0.7} y={yT} width={wallW * 0.7} height={yB - yT} fill="url(#pat-beton-arme)" stroke="#0f172a" strokeWidth={0.7} />
+                  <rect x={xB - wallW} y={yT} width={wallW * 0.3} height={yB - yT} fill="url(#pat-isolation)" stroke="#0f172a" strokeWidth={0.5} />
+                  <rect x={xB - wallW * 0.7} y={yT} width={wallW * 0.7} height={yB - yT} fill="url(#pat-beton-arme)" stroke="#0a0a0a" strokeWidth={2.5} />
                 </g>
               );
             })}
@@ -457,35 +488,37 @@ function CoupeBody({
               const [, yB] = worldToPx(sA, s.yBase);
               return (
                 <g key={`slab-${segIdx}-${i}`}>
-                  {/* Slab itself */}
+                  {/* Slab itself — stroke épaissi à 1.4 px pour lisibilité */}
                   <rect
                     x={xA - 2}
                     y={yB - slabH}
                     width={segPx + 4}
                     height={slabH}
                     fill="url(#pat-beton-banche)"
-                    stroke="#0f172a"
-                    strokeWidth={0.7}
+                    stroke="#0a0a0a"
+                    strokeWidth={1.4}
                   />
-                  {/* Bandeau gauche — protrusion 5 cm beige (nez de dalle) */}
+                  {/* Bandeau gauche — protrusion ~7 px beige soutenu (nez de dalle).
+                      Couleur plus saturée et trait plus marqué pour qu'il soit
+                      visible à toute échelle. */}
                   <rect
                     x={xA - 2 - bandeauProtrusionPx}
                     y={yB - slabH - 0.5}
                     width={bandeauProtrusionPx + 1}
                     height={bandeauHeightPx + 1}
-                    fill="#d9d0b8"
-                    stroke="#0f172a"
-                    strokeWidth={0.5}
+                    fill="#c8b88a"
+                    stroke="#0a0a0a"
+                    strokeWidth={1.0}
                   />
-                  {/* Bandeau droit — protrusion 5 cm beige (nez de dalle) */}
+                  {/* Bandeau droit — protrusion ~7 px beige soutenu (nez de dalle) */}
                   <rect
                     x={xB + 1}
                     y={yB - slabH - 0.5}
                     width={bandeauProtrusionPx + 1}
                     height={bandeauHeightPx + 1}
-                    fill="#d9d0b8"
-                    stroke="#0f172a"
-                    strokeWidth={0.5}
+                    fill="#c8b88a"
+                    stroke="#0a0a0a"
+                    strokeWidth={1.0}
                   />
                 </g>
               );
@@ -493,19 +526,29 @@ function CoupeBody({
 
             {/* Toiture + acrotère détaillé */}
             <g>
-              {/* Dalle haute (toit-terrasse) — béton banché */}
-              <rect x={xA - 2} y={yTopTop - slabH} width={segPx + 4} height={slabH} fill="url(#pat-beton-banche)" stroke="#0f172a" strokeWidth={0.7} />
+              {/* Dalle haute (toit-terrasse) — béton banché, stroke épaissi */}
+              <rect x={xA - 2} y={yTopTop - slabH} width={segPx + 4} height={slabH} fill="url(#pat-beton-banche)" stroke="#0a0a0a" strokeWidth={1.4} />
               {/* Membrane d'étanchéité sur la dalle (3 cm) */}
               <rect x={xA - 2} y={yTopTop - slabH - Math.max(2, 0.03 * scale)} width={segPx + 4} height={Math.max(2, 0.03 * scale)} fill="url(#pat-etancheite)" />
-              {/* Acrotère gauche : strip vertical béton 30 cm × 110 cm */}
+              {/* Acrotère gauche : strip vertical béton 30 cm × 110 cm.
+                  Filled with darker grey BEHIND the béton-armé pattern so the
+                  acrotère reads as a solid mass even at small render heights,
+                  with a thick black border for contrast. */}
+              <rect
+                x={xA}
+                y={yTopTop - slabH - acrotereHpx}
+                width={acrotereWpx}
+                height={acrotereHpx}
+                fill="#6b7280"
+              />
               <rect
                 x={xA}
                 y={yTopTop - slabH - acrotereHpx}
                 width={acrotereWpx}
                 height={acrotereHpx}
                 fill="url(#pat-beton-arme)"
-                stroke="#0f172a"
-                strokeWidth={0.7}
+                stroke="#0a0a0a"
+                strokeWidth={1.5}
               />
               {/* Acrotère droite */}
               <rect
@@ -513,32 +556,59 @@ function CoupeBody({
                 y={yTopTop - slabH - acrotereHpx}
                 width={acrotereWpx}
                 height={acrotereHpx}
-                fill="url(#pat-beton-arme)"
-                stroke="#0f172a"
-                strokeWidth={0.7}
+                fill="#6b7280"
               />
-              {/* Couvertine zinc gauche — débord 1 cm avec larmier (trait épais
-                  pour rester lisible aux petits zooms) */}
+              <rect
+                x={xB - acrotereWpx}
+                y={yTopTop - slabH - acrotereHpx}
+                width={acrotereWpx}
+                height={acrotereHpx}
+                fill="url(#pat-beton-arme)"
+                stroke="#0a0a0a"
+                strokeWidth={1.5}
+              />
+              {/* Label "ACROTÈRE" — small annotation outside the right acrotère
+                  pointing inward with a thin leader. Helps the reader. */}
+              <line
+                x1={xB + 2}
+                y1={yTopTop - slabH - acrotereHpx / 2}
+                x2={xB + 18}
+                y2={yTopTop - slabH - acrotereHpx / 2}
+                stroke="#475569"
+                strokeWidth={0.5}
+              />
+              <text
+                x={xB + 20}
+                y={yTopTop - slabH - acrotereHpx / 2 + 3}
+                fontSize={8}
+                fontWeight={700}
+                fill="#0f172a"
+              >
+                ACROTÈRE
+              </text>
+              {/* Couvertine cap stone gauche — pierre claire (lighter grey)
+                  pour contraster avec le béton sombre de l'acrotère, débord
+                  1 cm avec larmier. */}
               <rect
                 x={xA - 1.5}
                 y={yTopTop - slabH - acrotereHpx - couvertineHpx}
                 width={acrotereWpx + 3}
                 height={couvertineHpx}
-                fill="#3f3f46"
+                fill="#a1a1aa"
                 stroke="#0a0a0a"
-                strokeWidth={1.5}
+                strokeWidth={1.2}
               />
               {/* Larmier (drip-edge) gauche */}
               <line x1={xA - 1.5} y1={yTopTop - slabH - acrotereHpx} x2={xA - 1.5} y2={yTopTop - slabH - acrotereHpx + 2.5} stroke="#0a0a0a" strokeWidth={1.0} />
-              {/* Couvertine zinc droite */}
+              {/* Couvertine cap stone droite */}
               <rect
                 x={xB - acrotereWpx - 1.5}
                 y={yTopTop - slabH - acrotereHpx - couvertineHpx}
                 width={acrotereWpx + 3}
                 height={couvertineHpx}
-                fill="#3f3f46"
+                fill="#a1a1aa"
                 stroke="#0a0a0a"
-                strokeWidth={1.5}
+                strokeWidth={1.2}
               />
               {/* Larmier (drip-edge) droit */}
               <line x1={xB + 1.5} y1={yTopTop - slabH - acrotereHpx} x2={xB + 1.5} y2={yTopTop - slabH - acrotereHpx + 2.5} stroke="#0a0a0a" strokeWidth={1.0} />
@@ -599,8 +669,9 @@ function CoupeBody({
                       break;
                     }
                   }
-                  const style = roomStyle(roomType);
-                  pieces.push({ wA: a, wB: b, label: roomLabel, tone: style.fill, type: roomType });
+                  // Coupe-specific differentiation by room category.
+                  const tone = coupeRoomFill(roomType, niv?.usage_principal);
+                  pieces.push({ wA: a, wB: b, label: roomLabel, tone, type: roomType });
                 }
               }
               for (const circ of niv?.circulations_communes ?? []) {
@@ -613,7 +684,7 @@ function CoupeBody({
                   const a = Math.max(ia, segWorldRange[0]);
                   const b = Math.min(ib, segWorldRange[1]);
                   if (b - a < 0.2) continue;
-                  pieces.push({ wA: a, wB: b, label: "Circ.", tone: "#f1f5f9", type: "circulation" });
+                  pieces.push({ wA: a, wB: b, label: "Circ.", tone: coupeRoomFill("circulation"), type: "circulation" });
                 }
               }
               // Sort L→R along section axis
@@ -653,7 +724,7 @@ function CoupeBody({
                     const pxB = worldToPx(toSection(p.wB), 0)[0];
                     return (
                       <g key={pi}>
-                        <rect x={pxA + 0.4} y={innerY} width={pxB - pxA - 0.8} height={innerH} fill={p.tone} opacity={0.72} />
+                        <rect x={pxA + 0.4} y={innerY} width={pxB - pxA - 0.8} height={innerH} fill={p.tone} opacity={0.95} />
                         {pxB - pxA > 26 && (
                           <text
                             x={(pxA + pxB) / 2}
@@ -707,9 +778,98 @@ function CoupeBody({
                     strokeWidth={0.35}
                     opacity={0.35}
                   />
+
+                  {/* ─── Fenêtres en élévation sur les murs extérieurs ───
+                      One window on each end (left/right) of each story. Standard
+                      dimensions: 140 cm wide × 130 cm tall, allège 95 cm. The
+                      cut shows the BUTT of the window so we draw frame + glass
+                      tinted. RDC entry replaces the window on the voirie side
+                      but in coupe we always show fenêtres for clarity. */}
+                  {(() => {
+                    const winWpx = Math.max(14, 1.40 * scale);
+                    const winHpx = Math.max(14, 1.30 * scale);
+                    const allegePx = Math.max(8, 0.95 * scale);
+                    const frameThick = Math.max(2, 0.05 * scale);
+                    // y from ground for this story
+                    const [, yStoryFloor] = worldToPx(0, s.yBase);
+                    const winYTop = yStoryFloor - allegePx - winHpx;
+                    // Skip if window won't fit in story HSP
+                    if (allegePx + winHpx > (yStoryFloor - innerY)) return null;
+                    return (
+                      <g>
+                        {/* Left window — drawn on the inner face of the left
+                            outer wall (just inside the wall pattern). */}
+                        <rect
+                          x={xA + wallW - frameThick / 2}
+                          y={winYTop}
+                          width={winWpx * 0.18}
+                          height={winHpx}
+                          fill="#475569"
+                          stroke="#0a0a0a"
+                          strokeWidth={0.7}
+                        />
+                        <rect
+                          x={xA + wallW + frameThick}
+                          y={winYTop + frameThick}
+                          width={winWpx * 0.18 - frameThick * 2}
+                          height={winHpx - frameThick * 2}
+                          fill="#bfe1ee"
+                          opacity={0.6}
+                        />
+                        {/* Allège (parapet bas sous fenêtre) */}
+                        <rect
+                          x={xA + wallW * 0.9}
+                          y={winYTop + winHpx}
+                          width={winWpx * 0.22}
+                          height={allegePx}
+                          fill="#9ca3af"
+                          opacity={0.5}
+                        />
+                        {/* Right window — symmetric on right outer wall */}
+                        <rect
+                          x={xB - wallW - winWpx * 0.18 + frameThick / 2}
+                          y={winYTop}
+                          width={winWpx * 0.18}
+                          height={winHpx}
+                          fill="#475569"
+                          stroke="#0a0a0a"
+                          strokeWidth={0.7}
+                        />
+                        <rect
+                          x={xB - wallW - winWpx * 0.18 + frameThick}
+                          y={winYTop + frameThick}
+                          width={winWpx * 0.18 - frameThick * 2}
+                          height={winHpx - frameThick * 2}
+                          fill="#bfe1ee"
+                          opacity={0.6}
+                        />
+                        <rect
+                          x={xB - wallW * 0.9 - winWpx * 0.22}
+                          y={winYTop + winHpx}
+                          width={winWpx * 0.22}
+                          height={allegePx}
+                          fill="#9ca3af"
+                          opacity={0.5}
+                        />
+                      </g>
+                    );
+                  })()}
                 </g>
               );
             })}
+
+            {/* Building section perimeter — crisp dark outline drawn LAST so
+                the envelope reads clearly against the room fills. Goes around
+                the full section: top of acrotère caps to ground level. */}
+            <rect
+              x={xA}
+              y={yTopTop - slabH - acrotereHpx - couvertineHpx}
+              width={segPx}
+              height={by0 - (yTopTop - slabH - acrotereHpx - couvertineHpx)}
+              fill="none"
+              stroke="#0a0a0a"
+              strokeWidth={2.5}
+            />
           </g>
         );
       })}
@@ -782,7 +942,8 @@ function CoupeBody({
         );
       })()}
 
-      {/* Stair profile (diagonal stringer per flight, clean switchback) */}
+      {/* Stair profile — diagonal hatched volée at each story with up-arrow.
+          Skipped silently if no core position is provided. */}
       {stairCuts && (() => {
         const [xS0] = worldToPx(stairCuts.xStart, 0);
         const [xS1] = worldToPx(stairCuts.xEnd, 0);
@@ -795,26 +956,58 @@ function CoupeBody({
               const sx0 = flightUpLeft ? xS1 : xS0;
               const sx1 = flightUpLeft ? xS0 : xS1;
               const steps = 5;
+              const dx = sx1 - sx0;
+              const dy = yT - yB;
               return (
                 <g key={`stair-${i}`}>
-                  {/* Stringer */}
-                  <line x1={sx0} y1={yB - 1} x2={sx1} y2={yT + 1} stroke="#1e293b" strokeWidth={1.1} />
-                  {/* Simple tread ticks */}
-                  {Array.from({ length: steps - 1 }).map((_, k) => {
-                    const t = (k + 1) / steps;
-                    const tx = sx0 + (sx1 - sx0) * t;
-                    const ty = yB - (yB - yT) * t;
+                  {/* Diagonal volée — fond clair sous la rampe */}
+                  <polygon
+                    points={`${sx0},${yB} ${sx1},${yT} ${sx1},${yB} ${sx0},${yB}`}
+                    fill="#e2e8f0"
+                    opacity={0.55}
+                  />
+                  {/* Hachures diagonales (parallèles à la pente) */}
+                  {Array.from({ length: 6 }).map((_, k) => {
+                    const t = (k + 1) / 7;
+                    const px0 = sx0 + dx * t;
+                    const py0 = yB;
+                    const px1 = sx0 + dx * t;
+                    const py1 = yB + dy * t;
                     return (
-                      <line key={k} x1={tx - 2} y1={ty} x2={tx + 2} y2={ty} stroke="#475569" strokeWidth={0.7} />
+                      <line
+                        key={`hatch-${k}`}
+                        x1={px0}
+                        y1={py0}
+                        x2={px1}
+                        y2={py1}
+                        stroke="#64748b"
+                        strokeWidth={0.4}
+                        opacity={0.6}
+                      />
                     );
                   })}
-                  {/* Arrow head indicating ascent on first flight of each pair */}
-                  {i === 0 && (
-                    <polygon
-                      points={`${sx1},${yT + 1} ${sx1 - (sx1 > sx0 ? 5 : -5)},${yT + 5} ${sx1 - (sx1 > sx0 ? 5 : -5)},${yT - 3}`}
-                      fill="#1e293b"
-                    />
-                  )}
+                  {/* Stringer (limon) */}
+                  <line x1={sx0} y1={yB - 1} x2={sx1} y2={yT + 1} stroke="#0f172a" strokeWidth={1.4} />
+                  {/* Tread ticks (marches) */}
+                  {Array.from({ length: steps - 1 }).map((_, k) => {
+                    const t = (k + 1) / steps;
+                    const tx = sx0 + dx * t;
+                    const ty = yB + dy * t;
+                    return (
+                      <line key={k} x1={tx - 2.5} y1={ty} x2={tx + 2.5} y2={ty} stroke="#1e293b" strokeWidth={0.8} />
+                    );
+                  })}
+                  {/* Up-arrow ↑ at the top of each flight indicating ascent */}
+                  <text
+                    x={sx1 + (sx1 > sx0 ? -8 : 8)}
+                    y={yT + 4}
+                    fontSize={11}
+                    fontWeight={700}
+                    fill="#0f172a"
+                    textAnchor="middle"
+                  >
+                    ↑
+                  </text>
                 </g>
               );
             })}
@@ -1402,29 +1595,35 @@ function NGTScale({
 
 /* ─────────── Légende matériaux (coupe only) ─────────── */
 
-function LegendeMateriaux({ x, y }: { x: number; y: number }) {
-  const w = 168;
-  const h = 70;
-  const swatchW = 18;
-  const swatchH = 9;
-  const rowH = 13;
+function LegendeMateriaux({ x, y, maxWidth }: { x: number; y: number; maxWidth: number }) {
+  // Horizontal strip layout: title on the left, swatches flowing to the right.
+  // Sized to fit BETWEEN the scale bar and the title block, OUTSIDE the
+  // building drawing zone. Strip height fixed at 28 px.
+  const h = 30;
+  const w = Math.max(280, maxWidth);
   const items: Array<{ pattern: string; label: string }> = [
     { pattern: "url(#pat-beton-arme)", label: "Béton armé" },
     { pattern: "url(#pat-isolation)", label: "Isolation" },
     { pattern: "url(#pat-etancheite)", label: "Étanchéité" },
-    { pattern: "url(#pat-terre)", label: "Terre / fondations" },
+    { pattern: "url(#pat-terre)", label: "Terre" },
   ];
+  // Estimate column width based on available width minus the title cell.
+  const titleCellW = 78;
+  const colW = (w - titleCellW - 8) / items.length;
+  const swatchW = 16;
+  const swatchH = 8;
   return (
     <g>
       <rect x={x} y={y} width={w} height={h} fill="white" stroke="#0f172a" strokeWidth={0.6} rx={2} />
-      <text x={x + 6} y={y + 11} fontSize={8.5} fontWeight={700} fill="#0f172a">
+      {/* Title cell */}
+      <text x={x + 6} y={y + 18} fontSize={8.5} fontWeight={700} fill="#0f172a">
         Légende matériaux
       </text>
-      <line x1={x + 4} y1={y + 14} x2={x + w - 4} y2={y + 14} stroke="#cbd5e1" strokeWidth={0.4} />
+      <line x1={x + titleCellW} y1={y + 4} x2={x + titleCellW} y2={y + h - 4} stroke="#cbd5e1" strokeWidth={0.4} />
       {items.map((it, i) => (
-        <g key={i} transform={`translate(${x + 6}, ${y + 19 + i * rowH})`}>
+        <g key={i} transform={`translate(${x + titleCellW + 6 + i * colW}, ${y + h / 2 - swatchH / 2})`}>
           <rect x={0} y={0} width={swatchW} height={swatchH} fill={it.pattern} stroke="#475569" strokeWidth={0.4} />
-          <text x={swatchW + 6} y={swatchH - 1} fontSize={8} fill="#0f172a">
+          <text x={swatchW + 5} y={swatchH - 0.5} fontSize={7.8} fill="#0f172a">
             {it.label}
           </text>
         </g>
