@@ -854,6 +854,33 @@ def build_walls_and_openings(
         except Exception:
             pass
 
+    # Pre-pass: find which side the SÉJOUR will end up on. Used below to
+    # upgrade ch_parents' window to a porte-fenêtre when the apt is a corner
+    # unit (2+ exterior facades) AND ch_parents sits on the OTHER exterior
+    # side. Produces a 2nd balcony (upper floors) or 2nd jardin (RDC) for
+    # premium corner T2/T3.
+    sejour_side: str | None = None
+    for _room_pre in rooms:
+        if _room_pre.type not in (RoomType.SEJOUR, RoomType.SEJOUR_CUISINE):
+            continue
+        _sides = [s for s in _side_of_room(_room_pre) if s != palier_side]
+        if exterior_set is not None:
+            _sides = [s for s in _sides if s in exterior_set]
+        if not _sides:
+            break
+        _preferred = OPPOSITE[palier_side]
+        _priority = {"sud": 0, "ouest": 1, "est": 2, "nord": 3}
+        if any(jardin_area.get(s, 0.0) > 0.5 for s in _sides):
+            _best = max(_sides, key=lambda s: jardin_area.get(s, 0.0))
+            _ba = jardin_area.get(_best, 0.0)
+            _near = [s for s in _sides if jardin_area.get(s, 0.0) >= _ba * 0.9]
+            sejour_side = _preferred if _preferred in _near else max(_near, key=lambda s: (jardin_area.get(s, 0.0), -_priority[s]))
+        else:
+            _full = [s for s in _sides if perimeter_frac.get(s, 1.0) >= 0.98]
+            _pool = _full if _full else _sides
+            sejour_side = _preferred if _preferred in _pool else max(_pool, key=lambda s: (perimeter_frac.get(s, 0.0), -_priority[s]))
+        break
+
     for room in rooms:
         if room.type not in living_types:
             continue
@@ -929,6 +956,21 @@ def build_walls_and_openings(
             width = min(120, int(wall_len * 40))
             height = 200
             allege = 95
+        elif (
+            room.type == RoomType.CHAMBRE_PARENTS
+            and exterior_set is not None
+            and len(exterior_set) >= 2
+            and sejour_side is not None
+            and side != sejour_side
+            and perimeter_frac.get(side, 0.0) >= 0.98
+        ):
+            # Corner apt + chambre parents on the SECOND exterior facade
+            # → upgrade to porte-fenêtre to give access to a 2nd
+            # balcon/jardin on that side.
+            op_type = OpeningType.PORTE_FENETRE
+            width = min(180, int(wall_len * 45))
+            height = 220
+            allege = None
         else:
             op_type = OpeningType.FENETRE
             width = min(140, int(wall_len * 45))
