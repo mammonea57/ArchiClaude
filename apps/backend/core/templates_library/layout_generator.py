@@ -479,6 +479,9 @@ def build_walls_and_openings(
     palier_side: PalierSide,
     slot_id: str,
     orientations: list[str] | None = None,
+    footprint=None,
+    parcelle=None,
+    other_cells_polys=None,
 ) -> tuple[list[Wall], list[Opening]]:
     """Given placed rooms, derive perimeter + partition walls and openings.
 
@@ -710,6 +713,174 @@ def build_walls_and_openings(
     # Exterior sides only — never place a window on a wall that faces a
     # corridor / another apt (those sides are NOT in ``orientations``).
     exterior_set = set(orientations or []) if orientations else None
+
+    # Pre-compute, for each of the 4 slot sides, (a) the fraction of its
+    # length that lies on the footprint perimeter and (b) the USABLE JARDIN
+    # AREA: how much surface the wall can extrude into outside the footprint
+    # before hitting the parcelle boundary (or 10 m of open field if the
+    # parcelle is not available). A partially-exterior wall opening onto a
+    # large L-notch yields a far bigger jardin than a fully-exterior wall
+    # hemmed in against the parcelle edge — so we rank by jardin area, not
+    # by perimeter fraction alone.
+    perimeter_frac: dict[str, float] = {"sud": 1.0, "nord": 1.0, "ouest": 1.0, "est": 1.0}
+    # exterior_sub_range[s] = (lo, hi) along the side's axis; None = no exterior sub-range
+    exterior_sub_range: dict[str, tuple[float, float] | None] = {
+        "sud": None, "nord": None, "ouest": None, "est": None,
+    }
+    jardin_area: dict[str, float] = {"sud": 0.0, "nord": 0.0, "ouest": 0.0, "est": 0.0}
+    jardin_depth: dict[str, float] = {"sud": 0.0, "nord": 0.0, "ouest": 0.0, "est": 0.0}
+    _JARDIN_EXTRUDE_M = 10.0  # cap used when ranking candidates
+    if footprint is not None:
+        try:
+            from shapely.geometry import LineString as _LS, Polygon as _Poly
+            from shapely.ops import unary_union as _uu
+            sides_segs = {
+                "sud":   _LS([(minx, miny), (maxx, miny)]),
+                "nord":  _LS([(minx, maxy), (maxx, maxy)]),
+                "ouest": _LS([(minx, miny), (minx, maxy)]),
+                "est":   _LS([(maxx, miny), (maxx, maxy)]),
+            }
+            fp_boundary = footprint.boundary.buffer(0.15)
+            # Zone where a jardin can legally live: inside the parcelle
+            # (if known) minus the footprint itself, minus neighbour apts.
+            if parcelle is not None:
+                try:
+                    jardin_zone = parcelle.difference(footprint)
+                except Exception:
+                    jardin_zone = footprint.buffer(_JARDIN_EXTRUDE_M).difference(footprint)
+            else:
+                # No parcelle → fall back to a generous buffer so we don't
+                # under-count. The clip-to-parcelle happens later in the
+                # frontend if needed.
+                jardin_zone = footprint.buffer(_JARDIN_EXTRUDE_M).difference(footprint)
+            if other_cells_polys:
+                try:
+                    others = _uu(list(other_cells_polys))
+                    jardin_zone = jardin_zone.difference(others)
+                except Exception:
+                    pass
+
+            def _clip_side_to_perimeter(s_name: str) -> tuple[float, float] | None:
+                """Return (lo, hi) along the side's varying axis that overlaps
+                the footprint perimeter. None if no overlap."""
+                if s_name in ("sud", "nord"):
+                    # side runs horizontally at y = miny or maxy
+                    y_s = miny if s_name == "sud" else maxy
+                    lo, hi = float("inf"), float("-inf")
+                    for coord_pair in list(footprint.exterior.coords):
+                        pass
+                    # Walk footprint edges, intersect collinear horizontals.
+                    coords = list(footprint.exterior.coords)
+                    for i in range(len(coords) - 1):
+                        ax, ay = coords[i]
+                        bx, by = coords[i + 1]
+                        if abs(ay - by) < 0.15 and abs(ay - y_s) < 0.15:
+                            aLo, aHi = min(ax, bx), max(ax, bx)
+                            oLo = max(aLo, minx)
+                            oHi = min(aHi, maxx)
+                            if oHi - oLo > 0.15:
+                                lo = min(lo, oLo)
+                                hi = max(hi, oHi)
+                    if hi - lo > 0.15:
+                        return (lo, hi)
+                    return None
+                # ouest / est: vertical at x = minx / maxx
+                x_s = minx if s_name == "ouest" else maxx
+                lo, hi = float("inf"), float("-inf")
+                coords = list(footprint.exterior.coords)
+                for i in range(len(coords) - 1):
+                    ax, ay = coords[i]
+                    bx, by = coords[i + 1]
+                    if abs(ax - bx) < 0.15 and abs(ax - x_s) < 0.15:
+                        aLo, aHi = min(ay, by), max(ay, by)
+                        oLo = max(aLo, miny)
+                        oHi = min(aHi, maxy)
+                        if oHi - oLo > 0.15:
+                            lo = min(lo, oLo)
+                            hi = max(hi, oHi)
+                if hi - lo > 0.15:
+                    return (lo, hi)
+                return None
+
+            for s_name, seg in sides_segs.items():
+                if seg.length <= 0:
+                    perimeter_frac[s_name] = 0.0
+                    continue
+                inter = seg.intersection(fp_boundary)
+                perimeter_frac[s_name] = (
+                    inter.length / seg.length if hasattr(inter, "length") else 0.0
+                )
+                sub = _clip_side_to_perimeter(s_name)
+                exterior_sub_range[s_name] = sub
+                if sub is None:
+                    continue
+                # Build the extrusion rectangle (exterior sub-range of the
+                # wall × _JARDIN_EXTRUDE_M outward) and intersect with
+                # jardin_zone to measure usable jardin area.
+                lo, hi = sub
+                if s_name == "sud":
+                    extr = _Poly([
+                        (lo, miny), (hi, miny),
+                        (hi, miny - _JARDIN_EXTRUDE_M),
+                        (lo, miny - _JARDIN_EXTRUDE_M),
+                    ])
+                elif s_name == "nord":
+                    extr = _Poly([
+                        (lo, maxy), (hi, maxy),
+                        (hi, maxy + _JARDIN_EXTRUDE_M),
+                        (lo, maxy + _JARDIN_EXTRUDE_M),
+                    ])
+                elif s_name == "ouest":
+                    extr = _Poly([
+                        (minx, lo), (minx, hi),
+                        (minx - _JARDIN_EXTRUDE_M, hi),
+                        (minx - _JARDIN_EXTRUDE_M, lo),
+                    ])
+                else:  # est
+                    extr = _Poly([
+                        (maxx, lo), (maxx, hi),
+                        (maxx + _JARDIN_EXTRUDE_M, hi),
+                        (maxx + _JARDIN_EXTRUDE_M, lo),
+                    ])
+                try:
+                    usable = extr.intersection(jardin_zone)
+                    jardin_area[s_name] = float(usable.area)
+                    # depth = area / exterior sub-range length, capped
+                    sub_len = max(0.1, hi - lo)
+                    jardin_depth[s_name] = min(_JARDIN_EXTRUDE_M, float(usable.area) / sub_len)
+                except Exception:
+                    jardin_area[s_name] = 0.0
+                    jardin_depth[s_name] = 0.0
+        except Exception:
+            pass
+
+    # Pre-pass: find which side the SÉJOUR will end up on. Used below to
+    # upgrade ch_parents' window to a porte-fenêtre when the apt is a corner
+    # unit (2+ exterior facades) AND ch_parents sits on the OTHER exterior
+    # side. Produces a 2nd balcony (upper floors) or 2nd jardin (RDC) for
+    # premium corner T2/T3.
+    sejour_side: str | None = None
+    for _room_pre in rooms:
+        if _room_pre.type not in (RoomType.SEJOUR, RoomType.SEJOUR_CUISINE):
+            continue
+        _sides = [s for s in _side_of_room(_room_pre) if s != palier_side]
+        if exterior_set is not None:
+            _sides = [s for s in _sides if s in exterior_set]
+        if not _sides:
+            break
+        _preferred = OPPOSITE[palier_side]
+        _priority = {"sud": 0, "ouest": 1, "est": 2, "nord": 3}
+        if any(jardin_area.get(s, 0.0) > 0.5 for s in _sides):
+            _best = max(_sides, key=lambda s: jardin_area.get(s, 0.0))
+            _ba = jardin_area.get(_best, 0.0)
+            _near = [s for s in _sides if jardin_area.get(s, 0.0) >= _ba * 0.9]
+            sejour_side = _preferred if _preferred in _near else max(_near, key=lambda s: (jardin_area.get(s, 0.0), -_priority[s]))
+        else:
+            _full = [s for s in _sides if perimeter_frac.get(s, 1.0) >= 0.98]
+            _pool = _full if _full else _sides
+            sejour_side = _preferred if _preferred in _pool else max(_pool, key=lambda s: (perimeter_frac.get(s, 0.0), -_priority[s]))
+        break
+
     for room in rooms:
         if room.type not in living_types:
             continue
@@ -725,7 +896,43 @@ def build_walls_and_openings(
         if not candidates:
             continue
         preferred = OPPOSITE[palier_side]
-        side = preferred if preferred in candidates else candidates[0]
+
+        # For the séjour porte-fenêtre: rank candidates by USABLE JARDIN AREA
+        # (extrusion inside parcelle \ footprint \ neighbours). A partially
+        # exterior wall opening onto a large L-notch wins over a fully
+        # exterior wall flush with the parcelle boundary.
+        # For chambres (windows only, no garden), keep the original
+        # perimeter-fraction logic (prefer full-perimeter walls).
+        is_sejour = room.type in (RoomType.SEJOUR, RoomType.SEJOUR_CUISINE)
+        priority = {"sud": 0, "ouest": 1, "est": 2, "nord": 3}
+        if is_sejour and any(jardin_area.get(s, 0.0) > 0.5 for s in candidates):
+            # Rank by jardin area (primary). Break ties by sud→ouest→est→nord.
+            # Only consider the `preferred` side as a tiebreaker when its
+            # jardin area is within 10% of the max (i.e. roughly equivalent).
+            best_s = max(candidates, key=lambda s: jardin_area.get(s, 0.0))
+            best_area = jardin_area.get(best_s, 0.0)
+            near_best = [
+                s for s in candidates
+                if jardin_area.get(s, 0.0) >= best_area * 0.9
+            ]
+            if preferred in near_best:
+                side = preferred
+            else:
+                side = max(
+                    near_best,
+                    key=lambda s: (jardin_area.get(s, 0.0), -priority[s]),
+                )
+        else:
+            # Fallback / chambres: use perimeter fraction as before.
+            FULL_THRESHOLD = 0.98
+            full_candidates = [
+                s for s in candidates if perimeter_frac.get(s, 1.0) >= FULL_THRESHOLD
+            ]
+            pool = full_candidates if full_candidates else candidates
+            if preferred in pool:
+                side = preferred
+            else:
+                side = max(pool, key=lambda s: (perimeter_frac.get(s, 0.0), -priority[s]))
         wall = _wall_for_side(side)
         wcoords = wall.geometry["coords"]
         wall_len = ((wcoords[1][0] - wcoords[0][0]) ** 2 + (wcoords[1][1] - wcoords[0][1]) ** 2) ** 0.5
@@ -749,6 +956,21 @@ def build_walls_and_openings(
             width = min(120, int(wall_len * 40))
             height = 200
             allege = 95
+        elif (
+            room.type == RoomType.CHAMBRE_PARENTS
+            and exterior_set is not None
+            and len(exterior_set) >= 2
+            and sejour_side is not None
+            and side != sejour_side
+            and perimeter_frac.get(side, 0.0) >= 0.98
+        ):
+            # Corner apt + chambre parents on the SECOND exterior facade
+            # → upgrade to porte-fenêtre to give access to a 2nd
+            # balcon/jardin on that side.
+            op_type = OpeningType.PORTE_FENETRE
+            width = min(180, int(wall_len * 45))
+            height = 220
+            allege = None
         else:
             op_type = OpeningType.FENETRE
             width = min(140, int(wall_len * 45))

@@ -139,6 +139,20 @@ def _compute_circulation_network(
     """
     from shapely.ops import unary_union
 
+    # Topology-aware short-circuit. If the footprint maps to a known
+    # handler (currently: L), that handler produced a coherent corridor
+    # polygon — use it directly instead of the legacy wing-par-wing
+    # reconstruction (which can't represent a continuous L corridor).
+    # Keep the result in sync with compute_apartment_slots.
+    from core.building_model.layout_dispatcher import classify_footprint_topology
+    from core.building_model.layout_l import build_l_corridor, decompose_l
+
+    if classify_footprint_topology(footprint) == "L":
+        d = decompose_l(footprint)
+        if d is not None:
+            l_corridor = build_l_corridor(d, corridor_width=1.6)
+            return unary_union([core.polygon, l_corridor])
+
     corridor_width = 1.6
     half = corridor_width / 2
     cx, cy = core.position_xy
@@ -317,6 +331,22 @@ def place_core(grid: ModularGrid, core_surface_m2: float) -> CorePlacement:
     """
     if grid.footprint is None:
         raise ValueError("grid.footprint is None")
+
+    # Topology-aware: L footprints get the core at the corridor elbow so
+    # downstream dispatcher-driven slot generation lines up with the
+    # caller's core. Matches layout_l.place_core_at_elbow exactly.
+    from core.building_model.layout_dispatcher import classify_footprint_topology
+    from core.building_model.layout_l import decompose_l, place_core_at_elbow
+
+    if classify_footprint_topology(grid.footprint) == "L":
+        d = decompose_l(grid.footprint)
+        if d is not None:
+            core_poly = place_core_at_elbow(d, core_surface_m2=core_surface_m2)
+            return CorePlacement(
+                position_xy=(core_poly.centroid.x, core_poly.centroid.y),
+                polygon=core_poly,
+                surface_m2=core_surface_m2,
+            )
 
     side = (core_surface_m2 ** 0.5)
     reflex = _find_reflex_vertex(grid.footprint)
@@ -575,6 +605,21 @@ def compute_apartment_slots(
     """
     if grid.footprint is None:
         raise ValueError("grid.footprint is None")
+
+    # Topology-aware short-circuit: if the footprint maps to a known
+    # shape handler (currently: L), delegate entirely. The handler
+    # returns a coherent (core, corridor, slots) bundle, so we use its
+    # slots and move the core to the handler-chosen position upstream
+    # if needed. When None, fall through to legacy wing-par-wing logic.
+    from core.building_model.layout_dispatcher import dispatch_layout
+
+    l_result = dispatch_layout(
+        footprint=grid.footprint,
+        mix_typologique=mix_typologique,
+        core_surface_m2=core.surface_m2,
+    )
+    if l_result is not None:
+        return l_result.slots
 
     # Compute usable area (footprint minus core + 1.4m palier) only for
     # apartment count sizing. Slot polygons themselves stay as clean

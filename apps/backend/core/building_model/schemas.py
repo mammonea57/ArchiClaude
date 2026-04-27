@@ -116,6 +116,12 @@ class Core(BaseModel):
     escalier: Escalier
     ascenseur: Ascenseur | None = None
     gaines_techniques: list[GaineTechnique] = Field(default_factory=list)
+    # Actual rectangular polygon of the core (4 corner tuples). Present
+    # when the core was computed by a topology-aware handler (e.g. the
+    # L-layout dispatcher which places the core at the right half of a
+    # landlocked slot). Absent for legacy heuristic placements — the
+    # frontend then falls back to a `sqrt(surface_m2)` square.
+    polygon_xy: list[tuple[float, float]] | None = None
 
 
 class Wall(BaseModel):
@@ -176,6 +182,12 @@ class Cellule(BaseModel):
     rooms: list[Room] = Field(default_factory=list)
     walls: list[Wall] = Field(default_factory=list)
     openings: list[Opening] = Field(default_factory=list)
+    # Explicit axis-aligned jardin polygon for RDC logements. When set,
+    # the frontend renders this polygon directly instead of extruding the
+    # jardin from the apt's exterior walls. Needed to correctly tile
+    # exterior "pocket" zones (e.g. an L-notch shared between two apts)
+    # where the naive per-wall extrusion overlaps or misses the zone.
+    jardin_polygon_xy: list[tuple[float, float]] | None = None
 
     @field_validator("typologie")
     @classmethod

@@ -315,6 +315,7 @@ def _fill_pockets_with_apts(
     cells: list[Cellule],
     circulations: list[Circulation],
     voirie_side: str,
+    parcelle=None,
 ) -> list[Cellule]:
     """Detect empty pockets ≥ 40 m² left after carving and turn them
     into new apartments, densifying the floor.
@@ -449,11 +450,23 @@ def _fill_pockets_with_apts(
             )
         except Exception:
             continue
+        # Build list of polygons of neighbour apts + pocket apts already
+        # emitted, so the jardin-depth ranker inside the wall-openings
+        # builder can avoid extruding into their territory.
+        _neighbour_polys_pocket = [
+            ShapelyPoly(c.polygon_xy) for c in cells if len(c.polygon_xy) >= 3
+        ] + [
+            ShapelyPoly(c.polygon_xy) for c in new_cells if len(c.polygon_xy) >= 3
+        ]
         walls, openings = build_walls_and_openings(
             rooms,
             (rxmin, rymin, rxmax, rymax),
             palier_side,  # type: ignore[arg-type]
             slot_id,
+            orientations=pocket_orients,
+            footprint=footprint,
+            parcelle=parcelle,
+            other_cells_polys=_neighbour_polys_pocket,
         )
         _ = actual_palier
 
@@ -535,6 +548,33 @@ def _emit_wing_corridors(
     - Non-adjacent wing, single-loaded (perp < 15 m): corridor along the
       edge CLOSEST to the core, so the connector is minimal.
     """
+    # Topology-aware short-circuit. L footprints get a single
+    # continuous corridor emitted from the L handler, matching what the
+    # solver used to clip apt slots. For other topologies fall through
+    # to the legacy wing-par-wing emission below.
+    from core.building_model.layout_dispatcher import classify_footprint_topology
+    from core.building_model.layout_l import build_l_corridor, decompose_l
+    from core.building_model.schemas import Circulation
+
+    if classify_footprint_topology(footprint) == "L":
+        d = decompose_l(footprint)
+        if d is not None:
+            l_corridor = build_l_corridor(d, corridor_width=_CORRIDOR_WIDTH_M)
+            # Do NOT subtract core here: the L corridor physically passes
+            # through the elbow where the core sits, and subtracting would
+            # shatter the corridor into disjoint arms. The core is rendered
+            # separately as its own niveau element, overlaid on top.
+            if not l_corridor.is_empty:
+                if l_corridor.geom_type == "MultiPolygon":
+                    l_corridor = max(l_corridor.geoms, key=lambda g: g.area)
+                coords = list(l_corridor.exterior.coords)[:-1]
+                return [Circulation(
+                    id=f"couloir_L_R{niveau_idx}",
+                    polygon_xy=coords,
+                    surface_m2=l_corridor.area,
+                    largeur_min_cm=int(_CORRIDOR_WIDTH_M * 100),
+                )]
+
     from shapely.geometry import Polygon as ShapelyPoly
     from core.building_model.solver import _core_adjacent_edge, _decompose_into_wings
 
@@ -715,6 +755,226 @@ def _emit_wing_corridors(
     return corridors
 
 
+def _compute_jardin_polygons(
+    cells: list[Cellule],
+    footprint,
+    parcelle,
+) -> None:
+    """Tile exterior zones (L-notch, etc.) among adjacent RDC apts.
+
+    Writes the result directly to ``cell.jardin_polygon_xy`` on each apt
+    that should receive an explicit tiled jardin polygon.
+
+    Zone-tiling rules:
+    - Detect the L-notch rectangle from the footprint via the layout_l
+      decomposition (missing bbox quadrant).
+    - Find RDC apts adjacent to each edge of the notch.
+    - If exactly 2 adjacent apts with walls on perpendicular notch edges,
+      partition the notch rectangle in HALF along the axis that splits
+      the two apts fairly (vertical cut when one apt is east, other south).
+    - Each apt's jardin = its half of the notch rect.
+
+    Apts not adjacent to the notch retain the legacy per-wall extrusion
+    handling downstream in the frontend.
+
+    Non-L footprints currently receive no explicit jardins from this
+    helper (frontend extrusion continues to work).
+    """
+    from shapely.geometry import Polygon as ShapelyPoly
+
+    try:
+        from core.building_model.layout_dispatcher import classify_footprint_topology
+        from core.building_model.layout_l import decompose_l
+    except Exception:
+        return
+
+    if classify_footprint_topology(footprint) != "L":
+        return
+    d = decompose_l(footprint)
+    if d is None:
+        return
+
+    # The L-notch rectangle = the bbox quadrant missing from the L.
+    # From the decomposition: bar covers full bbox width at one y-strip,
+    # leg is a vertical strip on one side. The notch is the rectangle
+    # on the OPPOSITE side of the leg within the bar's "other" y-strip.
+    fminx, fminy, fmaxx, fmaxy = footprint.bounds
+    bx0, by0, bx1, by1 = d.bar.bounds
+    lx0, ly0, lx1, ly1 = d.leg.bounds
+
+    # Notch spans the leg's y-range but the x-range NOT occupied by the
+    # leg within the full bbox.
+    notch_y0 = ly0
+    notch_y1 = ly1
+    # Leg is either at x=[lx0, lx1] ⊂ [fminx, fmaxx]. Notch x-range is
+    # the complement within bbox on the side OPPOSITE to the leg.
+    if lx0 - fminx > fmaxx - lx1:
+        # Leg is on the east side → notch is west side
+        notch_x0 = fminx
+        notch_x1 = lx0
+    else:
+        # Leg is on the west side → notch is east side
+        notch_x0 = lx1
+        notch_x1 = fmaxx
+
+    notch_w = notch_x1 - notch_x0
+    notch_h = notch_y1 - notch_y0
+    if notch_w < 1.0 or notch_h < 1.0:
+        return
+
+    notch_rect = ShapelyPoly([
+        (notch_x0, notch_y0), (notch_x1, notch_y0),
+        (notch_x1, notch_y1), (notch_x0, notch_y1),
+    ])
+
+    # Identify RDC logement apts adjacent to the notch. An apt is
+    # "adjacent" if one of its axis-aligned walls coincides with one of
+    # the notch's edges (within 0.3 m tolerance).
+    TOL = 0.3
+
+    def _apt_bbox(apt):
+        xs = [p[0] for p in apt.polygon_xy]
+        ys = [p[1] for p in apt.polygon_xy]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    # Which notch edge does this apt's wall sit on?
+    # Returns one of "north" (y=notch_y1), "south" (y=notch_y0),
+    # "west" (x=notch_x0), "east" (x=notch_x1), or None.
+    def _notch_edge_for(apt) -> str | None:
+        axmin, aymin, axmax, aymax = _apt_bbox(apt)
+        # Apt is adjacent to notch's SOUTH edge if its NORTH wall is at
+        # y=notch_y0 AND its x-range overlaps the notch x-range.
+        if abs(aymax - notch_y0) < TOL and axmax > notch_x0 + TOL and axmin < notch_x1 - TOL:
+            return "south"
+        if abs(aymin - notch_y1) < TOL and axmax > notch_x0 + TOL and axmin < notch_x1 - TOL:
+            return "north"
+        if abs(axmax - notch_x0) < TOL and aymax > notch_y0 + TOL and aymin < notch_y1 - TOL:
+            return "west"
+        if abs(axmin - notch_x1) < TOL and aymax > notch_y0 + TOL and aymin < notch_y1 - TOL:
+            return "east"
+        return None
+
+    # Per-edge list of adjacent apts
+    edge_apts: dict[str, list] = {"north": [], "south": [], "west": [], "east": []}
+    for apt in cells:
+        if apt.type != CelluleType.LOGEMENT or not apt.polygon_xy:
+            continue
+        edge = _notch_edge_for(apt)
+        if edge is not None:
+            edge_apts[edge].append(apt)
+
+    # Find the BEST (south-apt, east-apt) pair where the two apts'
+    # walls define a clean rectangular sub-zone of the notch. Pick the
+    # south-edge apt with the smallest y-gap to the notch and the
+    # east-edge apt with the smallest y (closest to the south apt) so
+    # the tiled zone sits in the notch's corner nearest to both walls.
+    south_apts = sorted(
+        edge_apts["south"], key=lambda a: _apt_bbox(a)[0],  # by min x
+    )
+    east_apts = sorted(
+        edge_apts["east"], key=lambda a: _apt_bbox(a)[1],  # by min y
+    )
+    west_apts = sorted(
+        edge_apts["west"], key=lambda a: _apt_bbox(a)[1],
+    )
+
+    def _tile_corner(
+        corner_apt, side_apt, *, side_is_east: bool,
+    ) -> None:
+        """Tile the rectangle defined by side_apt's wall and
+        corner_apt's wall on the OPPOSITE notch corner.
+
+        If side_is_east: side_apt's west wall is at notch_x1 (right
+        edge of notch). corner_apt's north wall is at notch_y0
+        (bottom edge). The tiled rectangle spans:
+           x = [max(notch_x0, side_apt.xmin_overlap_ancrage), notch_x1]
+           y = [notch_y0, min(notch_y1, side_apt.ymax)]
+        But constrained to the OVERLAP between the two apts' wall
+        extents so the cut yields two square-ish halves.
+        """
+        cbx0, cby0, cbx1, cby1 = _apt_bbox(corner_apt)
+        sbx0, sby0, sbx1, sby1 = _apt_bbox(side_apt)
+        if side_is_east:
+            # Side apt's west wall at x=notch_x1.
+            # Side apt occupies y-range [sby0, sby1] along the notch edge.
+            zone_y0 = notch_y0
+            zone_y1 = min(notch_y1, sby1)
+            # Corner apt's north wall at y=notch_y0.
+            # Corner apt occupies x-range [cbx0, cbx1].
+            zone_x0 = max(notch_x0, cbx0)
+            zone_x1 = notch_x1
+        else:
+            # West side apt's east wall at x=notch_x0.
+            zone_y0 = notch_y0
+            zone_y1 = min(notch_y1, sby1)
+            zone_x0 = notch_x0
+            zone_x1 = min(notch_x1, cbx1)
+        # Clip to the zone intersection: the sub-zone's max y must also
+        # be ≤ the corner apt's north-wall clearance; make it square-ish.
+        zone_y1 = min(zone_y1, zone_y0 + (zone_x1 - zone_x0) * 1.1)
+        if zone_x1 - zone_x0 < 2.0 or zone_y1 - zone_y0 < 2.0:
+            return
+        # Vertical cut at the zone's x-midpoint.
+        cut_x = (zone_x0 + zone_x1) / 2
+        if side_is_east:
+            # east-wall apt owns east half (adjacent to its wall)
+            side_apt.jardin_polygon_xy = [
+                (cut_x, zone_y0), (zone_x1, zone_y0),
+                (zone_x1, zone_y1), (cut_x, zone_y1),
+            ]
+            # corner (south-wall) apt owns west half
+            corner_apt.jardin_polygon_xy = [
+                (zone_x0, zone_y0), (cut_x, zone_y0),
+                (cut_x, zone_y1), (zone_x0, zone_y1),
+            ]
+        else:
+            side_apt.jardin_polygon_xy = [
+                (zone_x0, zone_y0), (cut_x, zone_y0),
+                (cut_x, zone_y1), (zone_x0, zone_y1),
+            ]
+            corner_apt.jardin_polygon_xy = [
+                (cut_x, zone_y0), (zone_x1, zone_y0),
+                (zone_x1, zone_y1), (cut_x, zone_y1),
+            ]
+
+    # East-side corner: the south-wall apt whose x-range overlaps the
+    # notch AND the east-wall apt closest to the notch's south edge.
+    if south_apts and east_apts:
+        # Pick the south-wall apt whose x-range lies on the west side
+        # of the notch (closest to notch_x0). We want the PAIR whose
+        # walls form the NW corner of the notch.
+        best_south = south_apts[0]  # smallest xmin → leftmost
+        best_east = east_apts[0]    # smallest ymin → closest to notch south
+        _tile_corner(best_south, best_east, side_is_east=True)
+    elif south_apts and west_apts:
+        best_south = south_apts[-1]  # rightmost
+        best_west = west_apts[0]
+        _tile_corner(best_south, best_west, side_is_east=False)
+
+    # Remaining edge-apts (not yet tiled in the corner pair) get their
+    # OWN slice of the rest of the notch. For each east-wall apt with
+    # no jardin_polygon_xy yet, assign the notch slice spanning its
+    # y-range across the FULL notch x-range. Same logic for west-wall
+    # apts. Handles cases like apt 1 at Nogent (north leg-west, alone
+    # in the upper notch with no opposing south-wall apt).
+    side_apts = (east_apts if east_apts else west_apts)
+    for apt in side_apts:
+        if apt.jardin_polygon_xy is not None:
+            continue  # already tiled in corner pair
+        ay0 = max(notch_y0, _apt_bbox(apt)[1])
+        ay1 = min(notch_y1, _apt_bbox(apt)[3])
+        if ay1 - ay0 < 2.0:
+            continue
+        apt.jardin_polygon_xy = [
+            (notch_x0, ay0), (notch_x1, ay0),
+            (notch_x1, ay1), (notch_x0, ay1),
+        ]
+
+    # Parcelle-unused for now — kept in signature for future non-L
+    # tiling cases (front voirie pockets, etc.).
+    _ = parcelle
+
+
 async def generate_building_model(
     inputs: GenerationInputs,
     session: AsyncSession,
@@ -732,10 +992,46 @@ async def generate_building_model(
 
     base_mix = inputs.brief.mix_typologique  # dict[str, float]
 
+    # Topology-aware short-circuit: if the footprint is an L, the
+    # L-layout dispatcher places the core at the right half of the
+    # landlocked slot. Override the heuristic `place_core` result so
+    # the rest of the pipeline (corridors, entries, Core schema) uses
+    # the exact polygon the dispatcher chose.
+    try:
+        from core.building_model.layout_dispatcher import dispatch_layout
+        _l_preview = dispatch_layout(
+            footprint=footprint,
+            mix_typologique=base_mix,
+            core_surface_m2=core.surface_m2,
+        )
+    except Exception:
+        _l_preview = None
+    l_core_polygon = None
+    if _l_preview is not None and _l_preview.core is not None:
+        l_core_polygon = _l_preview.core
+        _cx = (l_core_polygon.bounds[0] + l_core_polygon.bounds[2]) / 2
+        _cy = (l_core_polygon.bounds[1] + l_core_polygon.bounds[3]) / 2
+        from core.building_model.solver import CorePlacement as _CP
+        core = _CP(
+            position_xy=(_cx, _cy),
+            polygon=l_core_polygon,
+            surface_m2=l_core_polygon.area,
+        )
+
     # --- Étape 3-4: Select template per slot + adapt ---
     selector = TemplateSelector(session=session)
     adapter = TemplateAdapter()
     niveaux: list[Niveau] = []
+
+    # Build a parcelle shape once for downstream jardin-depth ranking.
+    # Falls back to None if the input geojson is malformed; the layout
+    # generator already handles a missing parcelle by using a generous
+    # buffer around the footprint as proxy.
+    parcelle_shape = None
+    try:
+        parcelle_shape = shape(inputs.parcelle_geojson) if inputs.parcelle_geojson else None
+    except Exception:
+        parcelle_shape = None
 
     for idx in range(inputs.niveaux_recommandes):
         # Per-floor mix: ground floors favour smaller typos, top floors
@@ -824,7 +1120,19 @@ async def generate_building_model(
                 # Attach the corridor-facing side so generate_apartment
                 # orients the layout (entree on palier side).
                 slot.palier_side_hint = _palier_side_for(slot)  # type: ignore[attr-defined]
-                fit = adapter.fit_to_slot(sel.template, slot)
+                # Neighbour apt polygons already placed on this floor — the
+                # layout generator uses them to discount jardin extrusions
+                # that would intrude into another apt's territory.
+                _neighbour_polys = [
+                    _ShapelyPoly(c.polygon_xy)
+                    for c in cells_for_niveau
+                    if len(c.polygon_xy) >= 3
+                ]
+                fit = adapter.fit_to_slot(
+                    sel.template, slot, footprint=footprint,
+                    parcelle=parcelle_shape,
+                    other_cells_polys=_neighbour_polys,
+                )
                 if fit.success and fit.apartment is not None:
                     # Reclassify typologie using the ACTUAL apartment surface
                     # (room sum can differ from slot poly area). Enforces the
@@ -903,6 +1211,7 @@ async def generate_building_model(
         try:
             pocket_cells = _fill_pockets_with_apts(
                 idx, footprint, cells_for_niveau, circulations, voirie_side=voirie,
+                parcelle=parcelle_shape,
             )
             cells_for_niveau.extend(pocket_cells)
         except Exception:
@@ -935,6 +1244,18 @@ async def generate_building_model(
         # not onto facades or side walls shared with another apt.
         _relocate_entries_to_corridor(cells_for_niveau, circulations)
 
+        # RDC only: tile exterior notch zones (L-notch, etc.) among the
+        # adjacent apts so each apt gets an explicit jardin polygon. The
+        # frontend will render these directly instead of extruding the
+        # jardin from the exterior walls.
+        if is_rdc:
+            try:
+                _compute_jardin_polygons(
+                    cells_for_niveau, footprint, parcelle_shape,
+                )
+            except Exception:
+                pass
+
         hauteur_hsp = _DEFAULT_HAUTEUR_RDC_M - 0.25 if is_rdc else _DEFAULT_HAUTEUR_ETAGE_M - 0.25
         niveaux.append(Niveau(
             index=idx, code=f"R+{idx}",
@@ -962,12 +1283,25 @@ async def generate_building_model(
     if inputs.niveaux_recommandes - 1 >= 2:
         ascenseur = Ascenseur(type="Schindler 3300", cabine_l_cm=110, cabine_p_cm=140, norme_pmr=True)
 
+    # Extract the 4 rectangular corners of the core polygon so the
+    # frontend can render a true rect (not a sqrt(surface) square).
+    _core_polygon_xy: list[tuple[float, float]] | None = None
+    try:
+        if core.polygon is not None and not core.polygon.is_empty:
+            _cx0, _cy0, _cx1, _cy1 = core.polygon.bounds
+            _core_polygon_xy = [
+                (_cx0, _cy0), (_cx1, _cy0), (_cx1, _cy1), (_cx0, _cy1),
+            ]
+    except Exception:
+        _core_polygon_xy = None
+
     core_schema = Core(
         position_xy=core.position_xy,
         surface_m2=core.surface_m2,
         escalier=Escalier(type="quart_tournant", giron_cm=28, hauteur_marche_cm=17, nb_marches_par_niveau=18),
         ascenseur=ascenseur,
         gaines_techniques=[],
+        polygon_xy=_core_polygon_xy,
     )
 
     # --- Assemble BuildingModel ---
