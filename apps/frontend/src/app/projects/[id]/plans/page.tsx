@@ -363,7 +363,7 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
 
               <TabsContent value="coupes">
                 <div className="space-y-4">
-                  <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                  <div data-coupe="AA" className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                     <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
                       <h2 className="text-sm font-semibold text-slate-700">
                         Coupe A-A&apos; <span className="text-xs font-normal text-slate-400">— transversale (perpendiculaire à la voirie)</span>
@@ -380,7 +380,7 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
                       <CoupeElevation bm={buildingModel.model_json} mode="coupe" cutAxis="AA" width={760} height={440} />
                     </div>
                   </div>
-                  <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                  <div data-coupe="BB" className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                     <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
                       <h2 className="text-sm font-semibold text-slate-700">
                         Coupe B-B&apos; <span className="text-xs font-normal text-slate-400">— longitudinale (parallèle à la voirie)</span>
@@ -399,14 +399,16 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
               <TabsContent value="facades">
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                   {(["nord", "sud", "est", "ouest"] as const).map((side) => {
-                    const voirie = buildingModel.model_json.site.voirie_orientations?.[0] ?? "sud";
-                    const isMain = side === voirie;
+                    const voirieAll = buildingModel.model_json.site.voirie_orientations ?? ["sud"];
+                    const isMain = side === voirieAll[0];
+                    const isSecondaryVoirie = !isMain && voirieAll.includes(side);
                     return (
-                      <div key={side} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <div key={side} data-facade={side} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
                           <h2 className="text-sm font-semibold text-slate-700">
                             Façade {side.charAt(0).toUpperCase() + side.slice(1)}
                             {isMain && <span className="ml-2 text-xs font-normal text-teal-700">principale (voirie)</span>}
+                            {isSecondaryVoirie && <span className="ml-2 text-xs font-normal text-teal-700">secondaire (voirie)</span>}
                           </h2>
                           {isMain && (
                             <a
@@ -434,7 +436,7 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
               </TabsContent>
 
               <TabsContent value="axo">
-                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                <div data-axo className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                   <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
                     <h2 className="text-sm font-semibold text-slate-700">Volumétrie — Axonométrie 3D</h2>
                     <span className="text-xs text-slate-400">Projection isométrique · illustratif PC6</span>
@@ -449,6 +451,8 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
                 <TableauxSurfacesPLU
                   bm={buildingModel.model_json}
                   bilanProgramme={bilan?.programme ?? null}
+                  bilan={bilan}
+                  brief={(project?.brief ?? {}) as Record<string, unknown>}
                 />
               </TabsContent>
 

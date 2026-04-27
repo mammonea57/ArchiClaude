@@ -15,16 +15,27 @@ interface TableauxProps {
     nb_parkings_ss_sol?: number;
     nb_parkings_exterieurs?: number;
   } | null;
+  /** Full bilan for promoteur synthèse + bankability badge */
+  bilan?: {
+    marge_pct_ht?: number;
+    marge_ht?: number;
+    depenses_total_ht?: number;
+    charge_fonciere_max_ht?: number;
+    warnings?: string[];
+  } | null;
+  /** Project brief for PLU rules (sdp_max, nb_niveaux_max, mix_typologique, etc.) */
+  brief?: Record<string, unknown>;
 }
 
 const fmtM2 = (v: number) => `${Math.round(v).toLocaleString("fr-FR")} m²`;
 const fmtPct = (v: number) => `${(v * 100).toFixed(1)} %`;
+const fmtEuro = (v: number) => `${Math.round(v).toLocaleString("fr-FR")} €`;
 
 /**
  * Tableaux réglementaires PC4 — surfaces par niveau + conformité PLU (constats).
  * Source unique : BuildingModelPayload + optional bilan programme. Pas de hardcode.
  */
-export function TableauxSurfacesPLU({ bm, bilanProgramme }: TableauxProps) {
+export function TableauxSurfacesPLU({ bm, bilanProgramme, bilan, brief }: TableauxProps) {
   const env = bm.envelope;
   const parcelle = bm.site.parcelle_surface_m2;
   const empriseM2 = env.emprise_m2;
@@ -70,8 +81,78 @@ export function TableauxSurfacesPLU({ bm, bilanProgramme }: TableauxProps) {
     : totBM.shab;
   const rendement = sdpTotal > 0 ? shabTotal / sdpTotal : 0;
 
+  // Mix typologique réel par appartement (compte les cellules.typologie)
+  const mixActual: Record<string, number> = {};
+  let totalLogements = 0;
+  for (const n of niveaux) {
+    for (const c of n.cellules) {
+      if (c.type !== "logement") continue;
+      const typo = (c.typologie ?? "?").toUpperCase();
+      mixActual[typo] = (mixActual[typo] ?? 0) + 1;
+      totalLogements++;
+    }
+  }
+  const mixPLU = (brief?.mix_typologique ?? {}) as Record<string, number>;
+  const mixRows = ["T1", "T2", "T3", "T4", "T5"].map((typo) => {
+    const nbActual = mixActual[typo] ?? 0;
+    const pctActual = totalLogements > 0 ? nbActual / totalLogements : 0;
+    const pctPLU = mixPLU[typo] ?? 0;
+    const conform = pctPLU === 0 ? null : pctActual >= pctPLU * 0.85;  // tolerance 15%
+    return { typo, nbActual, pctActual, pctPLU, conform };
+  });
+
+  // PLU constraints (depuis brief)
+  const sdpMax = (brief?.sdp_max_m2 as number | undefined) ?? null;
+  const nbNivMax = (brief?.nb_niveaux_max as number | undefined) ?? null;
+  const nbLogMax = (brief?.nb_logements_max as number | undefined) ?? null;
+  const sdpConform = sdpMax !== null ? sdpTotal <= sdpMax : null;
+  const nbNivConform = nbNivMax !== null ? env.niveaux <= nbNivMax : null;
+  const nbLogConform = nbLogMax !== null ? totBM.nbLogements <= nbLogMax : null;
+
+  // Bilan promoteur — bancabilité (marge > 12% obligatoire)
+  const margePct = bilan?.marge_pct_ht ?? null;
+  const margeOk = margePct !== null && margePct >= 0.12;
+
   return (
     <div className="space-y-6">
+      {/* ─── Bilan promoteur — synthèse bancabilité (sticky en haut) ─── */}
+      {bilan && margePct !== null && (
+        <section className={`rounded-xl border-2 px-5 py-4 flex items-center justify-between gap-6 ${
+          margeOk
+            ? "border-emerald-300 bg-emerald-50"
+            : "border-rose-300 bg-rose-50"
+        }`}>
+          <div className="flex items-center gap-4">
+            <div className={`text-3xl ${margeOk ? "text-emerald-600" : "text-rose-600"}`}>
+              {margeOk ? "✓" : "⚠"}
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Bilan promoteur — bancabilité</p>
+              <p className={`text-lg font-bold ${margeOk ? "text-emerald-900" : "text-rose-900"}`}>
+                Marge HT : {fmtPct(margePct)}
+                <span className="ml-3 text-xs font-normal text-slate-600">
+                  {margeOk ? "≥ 12% (banque OK)" : "< 12% (NON FINANÇABLE par les banques)"}
+                </span>
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4 text-right text-sm">
+            {bilan.depenses_total_ht !== undefined && (
+              <div>
+                <p className="text-xs text-slate-500">Dépenses HT</p>
+                <p className="font-mono font-semibold text-slate-900">{fmtEuro(bilan.depenses_total_ht)}</p>
+              </div>
+            )}
+            {bilan.charge_fonciere_max_ht !== undefined && (
+              <div>
+                <p className="text-xs text-slate-500">Charge foncière max HT</p>
+                <p className="font-mono font-semibold text-slate-900">{fmtEuro(bilan.charge_fonciere_max_ht)}</p>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* ─── Tableau surfaces ─── */}
       <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <header className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
@@ -150,6 +231,51 @@ export function TableauxSurfacesPLU({ bm, bilanProgramme }: TableauxProps) {
         )}
       </section>
 
+      {/* ─── Mix typologique réel vs PLU imposé ─── */}
+      {Object.keys(mixPLU).length > 0 && (
+        <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <header className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-700">Mix typologique</h2>
+              <p className="text-xs text-slate-400">PC4 · Conformité au mix imposé par le PLU communal</p>
+            </div>
+            <span className="text-xs text-slate-400">{totalLogements} logements</span>
+          </header>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th className="px-4 py-2 text-left font-medium">Typologie</th>
+                  <th className="px-4 py-2 text-right font-medium">Nb projet</th>
+                  <th className="px-4 py-2 text-right font-medium">% projet</th>
+                  <th className="px-4 py-2 text-right font-medium">% PLU min</th>
+                  <th className="px-4 py-2 text-center font-medium">Conformité</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mixRows.filter((r) => r.nbActual > 0 || r.pctPLU > 0).map((r) => (
+                  <tr key={r.typo} className="border-t border-slate-100">
+                    <td className="px-4 py-2 font-mono font-semibold text-slate-900">{r.typo}</td>
+                    <td className="px-4 py-2 text-right font-mono text-slate-700">{r.nbActual}</td>
+                    <td className="px-4 py-2 text-right font-mono text-slate-900">{fmtPct(r.pctActual)}</td>
+                    <td className="px-4 py-2 text-right font-mono text-slate-500">{r.pctPLU > 0 ? fmtPct(r.pctPLU) : "—"}</td>
+                    <td className="px-4 py-2 text-center">
+                      {r.conform === null ? (
+                        <span className="text-slate-300">—</span>
+                      ) : r.conform ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-700 text-xs font-semibold">✓ OK</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-rose-700 text-xs font-semibold">⚠ insuffisant</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {/* ─── Tableau PLU ─── */}
       <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <header className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
@@ -167,16 +293,20 @@ export function TableauxSurfacesPLU({ bm, bilanProgramme }: TableauxProps) {
               <tr>
                 <th className="px-4 py-2 text-left font-medium">Règle</th>
                 <th className="px-4 py-2 text-right font-medium">Constat projet</th>
+                <th className="px-4 py-2 text-right font-medium">Autorisé</th>
+                <th className="px-4 py-2 text-center font-medium">Conformité</th>
                 <th className="px-4 py-2 text-left font-medium">Unité / article</th>
               </tr>
             </thead>
             <tbody>
-              <PLURow label="Emprise au sol" value={`${Math.round(empriseM2)} (${fmtPct(cesConstat)})`} unit="m² · CES constaté · art. UA.9" />
-              <PLURow label="Hauteur totale" value={`${env.hauteur_totale_m.toFixed(1)}`} unit="m au-dessus du sol naturel · art. UA.10" />
-              <PLURow label="Nombre de niveaux" value={`R+${env.niveaux - 1} (${env.niveaux} niveaux)`} unit="étages sur rez" />
-              <PLURow label="Hauteur sous plafond — RDC" value={`${env.hauteur_rdc_m.toFixed(2)}`} unit="m" />
-              <PLURow label="Hauteur sous plafond — étages courants" value={`${env.hauteur_etage_courant_m.toFixed(2)}`} unit="m" />
-              <PLURow label="Pleine terre" value={`${Math.round(pleineTerreM2)} (${fmtPct(pleineTerrePct)})`} unit="m² · art. UA.13" />
+              <PLURow label="Surface plancher (SDP)" value={`${Math.round(sdpTotal)}`} max={sdpMax !== null ? `${Math.round(sdpMax)}` : null} conform={sdpConform} unit="m² · art. UA.14" />
+              <PLURow label="Nombre de niveaux" value={`R+${env.niveaux - 1} (${env.niveaux} niveaux)`} max={nbNivMax !== null ? `${nbNivMax} niveaux max` : null} conform={nbNivConform} unit="étages sur rez · art. UA.10" />
+              <PLURow label="Nombre de logements" value={`${totBM.nbLogements}`} max={nbLogMax !== null ? `${nbLogMax} max` : null} conform={nbLogConform} unit="logements · art. UA.2" />
+              <PLURow label="Emprise au sol" value={`${Math.round(empriseM2)} (${fmtPct(cesConstat)})`} max={null} conform={null} unit="m² · CES constaté · art. UA.9" />
+              <PLURow label="Hauteur totale" value={`${env.hauteur_totale_m.toFixed(1)}`} max={null} conform={null} unit="m au-dessus du sol naturel · art. UA.10" />
+              <PLURow label="Hauteur sous plafond — RDC" value={`${env.hauteur_rdc_m.toFixed(2)}`} max={null} conform={null} unit="m" />
+              <PLURow label="Hauteur sous plafond — étages courants" value={`${env.hauteur_etage_courant_m.toFixed(2)}`} max={null} conform={null} unit="m" />
+              <PLURow label="Pleine terre" value={`${Math.round(pleineTerreM2)} (${fmtPct(pleineTerrePct)})`} max={null} conform={null} unit="m² · art. UA.13" />
               <PLURow
                 label="Toiture"
                 value={
@@ -189,18 +319,19 @@ export function TableauxSurfacesPLU({ bm, bilanProgramme }: TableauxProps) {
                     return parts.join(", ");
                   })()
                 }
+                max={null} conform={null}
                 unit="—"
               />
-              <PLURow label="Orientation voirie" value={(bm.site.voirie_orientations ?? []).join(" / ") || "—"} unit="cardinale" />
+              <PLURow label="Orientation voirie" value={(bm.site.voirie_orientations ?? []).join(" / ") || "—"} max={null} conform={null} unit="cardinale" />
             </tbody>
           </table>
         </div>
 
         <div className="px-5 py-3 border-t border-slate-100 bg-amber-50/50 text-xs text-amber-800">
-          ⚠ Les valeurs maximales réglementaires (emprise max, hauteur max, retraits min)
-          nécessitent l&apos;extraction PLU pour la zone <b>{bm.metadata.zone_plu}</b>.
-          Une fois l&apos;extraction validée, la colonne « autorisé » et le badge de
-          conformité seront ajoutés automatiquement.
+          ⚠ Les valeurs marquées « — » dans la colonne Autorisé nécessitent l&apos;extraction
+          complète du règlement PLU pour la zone <b>{bm.metadata.zone_plu}</b>
+          (emprise max, hauteur max, retraits min, etc.). Une fois l&apos;extraction
+          validée, ces lignes seront automatiquement complétées.
         </div>
       </section>
     </div>
@@ -217,11 +348,21 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
-function PLURow({ label, value, unit }: { label: string; value: string; unit: string }) {
+function PLURow({ label, value, max, conform, unit }: { label: string; value: string; max: string | null; conform: boolean | null; unit: string }) {
   return (
     <tr className="border-t border-slate-100">
       <td className="px-4 py-2 text-slate-700">{label}</td>
       <td className="px-4 py-2 text-right font-mono font-semibold text-slate-900">{value}</td>
+      <td className="px-4 py-2 text-right font-mono text-slate-500">{max ?? "—"}</td>
+      <td className="px-4 py-2 text-center text-xs">
+        {conform === null ? (
+          <span className="text-slate-300">—</span>
+        ) : conform ? (
+          <span className="text-emerald-700 font-semibold">✓</span>
+        ) : (
+          <span className="text-rose-700 font-semibold">⚠ dépassement</span>
+        )}
+      </td>
       <td className="px-4 py-2 text-xs text-slate-500">{unit}</td>
     </tr>
   );
