@@ -951,6 +951,25 @@ def _compute_jardin_polygons(
         best_west = west_apts[0]
         _tile_corner(best_south, best_west, side_is_east=False)
 
+    # Remaining edge-apts (not yet tiled in the corner pair) get their
+    # OWN slice of the rest of the notch. For each east-wall apt with
+    # no jardin_polygon_xy yet, assign the notch slice spanning its
+    # y-range across the FULL notch x-range. Same logic for west-wall
+    # apts. Handles cases like apt 1 at Nogent (north leg-west, alone
+    # in the upper notch with no opposing south-wall apt).
+    side_apts = (east_apts if east_apts else west_apts)
+    for apt in side_apts:
+        if apt.jardin_polygon_xy is not None:
+            continue  # already tiled in corner pair
+        ay0 = max(notch_y0, _apt_bbox(apt)[1])
+        ay1 = min(notch_y1, _apt_bbox(apt)[3])
+        if ay1 - ay0 < 2.0:
+            continue
+        apt.jardin_polygon_xy = [
+            (notch_x0, ay0), (notch_x1, ay0),
+            (notch_x1, ay1), (notch_x0, ay1),
+        ]
+
     # Parcelle-unused for now — kept in signature for future non-L
     # tiling cases (front voirie pockets, etc.).
     _ = parcelle
