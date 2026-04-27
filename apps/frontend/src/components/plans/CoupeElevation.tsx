@@ -218,14 +218,18 @@ export function CoupeElevation({
         <FacadeOrientationBadge x={padLeft + 4} y={padTop + 6} side={side} />
       )}
 
-      {/* Height dimension on the right */}
+      {/* Height dimension on the right.
+          Coupe mode: pushed +30px out to leave room for NGT scale, AND total label dropped
+          (NGT scale on the right + header subtitle already convey total height).
+          Façade mode: standard offset, total label kept. */}
       <HeightDim
-        x1={bx0 + spanPx + 18}
+        x1={bx0 + spanPx + (mode === "coupe" ? 48 : 18)}
         yTop={by0 - totalHPx - parapetPx}
         yBottom={by0}
         totalHeightM={env.hauteur_totale_m}
         stories={stories}
         worldToPx={worldToPx}
+        showTotal={mode === "facade"}
       />
 
       {/* NGT altimetric scale (right edge — coupe mode only) */}
@@ -239,9 +243,9 @@ export function CoupeElevation({
         />
       )}
 
-      {/* Légende matériaux (coupe mode only) */}
+      {/* Légende matériaux (coupe mode only) — placed bottom-right above TitleBlock */}
       {mode === "coupe" && (
-        <LegendeMateriaux x={padLeft - 30} y={height - 78} />
+        <LegendeMateriaux x={width - 232} y={height - 148} />
       )}
 
       {/* Story codes on the left */}
@@ -254,23 +258,24 @@ export function CoupeElevation({
             <text x={padLeft - 36} y={yTop + 4} textAnchor="end" fontSize={10} fontWeight={700} fill="#0f172a">
               {s.code}
             </text>
-            <text x={padLeft - 36} y={yMid + 4} textAnchor="end" fontSize={8.5} fill="#64748b">
+            <text x={padLeft - 36} y={yMid + 4} textAnchor="end" fontSize={9.5} fontWeight={500} fill="#475569">
               HSP {s.hsp.toFixed(2)}
             </text>
           </g>
         );
       })}
 
-      {/* Header */}
+      {/* Header — title text shifts right in coupe mode to leave room for the
+          compass at TOP-LEFT (inside the cartouche) */}
       <g>
         <rect x={20} y={20} width={width - 40} height={38} fill="white" />
         <line x1={20} y1={58} x2={width - 20} y2={58} stroke="#0f172a" strokeWidth={0.5} />
-        <text x={30} y={40} fontSize={15} fontWeight={700} fill="#0f172a">
+        <text x={mode === "coupe" ? 64 : 30} y={40} fontSize={15} fontWeight={700} fill="#0f172a">
           {mode === "coupe"
             ? (cutAxis === "BB" ? "Coupe B-B' — longitudinale" : "Coupe A-A' — transversale")
             : `Façade ${SIDE_LABEL[side]}${isVoirieSide ? " — principale (voirie)" : ""}`}
         </text>
-        <text x={30} y={54} fontSize={10.5} fill="#475569">
+        <text x={mode === "coupe" ? 64 : 30} y={54} fontSize={10.5} fill="#475569">
           R+{env.niveaux - 1} · hauteur {env.hauteur_totale_m} m · RDC {env.hauteur_rdc_m} m · étages courants {env.hauteur_etage_courant_m} m
           {projectName ? ` · ${projectName}` : ""}
         </text>
@@ -307,8 +312,16 @@ export function CoupeElevation({
         })()}
       </g>
 
-      {/* Compass + scale */}
-      <NorthArrow x={width - 56} y={98} size={46} rotationDeg={bm.site.north_angle_deg ?? 0} />
+      {/* Compass + scale.
+          Coupe mode: compass moved to TOP-LEFT inside the title cartouche to avoid
+          colliding with the NGT scale on the right.
+          Façade mode: stays top-right (FacadeOrientationBadge already occupies top-left). */}
+      <NorthArrow
+        x={mode === "coupe" ? 39 : width - 56}
+        y={mode === "coupe" ? 36 : 98}
+        size={mode === "coupe" ? 22 : 46}
+        rotationDeg={bm.site.north_angle_deg ?? 0}
+      />
       <ScaleBar x={padLeft} y={height - 32} scalePxPerM={scale} meters={5} />
 
       <TitleBlock
@@ -364,9 +377,12 @@ function CoupeBody({
   // Dalle béton banché : 22 cm
   const slabH = Math.max(3.5, 0.22 * scale);
   // Acrotère : 110 cm haut × 30 cm épais + couvertine 5 cm
-  const acrotereHpx = 1.10 * scale;
+  const acrotereHpx = Math.max(11, 1.10 * scale);
   const acrotereWpx = Math.max(5, 0.30 * scale);
-  const couvertineHpx = Math.max(2.5, 0.05 * scale);
+  const couvertineHpx = Math.max(3.5, 0.05 * scale);
+  // Bandeau (nez de dalle) — protrusion 5 cm aux deux extrémités du bâtiment
+  const bandeauProtrusionPx = Math.max(2, 0.05 * scale);
+  const bandeauHeightPx = Math.max(3, slabH);
 
   // Core for stair profile: we only draw the stair run if the cut line actually
   // intersects the core's escalier footprint. We assume stair has the same
@@ -434,20 +450,44 @@ function CoupeBody({
               );
             })}
 
-            {/* Slabs between stories — béton banché 22 cm, hachures horizontales */}
+            {/* Slabs between stories — béton banché 22 cm, hachures horizontales.
+                Each slab edge gets a small "bandeau" (nez de dalle) protruding 5 cm
+                at the leftmost/rightmost edges — adds an architectural detail. */}
             {stories.map((s, i) => {
               const [, yB] = worldToPx(sA, s.yBase);
               return (
-                <rect
-                  key={`slab-${segIdx}-${i}`}
-                  x={xA - 2}
-                  y={yB - slabH}
-                  width={segPx + 4}
-                  height={slabH}
-                  fill="url(#pat-beton-banche)"
-                  stroke="#0f172a"
-                  strokeWidth={0.7}
-                />
+                <g key={`slab-${segIdx}-${i}`}>
+                  {/* Slab itself */}
+                  <rect
+                    x={xA - 2}
+                    y={yB - slabH}
+                    width={segPx + 4}
+                    height={slabH}
+                    fill="url(#pat-beton-banche)"
+                    stroke="#0f172a"
+                    strokeWidth={0.7}
+                  />
+                  {/* Bandeau gauche — protrusion 5 cm beige (nez de dalle) */}
+                  <rect
+                    x={xA - 2 - bandeauProtrusionPx}
+                    y={yB - slabH - 0.5}
+                    width={bandeauProtrusionPx + 1}
+                    height={bandeauHeightPx + 1}
+                    fill="#d9d0b8"
+                    stroke="#0f172a"
+                    strokeWidth={0.5}
+                  />
+                  {/* Bandeau droit — protrusion 5 cm beige (nez de dalle) */}
+                  <rect
+                    x={xB + 1}
+                    y={yB - slabH - 0.5}
+                    width={bandeauProtrusionPx + 1}
+                    height={bandeauHeightPx + 1}
+                    fill="#d9d0b8"
+                    stroke="#0f172a"
+                    strokeWidth={0.5}
+                  />
+                </g>
               );
             })}
 
@@ -477,30 +517,31 @@ function CoupeBody({
                 stroke="#0f172a"
                 strokeWidth={0.7}
               />
-              {/* Couvertine zinc gauche — débord 1 cm avec larmier */}
+              {/* Couvertine zinc gauche — débord 1 cm avec larmier (trait épais
+                  pour rester lisible aux petits zooms) */}
               <rect
                 x={xA - 1.5}
                 y={yTopTop - slabH - acrotereHpx - couvertineHpx}
                 width={acrotereWpx + 3}
                 height={couvertineHpx}
-                fill="#52525b"
-                stroke="#18181b"
-                strokeWidth={0.5}
+                fill="#3f3f46"
+                stroke="#0a0a0a"
+                strokeWidth={1.5}
               />
               {/* Larmier (drip-edge) gauche */}
-              <line x1={xA - 1.5} y1={yTopTop - slabH - acrotereHpx} x2={xA - 1.5} y2={yTopTop - slabH - acrotereHpx + 2} stroke="#18181b" strokeWidth={0.7} />
+              <line x1={xA - 1.5} y1={yTopTop - slabH - acrotereHpx} x2={xA - 1.5} y2={yTopTop - slabH - acrotereHpx + 2.5} stroke="#0a0a0a" strokeWidth={1.0} />
               {/* Couvertine zinc droite */}
               <rect
                 x={xB - acrotereWpx - 1.5}
                 y={yTopTop - slabH - acrotereHpx - couvertineHpx}
                 width={acrotereWpx + 3}
                 height={couvertineHpx}
-                fill="#52525b"
-                stroke="#18181b"
-                strokeWidth={0.5}
+                fill="#3f3f46"
+                stroke="#0a0a0a"
+                strokeWidth={1.5}
               />
               {/* Larmier (drip-edge) droit */}
-              <line x1={xB + 1.5} y1={yTopTop - slabH - acrotereHpx} x2={xB + 1.5} y2={yTopTop - slabH - acrotereHpx + 2} stroke="#18181b" strokeWidth={0.7} />
+              <line x1={xB + 1.5} y1={yTopTop - slabH - acrotereHpx} x2={xB + 1.5} y2={yTopTop - slabH - acrotereHpx + 2.5} stroke="#0a0a0a" strokeWidth={1.0} />
               {/* Étanchéité face intérieure acrotère gauche (relevé) */}
               <rect
                 x={xA + acrotereWpx}
@@ -673,7 +714,9 @@ function CoupeBody({
         );
       })}
 
-      {/* Personnage échelle 1.75 m au RDC — silhouette pour donner l'échelle */}
+      {/* Personnage échelle 1.75 m au RDC — silhouette pour donner l'échelle.
+          Opacity 0.85 (était 0.55) + lit double 200×90 cm posé à côté pour
+          ancrer encore l'échelle. */}
       {(() => {
         const rdc = stories[0];
         if (!rdc || footprintIntervals.length === 0) return null;
@@ -691,24 +734,50 @@ function CoupeBody({
         const footY = yFoot - slabH;
         const headCy = footY - personHpx + headR;
         const cx = pxFoot;
+        // Mobilier : lit double 200 × 90 cm (vue en coupe = simple rectangle)
+        const bedWpx = 2.0 * scale;
+        const bedHpx = 0.55 * scale;  // hauteur tête de lit visible
+        const bedX = cx + personWpx * 1.4;
+        const bedY = footY - bedHpx;
+        const mattressHpx = 0.30 * scale;
         return (
-          <g opacity={0.55} stroke="#1e293b" strokeWidth={0.9} fill="none">
-            {/* Tête */}
-            <circle cx={cx} cy={headCy} r={headR} />
-            {/* Corps + jambes */}
-            <path
-              d={`M ${cx} ${headCy + headR}
-                  L ${cx} ${footY - personHpx * 0.40}
-                  M ${cx} ${footY - personHpx * 0.40}
-                  L ${cx - personWpx * 0.35} ${footY}
-                  M ${cx} ${footY - personHpx * 0.40}
-                  L ${cx + personWpx * 0.35} ${footY}`}
-            />
-            {/* Bras */}
-            <path
-              d={`M ${cx - personWpx * 0.42} ${headCy + headR + personHpx * 0.12}
-                  L ${cx + personWpx * 0.42} ${headCy + headR + personHpx * 0.12}`}
-            />
+          <g>
+            {/* Mobilier — lit double silhouette beige */}
+            <g opacity={0.4} stroke="#a78b65" strokeWidth={0.7} fill="#e8d9bd">
+              {/* Cadre du lit */}
+              <rect x={bedX} y={bedY} width={bedWpx} height={bedHpx} />
+              {/* Matelas (partie supérieure) */}
+              <rect x={bedX + 1.5} y={bedY + bedHpx - mattressHpx} width={bedWpx - 3} height={mattressHpx} fill="#f0e4ce" />
+              {/* Tête de lit (rectangle plus haut à gauche) */}
+              <rect x={bedX} y={bedY - bedHpx * 0.5} width={Math.max(3, 0.08 * scale)} height={bedHpx * 0.5} />
+              {/* Oreiller */}
+              <rect
+                x={bedX + Math.max(3, 0.08 * scale) + 2}
+                y={bedY + bedHpx - mattressHpx - 1}
+                width={bedWpx * 0.20}
+                height={mattressHpx * 0.45}
+                fill="#faf3e0"
+              />
+            </g>
+            {/* Personnage */}
+            <g opacity={0.85} stroke="#1e293b" strokeWidth={1.1} fill="none" strokeLinecap="round">
+              {/* Tête */}
+              <circle cx={cx} cy={headCy} r={headR} fill="#f8fafc" />
+              {/* Corps + jambes */}
+              <path
+                d={`M ${cx} ${headCy + headR}
+                    L ${cx} ${footY - personHpx * 0.40}
+                    M ${cx} ${footY - personHpx * 0.40}
+                    L ${cx - personWpx * 0.35} ${footY}
+                    M ${cx} ${footY - personHpx * 0.40}
+                    L ${cx + personWpx * 0.35} ${footY}`}
+              />
+              {/* Bras */}
+              <path
+                d={`M ${cx - personWpx * 0.42} ${headCy + headR + personHpx * 0.12}
+                    L ${cx + personWpx * 0.42} ${headCy + headR + personHpx * 0.12}`}
+              />
+            </g>
           </g>
         );
       })()}
@@ -1081,11 +1150,12 @@ function renderBalconyOrLoggia({
 /* ─────────── Height dimension ─────────── */
 
 function HeightDim({
-  x1, yTop, yBottom, totalHeightM, stories, worldToPx,
+  x1, yTop, yBottom, totalHeightM, stories, worldToPx, showTotal = true,
 }: {
   x1: number; yTop: number; yBottom: number; totalHeightM: number;
   stories: Array<{ code: string; yBase: number; height: number }>;
   worldToPx: (x: number, y: number) => [number, number];
+  showTotal?: boolean;
 }) {
   return (
     <g>
@@ -1094,10 +1164,12 @@ function HeightDim({
       {/* arrows top/bottom */}
       <polygon points={`${x1},${yTop} ${x1 - 3},${yTop + 6} ${x1 + 3},${yTop + 6}`} fill="#0f172a" />
       <polygon points={`${x1},${yBottom} ${x1 - 3},${yBottom - 6} ${x1 + 3},${yBottom - 6}`} fill="#0f172a" />
-      {/* Total */}
-      <text x={x1 + 8} y={(yTop + yBottom) / 2} fontSize={10} fontWeight={700} fill="#0f172a" dominantBaseline="middle">
-        {totalHeightM.toFixed(1)} m
-      </text>
+      {/* Total (skipped in coupe — NGT scale + header already convey total height) */}
+      {showTotal && (
+        <text x={x1 + 8} y={(yTop + yBottom) / 2} fontSize={10} fontWeight={700} fill="#0f172a" dominantBaseline="middle">
+          {totalHeightM.toFixed(1)} m
+        </text>
+      )}
 
       {/* Inter-story ticks */}
       {stories.map((s, i) => {
