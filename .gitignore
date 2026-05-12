@@ -50,11 +50,16 @@ tmp/
 
 # Render outputs : 178MB of intermediate iter PNGs — too big for git.
 # Only the iter #320 baseline is version-controlled (refs/baselines/).
-refs/renders/
+# NOTE : we ignore the heavy files (PNG, JPG, EXR) NOT the whole directory,
+# because git's `!` exception doesn't work if the parent directory itself
+# is excluded. This way the .usda + .meta.json text files flow normally.
+refs/renders/*.png
+refs/renders/*.jpg
+refs/renders/*.jpeg
+refs/renders/*.exr
+refs/renders/*.tiff
+refs/renders/index.html
 backups/
-# Exception : .usda scenes are USD ASCII (~MB text) and we need to ship
-# them from Mac (Blender step) → MSI render station (UE5 step).
-!refs/renders/*.usda
 
 
 # Scheduled tasks lock
