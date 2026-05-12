@@ -125,6 +125,32 @@ def main() -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
+    # Try Remote Execution first : if UE5 is already open with the project
+    # and Python > Enable Remote Execution is on, we can drive that editor
+    # over UDP/TCP instead of cold-starting a separate UnrealEditor-Cmd
+    # process (which would conflict on the project lock). Exit code 3 from
+    # the remote helper means "no UE5 found" — in that case we fall back
+    # to the cold-start path below.
+    remote_helper = Path(__file__).resolve().parent / "run_ue5_remote.py"
+    if remote_helper.exists():
+        remote_cmd = [
+            sys.executable, str(remote_helper),
+            "--usda", str(args.usda),
+            "--output", str(args.output),
+            "--width", str(args.width),
+            "--height", str(args.height),
+        ]
+        if args.script is not None:
+            remote_cmd += ["--script", str(args.script)]
+        print(f"Trying Remote Execution : {' '.join(remote_cmd)}")
+        remote_proc = subprocess.run(remote_cmd)
+        if remote_proc.returncode == 0:
+            return 0
+        if remote_proc.returncode != 3:
+            # Real error from the remote path — don't mask it by cold-starting.
+            return remote_proc.returncode
+        print("Remote Execution unavailable — falling back to cold-start UnrealEditor-Cmd.")
+
     # Build the UE5 command. The Python script picks up paths via env vars.
     env = os.environ.copy()
     env["UE5_USDA_PATH"] = str(args.usda)
