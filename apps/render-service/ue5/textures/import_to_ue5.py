@@ -337,20 +337,79 @@ def create_material_instance(
     return mi
 
 
-# ── Health check on parent material ───────────────────────────────
-def _parent_material_is_healthy(mat: "unreal.Material") -> bool:
-    """Quick sanity check : the parent must have working connections from
-    its Albedo/Normal TextureSampleParameter2D expressions to MP_BASE_COLOR
-    and MP_NORMAL. Earlier script versions used "RGB" output name (invalid),
-    leaving those connections silently broken. Detect and rebuild if so."""
+# ── In-place repair of the parent material ────────────────────────
+def _list_material_expressions(mat: "unreal.Material") -> list:
+    """Return the list of MaterialExpression objects inside a Material,
+    coping with the EditorOnlyData split that happened in UE5.1+."""
     try:
-        MEL = unreal.MaterialEditingLibrary
-        has_base_color = MEL.is_material_property_active(mat, unreal.MaterialProperty.MP_BASE_COLOR)
-        has_normal = MEL.is_material_property_active(mat, unreal.MaterialProperty.MP_NORMAL)
-        return bool(has_base_color and has_normal)
+        eod = mat.get_editor_only_data()
     except Exception:
-        # If we can't check, conservatively assume it needs a rebuild
+        eod = None
+    if eod is not None:
+        try:
+            coll = eod.get_editor_property("expression_collection")
+            return list(coll.get_editor_property("expressions"))
+        except Exception:
+            pass
+    try:
+        return list(mat.get_editor_property("expressions"))
+    except Exception:
+        return []
+
+
+def repair_parent_material(mat: "unreal.Material") -> bool:
+    """Walk the existing parent material's expressions, find the
+    TextureSampleParameter2D nodes by parameter_name (Albedo / Normal /
+    ARM), disconnect any existing wiring to the standard material
+    properties, then reconnect them with the correct output pin names.
+
+    Idempotent : safe to run on a healthy parent (no-op) or a broken one
+    (will fix it).
+    """
+    MEL = unreal.MaterialEditingLibrary
+    found = {"Albedo": None, "Normal": None, "ARM": None}
+    for e in _list_material_expressions(mat):
+        if not isinstance(e, unreal.MaterialExpressionTextureSampleParameter2D):
+            continue
+        try:
+            name = str(e.get_editor_property("parameter_name"))
+        except Exception:
+            continue
+        if name in found:
+            found[name] = e
+
+    missing = [k for k, v in found.items() if v is None]
+    if missing:
+        log(f"  ! repair: missing texture parameters {missing}")
         return False
+
+    log("Repairing parent material connections (in place) …")
+    # Disconnect any existing wiring to the affected outputs first so we
+    # don't double up. disconnect_material_property may raise on slots
+    # that aren't currently connected — that's fine, we ignore.
+    for prop in (
+        unreal.MaterialProperty.MP_BASE_COLOR,
+        unreal.MaterialProperty.MP_NORMAL,
+        unreal.MaterialProperty.MP_AMBIENT_OCCLUSION,
+        unreal.MaterialProperty.MP_ROUGHNESS,
+        unreal.MaterialProperty.MP_METALLIC,
+    ):
+        try:
+            MEL.disconnect_material_property(mat, prop)
+        except Exception:
+            pass
+
+    # Reconnect using the correct output-pin names ("" for the main RGB
+    # output of a TextureSampleParameter2D, "R/G/B" for ARM channels).
+    MEL.connect_material_property(found["Albedo"], "", unreal.MaterialProperty.MP_BASE_COLOR)
+    MEL.connect_material_property(found["Normal"], "", unreal.MaterialProperty.MP_NORMAL)
+    MEL.connect_material_property(found["ARM"], "R", unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
+    MEL.connect_material_property(found["ARM"], "G", unreal.MaterialProperty.MP_ROUGHNESS)
+    MEL.connect_material_property(found["ARM"], "B", unreal.MaterialProperty.MP_METALLIC)
+    MEL.recompile_material(mat)
+    unreal.EditorAssetLibrary.save_loaded_asset(mat)
+    log("  ✓ repaired and recompiled")
+    return True
 
 
 # ── Main ──────────────────────────────────────────────────────────
@@ -366,15 +425,16 @@ def main() -> int:
         log("   Run download_polyhaven.py first.")
         return 2
 
-    # Self-heal : if a previous run left an unhealthy parent material with
-    # broken BaseColor/Normal connections (old "RGB" output-pin bug), force
-    # a rebuild. Idempotent on a healthy parent.
+    # Get or create the parent material. If it already exists, always run
+    # the in-place repair pass — it's idempotent and fixes the "RGB"
+    # output-pin bug from earlier script versions without needing to
+    # delete the asset (which would orphan all the child instances).
     existing_parent = unreal.EditorAssetLibrary.load_asset(PARENT_MAT_PATH)
-    needs_rebuild = (existing_parent is not None
-                     and not _parent_material_is_healthy(existing_parent))
-    if needs_rebuild:
-        log("⚠ Existing parent material has broken connections — forcing rebuild …")
-    parent = ensure_parent_material(force_rebuild=needs_rebuild)
+    if existing_parent is not None:
+        parent = existing_parent
+        repair_parent_material(parent)
+    else:
+        parent = ensure_parent_material()
     log(f"✓ Parent material : {PARENT_MAT_PATH}")
 
     n_done = 0
