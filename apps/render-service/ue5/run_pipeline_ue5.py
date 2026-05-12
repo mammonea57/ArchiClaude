@@ -30,6 +30,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Force UTF-8 on stdout so the log glyphs (✓ ✗ etc.) don't blow up the
+# default Windows cp1252 console.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+except Exception:
+    pass
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 RENDER_SERVICE_ROOT = REPO_ROOT / "apps" / "render-service"
@@ -49,14 +56,13 @@ def run_blender_step(iter_tag: int) -> tuple[Path, Path]:
     log(f"Step 1/4 : Blender + USD export (iter #{iter_tag}) …")
     env = os.environ.copy()
     env["BLENDER_ITER"] = str(iter_tag)
-    venv_python = RENDER_SERVICE_ROOT / ".venv" / "bin" / "python3"
-    if not venv_python.exists():
-        venv_python = Path(sys.executable)
-    cmd = [
-        str(venv_python.parent / "modal"),
-        "run",
-        str(BLENDER_ENDPOINT),
-    ]
+    # Force UTF-8 inside the modal subprocess too — Modal's logs use ✓ etc.
+    # which would crash on the default Windows cp1252 console.
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    # Run modal as a python module so we don't have to guess whether the
+    # executable is `modal`, `modal.exe`, in bin/ (POSIX) or Scripts/ (Win).
+    cmd = [sys.executable, "-m", "modal", "run", str(BLENDER_ENDPOINT)]
     log(f"  command : {' '.join(cmd)}")
     proc = subprocess.run(cmd, env=env, cwd=str(REPO_ROOT))
     if proc.returncode != 0:
@@ -170,11 +176,27 @@ def main() -> int:
                         help="Iteration number for naming (e.g. 401)")
     parser.add_argument("--mock-ue5", action="store_true",
                         help="Skip UE5 step (copy Blender PNG instead) — for testing.")
+    parser.add_argument("--usda-file", type=Path, default=None,
+                        help="Use an existing .usda file and skip the Blender step. "
+                             "Useful when the Blender step was already run on another "
+                             "machine (e.g. on the Mac dev box) and the result was "
+                             "shared via git. Pair with --blender-png to supply the "
+                             "matching Blender preview for meta.json.")
+    parser.add_argument("--blender-png", type=Path, default=None,
+                        help="Path to the Blender PNG that goes with --usda-file. "
+                             "Optional ; only used in --mock-ue5 mode or meta.json.")
     args = parser.parse_args()
 
     log(f"ArchiClaude pipeline — iter #{args.iter} {'(MOCK UE5)' if args.mock_ue5 else ''}")
     try:
-        blender_png, usda = run_blender_step(args.iter)
+        if args.usda_file:
+            if not args.usda_file.exists():
+                raise RuntimeError(f"--usda-file not found : {args.usda_file}")
+            log(f"Step 1/4 : skipped (using existing USDA : {args.usda_file.name})")
+            usda = args.usda_file
+            blender_png = args.blender_png if args.blender_png and args.blender_png.exists() else usda
+        else:
+            blender_png, usda = run_blender_step(args.iter)
         ue5_png = RENDERS_DIR / f"ue5_tmp_iter{args.iter}.png"
         run_ue5_step(usda, ue5_png, args.mock_ue5, blender_png)
         regression = run_regression_step(ue5_png)
