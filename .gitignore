@@ -60,5 +60,9 @@ backups/
 apps/render-service/training/
 apps/render-service/.venv/
 
+# UE5 texture cache (downloaded from Polyhaven via download_polyhaven.py).
+# Tens of GB of jpg/png. Reproducible by re-running the downloader.
+apps/render-service/ue5/textures/textures_cache/
+
 # Backend scripts that are project-specific
 apps/backend/scripts/insert_bm_v5.py

@@ -144,22 +144,39 @@ def import_usda(usda_path: str) -> None:
     log("✓ USDA imported via UsdStageActor")
 
 
-def _load_megascans_material(mat_name: str) -> Optional[unreal.MaterialInterface]:
-    """Try to load a pre-downloaded Megascans Material asset by slug."""
-    if mat_name not in MEGASCANS_ASSETS:
-        return None
-    slug = MEGASCANS_ASSETS[mat_name]["slug"]
-    # Megascans assets land under /Game/Megascans/Surfaces/<slug>/M_<slug>
-    paths_to_try = [
-        f"/Game/Megascans/Surfaces/{slug}/M_{slug}",
-        f"/Game/Megascans/Surfaces/{slug}/M_{slug}_inst",
-        f"/Game/MS_Surfaces/{slug}/M_{slug}",
-    ]
-    for p in paths_to_try:
-        asset = unreal.EditorAssetLibrary.load_asset(p)
-        if asset is not None:
-            return asset
+def _load_archiclaude_material(mat_name: str) -> Optional[unreal.MaterialInterface]:
+    """Resolve the MaterialInstance for one of our internal material names.
+
+    Resolution order :
+      1. /Game/AC/Materials/M_<name> — Polyhaven-backed MaterialInstance,
+         the primary path produced by `textures/import_to_ue5.py`.
+      2. Legacy Megascans paths under /Game/Megascans/Surfaces/<slug>/M_<slug>
+         (kept as a fallback for setups where Megascans assets were
+         manually downloaded via Fab/Bridge).
+
+    Returns None if nothing matches — caller will use the flat-color fallback.
+    """
+    # Primary : ArchiClaude Polyhaven-backed material instance
+    ac_path = f"/Game/AC/Materials/M_{mat_name}"
+    asset = unreal.EditorAssetLibrary.load_asset(ac_path)
+    if asset is not None:
+        return asset
+    # Legacy Megascans fallback
+    if mat_name in MEGASCANS_ASSETS:
+        slug = MEGASCANS_ASSETS[mat_name]["slug"]
+        for p in (
+            f"/Game/Megascans/Surfaces/{slug}/M_{slug}",
+            f"/Game/Megascans/Surfaces/{slug}/M_{slug}_inst",
+            f"/Game/MS_Surfaces/{slug}/M_{slug}",
+        ):
+            asset = unreal.EditorAssetLibrary.load_asset(p)
+            if asset is not None:
+                return asset
     return None
+
+
+# Backwards-compatible alias for any caller still using the old name
+_load_megascans_material = _load_archiclaude_material
 
 
 def _make_fallback_material(mat_name: str) -> unreal.MaterialInterface:
@@ -184,31 +201,44 @@ def _make_fallback_material(mat_name: str) -> unreal.MaterialInterface:
     return new_asset
 
 
+def _known_material_names() -> list:
+    """Return the canonical list of material names to match labels against.
+    Prefers the centralised MATERIAL_LIBRARY in textures/library.py, falls
+    back to MEGASCANS_ASSETS keys when running outside the repo tree."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from textures.library import MATERIAL_LIBRARY  # type: ignore
+        return list(MATERIAL_LIBRARY.keys())
+    except Exception:
+        return list(MEGASCANS_ASSETS.keys())
+
+
 def apply_materials_to_imported_meshes() -> int:
     """Walk all StaticMeshActors in the level. For each, match its name
-    against our material names. Assign Megascans if available, else fallback."""
+    against our material names. Assign /Game/AC/Materials/M_<name> if
+    available (Polyhaven-backed), else fallback to a flat sRGB material."""
     log("Applying materials to imported meshes …")
-    n_applied_meg = 0
+    n_applied_ac = 0
     n_applied_fb = 0
+    known = _known_material_names()
     for actor in unreal.EditorLevelLibrary.get_all_level_actors():
         if not isinstance(actor, unreal.StaticMeshActor):
             continue
         label = actor.get_actor_label().lower()
-        # Try to match by our material names
-        for mat_name in MEGASCANS_ASSETS.keys():
+        for mat_name in known:
             if mat_name in label:
-                meg = _load_megascans_material(mat_name)
-                if meg is not None:
-                    actor.static_mesh_component.set_material(0, meg)
-                    n_applied_meg += 1
+                ac = _load_archiclaude_material(mat_name)
+                if ac is not None:
+                    actor.static_mesh_component.set_material(0, ac)
+                    n_applied_ac += 1
                 else:
                     fb = _make_fallback_material(mat_name)
                     if fb is not None:
                         actor.static_mesh_component.set_material(0, fb)
                         n_applied_fb += 1
                 break
-    log(f"✓ Materials : {n_applied_meg} Megascans + {n_applied_fb} fallback")
-    return n_applied_meg + n_applied_fb
+    log(f"✓ Materials : {n_applied_ac} ArchiClaude + {n_applied_fb} fallback")
+    return n_applied_ac + n_applied_fb
 
 
 def setup_lighting() -> None:
