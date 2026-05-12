@@ -357,6 +357,61 @@ def _list_material_expressions(mat: "unreal.Material") -> list:
         return []
 
 
+def _find_parameter_expression(mat: "unreal.Material", param_name: str):
+    """Locate a TextureSampleParameter2D by walking the standard material
+    property inputs. Works in UE 5.7 where mat.expressions is protected."""
+    MEL = unreal.MaterialEditingLibrary
+    for prop in (
+        unreal.MaterialProperty.MP_BASE_COLOR,
+        unreal.MaterialProperty.MP_NORMAL,
+        unreal.MaterialProperty.MP_AMBIENT_OCCLUSION,
+        unreal.MaterialProperty.MP_ROUGHNESS,
+        unreal.MaterialProperty.MP_METALLIC,
+    ):
+        node = MEL.get_material_property_input_node(mat, prop)
+        if node is None:
+            continue
+        try:
+            if str(node.get_editor_property("parameter_name")) == param_name:
+                return node
+        except Exception:
+            pass
+    return None
+
+
+def assign_parent_defaults(
+    mat: "unreal.Material",
+    defaults: "dict[str, unreal.Texture2D]",
+) -> int:
+    """Set sensible default textures on the parent's TextureSampleParameter2D
+    expressions so the shader compiles cleanly. Without this, UE5 falls
+    back to the engine DefaultTexture (a Color asset) which mismatches the
+    Normal/LinearColor sampler_types and breaks the parent's shader,
+    leaving every instance rendering the world-grid checker.
+
+    Returns the number of defaults that were successfully assigned.
+    """
+    MEL = unreal.MaterialEditingLibrary
+    n = 0
+    for param_name, tex in defaults.items():
+        if tex is None:
+            continue
+        node = _find_parameter_expression(mat, param_name)
+        if node is None:
+            log(f"  ! no expression for parameter '{param_name}'")
+            continue
+        try:
+            node.set_editor_property("texture", tex)
+            n += 1
+        except Exception as e:
+            log(f"  ! could not set default for {param_name} : {e}")
+    if n:
+        MEL.recompile_material(mat)
+        unreal.EditorAssetLibrary.save_loaded_asset(mat)
+        log(f"  ✓ {n} parent defaults assigned + recompiled")
+    return n
+
+
 def repair_parent_material(mat: "unreal.Material") -> bool:
     """Walk the existing parent material's expressions, find the
     TextureSampleParameter2D nodes by parameter_name (Albedo / Normal /
@@ -367,17 +422,11 @@ def repair_parent_material(mat: "unreal.Material") -> bool:
     (will fix it).
     """
     MEL = unreal.MaterialEditingLibrary
-    found = {"Albedo": None, "Normal": None, "ARM": None}
-    for e in _list_material_expressions(mat):
-        if not isinstance(e, unreal.MaterialExpressionTextureSampleParameter2D):
-            continue
-        try:
-            name = str(e.get_editor_property("parameter_name"))
-        except Exception:
-            continue
-        if name in found:
-            found[name] = e
-
+    found = {
+        "Albedo": _find_parameter_expression(mat, "Albedo"),
+        "Normal": _find_parameter_expression(mat, "Normal"),
+        "ARM":    _find_parameter_expression(mat, "ARM"),
+    }
     missing = [k for k, v in found.items() if v is None]
     if missing:
         log(f"  ! repair: missing texture parameters {missing}")
@@ -399,8 +448,9 @@ def repair_parent_material(mat: "unreal.Material") -> bool:
         except Exception:
             pass
 
-    # Reconnect using the correct output-pin names ("" for the main RGB
-    # output of a TextureSampleParameter2D, "R/G/B" for ARM channels).
+    # Reconnect — "RGB" is a valid alias for the default output on
+    # TextureSampleParameter2D in UE 5.7, but the canonical name is "" for
+    # the main RGB output. Use "" for portability.
     MEL.connect_material_property(found["Albedo"], "", unreal.MaterialProperty.MP_BASE_COLOR)
     MEL.connect_material_property(found["Normal"], "", unreal.MaterialProperty.MP_NORMAL)
     MEL.connect_material_property(found["ARM"], "R", unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
@@ -439,6 +489,7 @@ def main() -> int:
 
     n_done = 0
     n_fallback = 0
+    first_full_textures: "dict[str, unreal.Texture2D]" = {}
     for name, mat_def in MATERIAL_LIBRARY.items():
         textures = import_textures_for_material(mat_def, cache_root)
         if mat_def.polyhaven_slug and not textures:
@@ -447,10 +498,24 @@ def main() -> int:
             n_fallback += 1
         else:
             n_done += 1
+            # The first material with full textures becomes the parent's
+            # default — needed so the parent shader compiles cleanly.
+            # Without compatible defaults UE5 falls back to the engine
+            # DefaultTexture (Color) which mismatches Normal/LinearColor
+            # sampler_types and breaks every child instance's rendering.
+            if not first_full_textures:
+                first_full_textures = dict(textures)
         # If the parent was rebuilt, instances need to be re-linked too.
         # create_material_instance handles both creation and re-linking.
         create_material_instance(mat_def, parent, textures)
         log(f"✓ M_{name} ready ({len(textures)} textures wired)")
+
+    # Assign parent defaults from the first material we successfully
+    # imported. We do this after the per-material loop so the textures
+    # have been imported into UE5 already.
+    if first_full_textures:
+        log("Assigning parent material defaults …")
+        assign_parent_defaults(parent, first_full_textures)
 
     log("")
     log(f"Done : {n_done} with textures, {n_fallback} flat-tint fallback.")
