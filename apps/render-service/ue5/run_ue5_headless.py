@@ -63,15 +63,27 @@ def find_ue5_binary(override: Optional[str] = None) -> Optional[Path]:
 
 
 def find_default_project() -> Optional[Path]:
-    """Look for ArchiClaude.uproject in common locations."""
-    candidates = [
-        Path.cwd() / "ArchiClaudeUE5" / "ArchiClaude.uproject",
-        Path.cwd() / "ArchiClaude.uproject",
-        Path.home() / "Documents" / "Unreal Projects" / "ArchiClaude" / "ArchiClaude.uproject",
+    """Look for the ArchiClaude UE5 project in common locations.
+
+    Probes both `ArchiClaude.uproject` (canonical name) and `archi.uproject`
+    (short name used on the MSI render station). On Windows the project is
+    deliberately kept out of `Documents` because that folder is OneDrive-synced
+    on many setups and ruins UE5 perf — `C:\\UnrealProjects\\` is preferred.
+    """
+    project_names = ("ArchiClaude.uproject", "archi.uproject")
+    project_dirs = [
+        Path.cwd() / "ArchiClaudeUE5",
+        Path.cwd(),
+        Path("C:/UnrealProjects/ArchiClaude"),
+        Path("C:/UnrealProjects/archi"),
+        Path.home() / "Documents" / "Unreal Projects" / "ArchiClaude",
+        Path.home() / "Documents" / "Unreal Projects" / "archi",
     ]
-    for c in candidates:
-        if c.exists():
-            return c
+    for d in project_dirs:
+        for name in project_names:
+            candidate = d / name
+            if candidate.exists():
+                return candidate
     return None
 
 
