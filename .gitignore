@@ -47,3 +47,18 @@ docker-compose.override.yml
 # Cloud runtime files
 tmp/
 .vercel/
+
+# Render outputs : 178MB of intermediate iter PNGs — too big for git.
+# Only the iter #320 baseline is version-controlled (refs/baselines/).
+refs/renders/
+backups/
+
+# Scheduled tasks lock
+.claude/scheduled_tasks.lock
+
+# Render-service training data + venv
+apps/render-service/training/
+apps/render-service/.venv/
+
+# Backend scripts that are project-specific
+apps/backend/scripts/insert_bm_v5.py

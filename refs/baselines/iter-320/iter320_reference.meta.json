@@ -1,0 +1,5 @@
+{
+  "label": "#320 — 🎯 SCALE FIX : setback 5m + trottoir 2.5m + PBR voirie + photographer-grade prompt",
+  "description": "Refonte structurelle 3 axes en parallèle. (1) SCALE : _bmargin 2.5→5.0m (vraie résidentielle française avec yard visible), trottoir_width 1.5→2.5m (Parisien banlieue chic). (2) VOIRIE PBR : emission shader → Principled BSDF. asphalte dark gray (0.16) avec noise grain 0.18/scale 120 + color_variation, pavers_concrete distinct light gray (0.58) avec joint variation, terre_neutre warm beige. Le trottoir est maintenant visiblement distinct de la chaussée. (3) PHOTOGRAPHER PROMPT : front-loaded 'Canon EOS R5 24-70mm f/2.8L, golden hour, enduit taloché variations + micro-imperfections, béton grain not smooth, glass real reflections, pavés visible joints, fine film grain, Architectural Digest cover, NOT 3D NOT CGI NOT plastic'. cn_img2img strength 0.65→0.72, depth_scale 0.85→0.75, steps 40→50. Résultat : yard 5m clairement visible avec vegetation green prominente, trottoir distinct, building setback de la route, tree visible côté gauche. Photoreal feel encore perfectible mais bond énorme sur scale + trottoirs.",
+  "verdict": "ok"
+}
