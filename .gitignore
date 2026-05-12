@@ -52,6 +52,10 @@ tmp/
 # Only the iter #320 baseline is version-controlled (refs/baselines/).
 refs/renders/
 backups/
+# Exception : .usda scenes are USD ASCII (~MB text) and we need to ship
+# them from Mac (Blender step) → MSI render station (UE5 step).
+!refs/renders/*.usda
+
 
 # Scheduled tasks lock
 .claude/scheduled_tasks.lock
