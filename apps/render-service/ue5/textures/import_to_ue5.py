@@ -216,6 +216,21 @@ def import_textures_for_material(
 
 
 # ── Material instance creation ─────────────────────────────────────
+def _set_mi_parent(mi: "unreal.MaterialInstanceConstant",
+                    parent: "unreal.Material") -> None:
+    """UE5 has moved this around between versions — try the modern API
+    first, fall back to the older property setter."""
+    try:
+        unreal.MaterialEditingLibrary.set_material_instance_parent(mi, parent)
+        return
+    except Exception:
+        pass
+    try:
+        mi.set_editor_property("parent", parent)
+    except Exception as e:
+        log(f"  !! could not set parent on {mi.get_name()} : {e}")
+
+
 def create_material_instance(
     mat_def: MaterialDef,
     parent: "unreal.Material",
@@ -226,12 +241,13 @@ def create_material_instance(
     cached = unreal.EditorAssetLibrary.load_asset(asset_path)
     if cached is not None:
         mi = cached
+        _set_mi_parent(mi, parent)
     else:
         AT = unreal.AssetToolsHelpers.get_asset_tools()
         factory = unreal.MaterialInstanceConstantFactoryNew()
-        factory.set_editor_property("initial_parent", parent)
         folder, name = asset_path.rsplit("/", 1)
         mi = AT.create_asset(name, folder, unreal.MaterialInstanceConstant, factory)
+        _set_mi_parent(mi, parent)
 
     MIEL = unreal.MaterialEditingLibrary
     # Texture params
