@@ -65,14 +65,24 @@ def log(msg: str) -> None:
 
 
 # ── Parent material ───────────────────────────────────────────────
-def ensure_parent_material() -> "unreal.Material":
-    """Create the M_ArchiClaude_Base material if not present. It exposes
-    Albedo / Normal / ARM (R=AO, G=Roughness, B=Metallic) texture
-    parameters + a TileScale scalar parameter, hooked into the standard
-    material outputs."""
+def ensure_parent_material(force_rebuild: bool = False) -> "unreal.Material":
+    """Create (or rebuild) M_ArchiClaude_Base.
+
+    Output pin names on TextureSampleParameter2D are tricky : the main RGB
+    output is named "" (empty string), not "RGB". Earlier versions of this
+    script used "RGB" which silently dropped the BaseColor/Normal
+    connections, so the materials rendered as the default grey checker
+    despite the instances having texture overrides.
+
+    Set `force_rebuild=True` (or run after deleting the existing asset)
+    to recreate the parent from scratch.
+    """
     existing = unreal.EditorAssetLibrary.load_asset(PARENT_MAT_PATH)
-    if existing is not None:
+    if existing is not None and not force_rebuild:
         return existing
+    if existing is not None and force_rebuild:
+        log(f"Deleting stale parent material {PARENT_MAT_PATH} …")
+        unreal.EditorAssetLibrary.delete_asset(PARENT_MAT_PATH)
 
     log(f"Creating parent material at {PARENT_MAT_PATH} …")
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
@@ -92,25 +102,25 @@ def ensure_parent_material() -> "unreal.Material":
     MEL.connect_material_expressions(uv, "", mul, "A")
     MEL.connect_material_expressions(tile, "", mul, "B")
 
-    # Albedo
+    # Albedo — connect default (RGB) output via "" (empty string)
     albedo = MEL.create_material_expression(
         mat, unreal.MaterialExpressionTextureSampleParameter2D, -800, -400
     )
     albedo.set_editor_property("parameter_name", "Albedo")
     albedo.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
     MEL.connect_material_expressions(mul, "", albedo, "UVs")
-    MEL.connect_material_property(albedo, "RGB", unreal.MaterialProperty.MP_BASE_COLOR)
+    MEL.connect_material_property(albedo, "", unreal.MaterialProperty.MP_BASE_COLOR)
 
-    # Normal
+    # Normal — same trick : "" for the default RGB output
     normal = MEL.create_material_expression(
         mat, unreal.MaterialExpressionTextureSampleParameter2D, -800, 0
     )
     normal.set_editor_property("parameter_name", "Normal")
     normal.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL)
     MEL.connect_material_expressions(mul, "", normal, "UVs")
-    MEL.connect_material_property(normal, "RGB", unreal.MaterialProperty.MP_NORMAL)
+    MEL.connect_material_property(normal, "", unreal.MaterialProperty.MP_NORMAL)
 
-    # ARM (AO/Rough/Metal channels)
+    # ARM (R=AO, G=Roughness, B=Metallic) — channel outputs are fine
     arm = MEL.create_material_expression(
         mat, unreal.MaterialExpressionTextureSampleParameter2D, -800, 400
     )
@@ -216,6 +226,53 @@ def import_textures_for_material(
 
 
 # ── Material instance creation ─────────────────────────────────────
+def _force_texture_overrides(mi: "unreal.MaterialInstanceConstant",
+                              textures: dict) -> None:
+    """Force-write the texture_parameter_values array on the instance.
+
+    UE 5.7's MaterialEditingLibrary.set_material_instance_texture_parameter_value
+    sometimes registers the override silently but doesn't make it persist in
+    the asset (observed on the MSI station: ARM override took, Albedo and
+    Normal did not). Writing the array directly is the resilient path.
+    """
+    try:
+        existing = mi.get_editor_property("texture_parameter_values") or []
+    except Exception:
+        existing = []
+
+    # Index existing overrides by name for dedup
+    by_name: dict[str, "unreal.TextureParameterValue"] = {}
+    for entry in existing:
+        try:
+            name = entry.parameter_info.name
+        except Exception:
+            continue
+        if name:
+            by_name[str(name)] = entry
+
+    for param_name, tex in textures.items():
+        entry = by_name.get(param_name)
+        if entry is None:
+            try:
+                entry = unreal.TextureParameterValue()
+                info = unreal.MaterialParameterInfo()
+                info.set_editor_property("name", param_name)
+                entry.set_editor_property("parameter_info", info)
+            except Exception as e:
+                log(f"  !! could not build override entry for {param_name} : {e}")
+                continue
+            by_name[param_name] = entry
+        try:
+            entry.set_editor_property("parameter_value", tex)
+        except Exception as e:
+            log(f"  !! could not assign texture for {param_name} : {e}")
+
+    try:
+        mi.set_editor_property("texture_parameter_values", list(by_name.values()))
+    except Exception as e:
+        log(f"  !! force-write failed : {e}")
+
+
 def _set_mi_parent(mi: "unreal.MaterialInstanceConstant",
                     parent: "unreal.Material") -> None:
     """UE5 has moved this around between versions — try the modern API
@@ -250,12 +307,17 @@ def create_material_instance(
         _set_mi_parent(mi, parent)
 
     MIEL = unreal.MaterialEditingLibrary
-    # Texture params
+    # Texture params — call MEL first (registers the override correctly),
+    # then verify via direct property read and force-write the
+    # texture_parameter_values array if the override didn't stick. UE5's
+    # MEL function silently no-ops in some cases (e.g. when the parent
+    # material hasn't been compiled with that parameter exposed yet).
     for param, tex in textures.items():
         try:
             MIEL.set_material_instance_texture_parameter_value(mi, param, tex)
         except Exception as e:
-            log(f"  !! could not set {param} : {e}")
+            log(f"  !! MEL.set failed for {param} : {e}")
+    _force_texture_overrides(mi, textures)
     # TileScale : meters → uv repetitions. ~1m real-world = 1.0 tile per uv-unit
     # Polyhaven assets are normalized so a 4k tile covers roughly 1m physical
     # by default. tile_meters > 1 means we want fewer repetitions visible.
@@ -275,6 +337,22 @@ def create_material_instance(
     return mi
 
 
+# ── Health check on parent material ───────────────────────────────
+def _parent_material_is_healthy(mat: "unreal.Material") -> bool:
+    """Quick sanity check : the parent must have working connections from
+    its Albedo/Normal TextureSampleParameter2D expressions to MP_BASE_COLOR
+    and MP_NORMAL. Earlier script versions used "RGB" output name (invalid),
+    leaving those connections silently broken. Detect and rebuild if so."""
+    try:
+        MEL = unreal.MaterialEditingLibrary
+        has_base_color = MEL.is_material_property_active(mat, unreal.MaterialProperty.MP_BASE_COLOR)
+        has_normal = MEL.is_material_property_active(mat, unreal.MaterialProperty.MP_NORMAL)
+        return bool(has_base_color and has_normal)
+    except Exception:
+        # If we can't check, conservatively assume it needs a rebuild
+        return False
+
+
 # ── Main ──────────────────────────────────────────────────────────
 def main() -> int:
     log("=" * 60)
@@ -288,7 +366,15 @@ def main() -> int:
         log("   Run download_polyhaven.py first.")
         return 2
 
-    parent = ensure_parent_material()
+    # Self-heal : if a previous run left an unhealthy parent material with
+    # broken BaseColor/Normal connections (old "RGB" output-pin bug), force
+    # a rebuild. Idempotent on a healthy parent.
+    existing_parent = unreal.EditorAssetLibrary.load_asset(PARENT_MAT_PATH)
+    needs_rebuild = (existing_parent is not None
+                     and not _parent_material_is_healthy(existing_parent))
+    if needs_rebuild:
+        log("⚠ Existing parent material has broken connections — forcing rebuild …")
+    parent = ensure_parent_material(force_rebuild=needs_rebuild)
     log(f"✓ Parent material : {PARENT_MAT_PATH}")
 
     n_done = 0
@@ -301,6 +387,8 @@ def main() -> int:
             n_fallback += 1
         else:
             n_done += 1
+        # If the parent was rebuilt, instances need to be re-linked too.
+        # create_material_instance handles both creation and re-linking.
         create_material_instance(mat_def, parent, textures)
         log(f"✓ M_{name} ready ({len(textures)} textures wired)")
 
