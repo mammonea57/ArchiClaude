@@ -127,7 +127,14 @@ def create_or_clear_level() -> None:
 def import_usda(usda_path: str) -> None:
     """Spawn a UsdStageActor pointing at the USDA file. UE5's USD plugin
     handles the rest : it creates static meshes for each Mesh prim and
-    actors for cameras/lights."""
+    actors for cameras/lights.
+
+    Crucially, we disable prim collapsing + identical-material-slot
+    merging BEFORE assigning root_layer. Default behaviour fuses every
+    Mesh under a parent xform into ONE static mesh with ONE material
+    slot driven by a DisplayColor material — which destroys our
+    per-material workflow.
+    """
     if not Path(usda_path).exists():
         fatal(f"USDA not found : {usda_path}")
     log(f"Importing USDA : {usda_path}")
@@ -138,10 +145,22 @@ def import_usda(usda_path: str) -> None:
     )
     if stage_actor is None:
         fatal("Failed to spawn UsdStageActor — USD Importer plugin enabled?")
+
+    # Disable collapsing and slot merging BEFORE loading. These options
+    # are read at stage-load time, not after the fact.
+    try:
+        stage_actor.set_editor_property("kinds_to_collapse", 0)
+    except Exception as e:
+        log(f"  ! could not set kinds_to_collapse : {e}")
+    try:
+        stage_actor.set_editor_property("merge_identical_material_slots", False)
+    except Exception as e:
+        log(f"  ! could not set merge_identical_material_slots : {e}")
+
     stage_actor.set_editor_property("root_layer", unreal.FilePath(usda_path))
-    # Wait for stage to load
-    time.sleep(2)
-    log("✓ USDA imported via UsdStageActor")
+    # Wait for stage to load — bigger USDs need more time
+    time.sleep(4)
+    log("✓ USDA imported via UsdStageActor (no prim collapse, no slot merge)")
 
 
 def _load_archiclaude_material(mat_name: str) -> Optional[unreal.MaterialInterface]:
@@ -213,30 +232,131 @@ def _known_material_names() -> list:
         return list(MEGASCANS_ASSETS.keys())
 
 
+def _walk_actors_recursive(root) -> list:
+    """Yield root + every descendant in attached-actor hierarchy.
+
+    UsdStageActor exposes its USD prims as a tree of attached actors
+    rather than as top-level actors in the level. `get_all_level_actors`
+    on the editor subsystem only returns the top-level ones, so we walk
+    `get_attached_actors` recursively to find every mesh-bearing actor.
+    """
+    seen = []
+    stack = [root]
+    while stack:
+        a = stack.pop()
+        seen.append(a)
+        try:
+            stack.extend(a.get_attached_actors())
+        except Exception:
+            pass
+    return seen
+
+
+def _all_static_mesh_components_in_level() -> list:
+    """Collect every StaticMeshComponent in the level, walking the full
+    attached-actor tree (USD plugin parents components under USD prim
+    actors that aren't top-level level actors)."""
+    try:
+        subsys = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+        top = subsys.get_all_level_actors()
+    except Exception:
+        top = unreal.EditorLevelLibrary.get_all_level_actors()
+    comps: list = []
+    seen_ids: set = set()
+    for root in top:
+        for a in _walk_actors_recursive(root):
+            key = id(a)
+            if key in seen_ids:
+                continue
+            seen_ids.add(key)
+            try:
+                for c in a.get_components_by_class(unreal.StaticMeshComponent):
+                    if c.get_editor_property("static_mesh") is not None:
+                        comps.append((a, c))
+            except Exception:
+                pass
+    return comps
+
+
 def apply_materials_to_imported_meshes() -> int:
-    """Walk all StaticMeshActors in the level. For each, match its name
-    against our material names. Assign /Game/AC/Materials/M_<name> if
-    available (Polyhaven-backed), else fallback to a flat sRGB material."""
+    """Two strategies, applied in order :
+
+    (a) per-actor : if a mesh actor's label contains one of our known
+        material names (legacy behaviour), assign M_<name> to slot 0.
+
+    (b) per-slot : for each mesh component, walk its material slots ;
+        if a slot name matches a material in MATERIAL_LIBRARY, override
+        that slot with M_<name>. This is the path that matters for our
+        USD import (one mesh, many slots).
+    """
     log("Applying materials to imported meshes …")
+    known = _known_material_names()
     n_applied_ac = 0
     n_applied_fb = 0
-    known = _known_material_names()
-    for actor in unreal.EditorLevelLibrary.get_all_level_actors():
-        if not isinstance(actor, unreal.StaticMeshActor):
-            continue
-        label = actor.get_actor_label().lower()
-        for mat_name in known:
-            if mat_name in label:
-                ac = _load_archiclaude_material(mat_name)
-                if ac is not None:
-                    actor.static_mesh_component.set_material(0, ac)
-                    n_applied_ac += 1
-                else:
-                    fb = _make_fallback_material(mat_name)
-                    if fb is not None:
-                        actor.static_mesh_component.set_material(0, fb)
-                        n_applied_fb += 1
+
+    found_components = _all_static_mesh_components_in_level()
+    log(f"  found {len(found_components)} static mesh component(s) to inspect")
+    for actor, comp in found_components:
+        try:
+            slots = list(comp.get_material_slot_names())
+            mesh = comp.get_editor_property("static_mesh")
+            mesh_name = mesh.get_name() if mesh else "(no mesh)"
+            log(f"    actor='{actor.get_actor_label()}' mesh='{mesh_name}' "
+                f"slots={[str(s) for s in slots]}")
+        except Exception as e:
+            log(f"    inspect error : {e}")
+
+    for actor, comp in found_components:
+        # Try matching against (in priority) :
+        #   1. the StaticMesh asset name (e.g. "SM_brique_rouge")  ← UsdStageActor case
+        #   2. each material slot name                              ← legacy multi-slot
+        #   3. the actor label                                       ← legacy whole-actor
+        candidates = []
+        try:
+            mesh = comp.get_editor_property("static_mesh")
+            if mesh:
+                candidates.append(mesh.get_name().lower())
+        except Exception:
+            pass
+        try:
+            for s in comp.get_material_slot_names():
+                candidates.append(str(s).lower())
+        except Exception:
+            pass
+        try:
+            candidates.append(actor.get_actor_label().lower())
+        except Exception:
+            pass
+
+        matched = None
+        for cand in candidates:
+            for mat_name in known:
+                if mat_name in cand:
+                    matched = mat_name
+                    break
+            if matched:
                 break
+
+        if matched is None:
+            continue
+
+        # How many slots ? Apply to every slot (each mesh from the USD
+        # plugin has a single slot named '0' anyway).
+        try:
+            n_slots = comp.get_num_materials()
+        except Exception:
+            n_slots = 1
+        ac = _load_archiclaude_material(matched)
+        for idx in range(max(1, n_slots)):
+            if ac is not None:
+                comp.set_material(idx, ac)
+                n_applied_ac += 1
+            else:
+                fb = _make_fallback_material(matched)
+                if fb is not None:
+                    comp.set_material(idx, fb)
+                    n_applied_fb += 1
+
     log(f"✓ Materials : {n_applied_ac} ArchiClaude + {n_applied_fb} fallback")
     return n_applied_ac + n_applied_fb
 
@@ -312,35 +432,44 @@ def render_with_movie_pipeline(sequence_asset, output_path: str,
     log(f"Configuring Movie Render Queue → {output_path} ({width}×{height}) …")
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    log("  step a : MoviePipelineQueueSubsystem.get_queue()")
     subsystem = unreal.get_editor_subsystem(unreal.MoviePipelineQueueSubsystem)
     queue = subsystem.get_queue()
-    # Clear stale jobs
+    log("  step b : clear stale jobs")
     for j in list(queue.get_jobs()):
         queue.delete_job(j)
+    log("  step c : allocate_new_job")
     job = queue.allocate_new_job(unreal.MoviePipelineExecutorJob)
+    log("  step d : set sequence + map SoftObjectPath")
     job.sequence = unreal.SoftObjectPath(SEQUENCE_PATH)
     job.map = unreal.SoftObjectPath(LEVEL_PATH)
+    log("  step e : get_configuration")
     config = job.get_configuration()
-    # PNG output
-    out_setting = config.find_or_add_setting_by_class(
-        unreal.MoviePipelineImageSequenceOutput_PNG
-    )
-    out_setting.output_directory = unreal.DirectoryPath(str(out_path.parent))
-    out_setting.file_name_format = out_path.stem
-    # Resolution + frame range (single frame)
+    log(f"    config type : {type(config).__name__}")
+    log("  step f : PNG format selector (no own properties in UE 5.7+)")
+    # In UE 5.7 the PNG class is just a format selector with no editable
+    # properties of its own — the actual output_directory / file_name_format
+    # live on MoviePipelineOutputSetting.
+    config.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_PNG)
+    log("  step g : MoviePipelineOutputSetting (path + resolution + range)")
     res_setting = config.find_or_add_setting_by_class(unreal.MoviePipelineOutputSetting)
-    res_setting.output_resolution = unreal.IntPoint(width, height)
-    res_setting.use_custom_playback_range = True
-    res_setting.custom_start_frame = 0
-    res_setting.custom_end_frame = 1
-    # Anti-aliasing for production quality
+    res_setting.set_editor_property(
+        "output_directory", unreal.DirectoryPath(str(out_path.parent))
+    )
+    res_setting.set_editor_property("file_name_format", out_path.stem)
+    res_setting.set_editor_property("output_resolution", unreal.IntPoint(width, height))
+    res_setting.set_editor_property("use_custom_playback_range", True)
+    res_setting.set_editor_property("custom_start_frame", 0)
+    res_setting.set_editor_property("custom_end_frame", 1)
+    log("  step h : MoviePipelineAntiAliasingSetting")
     aa_setting = config.find_or_add_setting_by_class(unreal.MoviePipelineAntiAliasingSetting)
     aa_setting.spatial_sample_count = 8
     aa_setting.temporal_sample_count = 1
     aa_setting.engine_warm_up_count = 16
     aa_setting.render_warm_up_count = 8
-    # Deferred render (Lumen ON, no path tracing)
+    log("  step i : MoviePipelineDeferredPassBase")
     config.find_or_add_setting_by_class(unreal.MoviePipelineDeferredPassBase)
+    log("  ✓ MRQ configured")
 
     # Execute synchronously
     log("Starting render execution (this can take 1-10 min)…")
