@@ -1,0 +1,13 @@
+{
+  "label": "#500 \u2014 UE5 pipeline run",
+  "description": "End-to-end pipeline : BM \u2192 Blender USD \u2192 UE5 Lumen render \u2192 regression vs iter #320 baseline. Regression: 3/5 passed.",
+  "verdict": "partial",
+  "source_blender_png": "2026-05-13_014812_iter500_scene_rue_se_eloignee_seed11.usda",
+  "source_usda": "2026-05-13_014812_iter500_scene_rue_se_eloignee_seed11.usda",
+  "regression": {
+    "raw_output": "\nVisual regression check : ue5_tmp_iter500.png\nBaseline                : iter320_reference.png\n\n\u2717 shadow_free_chaussee                value=  78.210 threshold=  35.000 \u2014 chauss\u00e9e band brightness std=78.21 (lower=more uniform=no shadows)\n\u2713 trottoir_distinct                   value=  16.909 threshold=   1.500 \u2014 dark(chaussee)=55.0% medium(trottoir)=16.9% \u2014 target: push > 5%\n\u2717 vegetation_present                  value=   0.012 threshold=   2.000 \u2014 green pixels = 0.01%\n\u2713 setback_visible                     value= 336.489 threshold=  20.000 \u2014 avg setback gap rows = 336.5 (need >= 20, H=1024)\n\u2713 building_silhouette_intact          value=  65.512 threshold=  75.632 \u2014 bright pixels frac=65.5% (baseline=75.6%, ratio=0.87)\n\n3/5 metrics passed.\n\n",
+    "passed": false,
+    "n_pass": 3,
+    "n_total": 5
+  }
+}
