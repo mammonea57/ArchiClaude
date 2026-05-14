@@ -86,7 +86,8 @@ def run_blender_step(iter_tag: int) -> tuple[Path, Path]:
     return blender_png, usda
 
 
-def run_ue5_step(usda: Path, output_png: Path, mock: bool, fallback_png: Path) -> Path:
+def run_ue5_step(usda: Path, output_png: Path, mock: bool, fallback_png: Path,
+                  width: int = 2048, height: int = 2048) -> Path:
     """Run UE5 headless. In mock mode, copy fallback_png as ue5 output for testing."""
     log(f"Step 2/4 : UE5 render →  {output_png.name}")
     if mock:
@@ -98,6 +99,8 @@ def run_ue5_step(usda: Path, output_png: Path, mock: bool, fallback_png: Path) -
         str(UE5_LAUNCHER),
         "--usda", str(usda),
         "--output", str(output_png),
+        "--width", str(width),
+        "--height", str(height),
     ]
     log(f"  command : {' '.join(cmd)}")
     proc = subprocess.run(cmd)
@@ -185,20 +188,30 @@ def main() -> int:
     parser.add_argument("--blender-png", type=Path, default=None,
                         help="Path to the Blender PNG that goes with --usda-file. "
                              "Optional ; only used in --mock-ue5 mode or meta.json.")
+    parser.add_argument("--width", type=int, default=2048,
+                        help="Render width. Drop to 1024 if MSI keeps crashing.")
+    parser.add_argument("--height", type=int, default=2048,
+                        help="Render height. Drop to 1024 if MSI keeps crashing.")
     args = parser.parse_args()
 
     log(f"ArchiClaude pipeline — iter #{args.iter} {'(MOCK UE5)' if args.mock_ue5 else ''}")
     try:
         if args.usda_file:
-            if not args.usda_file.exists():
+            usda_resolved = args.usda_file.resolve()
+            if not usda_resolved.exists():
                 raise RuntimeError(f"--usda-file not found : {args.usda_file}")
-            log(f"Step 1/4 : skipped (using existing USDA : {args.usda_file.name})")
-            usda = args.usda_file
-            blender_png = args.blender_png if args.blender_png and args.blender_png.exists() else usda
+            log(f"Step 1/4 : skipped (using existing USDA : {usda_resolved.name})")
+            # Pass an absolute path downstream — UE5 (especially over Remote
+            # Execution) runs with its own cwd and cannot resolve relative
+            # paths from the caller.
+            usda = usda_resolved
+            blender_png = (args.blender_png.resolve() if args.blender_png
+                            and args.blender_png.exists() else usda)
         else:
             blender_png, usda = run_blender_step(args.iter)
         ue5_png = RENDERS_DIR / f"ue5_tmp_iter{args.iter}.png"
-        run_ue5_step(usda, ue5_png, args.mock_ue5, blender_png)
+        run_ue5_step(usda, ue5_png, args.mock_ue5, blender_png,
+                      width=args.width, height=args.height)
         regression = run_regression_step(ue5_png)
         final = persist_and_meta(ue5_png, args.iter, regression,
                                   blender_png, usda, args.mock_ue5)

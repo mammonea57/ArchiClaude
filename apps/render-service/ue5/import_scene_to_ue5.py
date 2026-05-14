@@ -425,6 +425,69 @@ def create_level_sequence_with_camera() -> Optional[object]:
     return sequence
 
 
+def render_with_screenshot(camera_actor, output_path: str,
+                            width: int, height: int) -> bool:
+    """Single-frame render via AutomationLibrary.take_high_res_screenshot.
+
+    Much lighter than Movie Render Queue (no PIE, no executor lifecycle,
+    no async polling) — fits our use case (one PNG per pipeline run) and
+    is stable on an 8 GB RTX 3070 Laptop where MRQ kept crashing UE 5.7.
+
+    Saves to Project/Saved/Screenshots/<platform>/<file>, then moves the
+    resulting file to the requested output_path.
+    """
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    log(f"Taking high-res screenshot → {out_path.name} ({width}×{height}) …")
+
+    # take_high_res_screenshot is fire-and-forget : it queues the capture
+    # for the next viewport draw and writes to Saved/Screenshots. We have
+    # to poll the screenshots directory to know when it's done.
+    proj_dir = Path(unreal.SystemLibrary.get_project_directory())
+    shots_dir = proj_dir / "Saved" / "Screenshots" / "WindowsEditor"
+    pre_existing = set(shots_dir.glob("*.png")) if shots_dir.exists() else set()
+
+    try:
+        unreal.AutomationLibrary.take_high_res_screenshot(
+            res_x=width,
+            res_y=height,
+            filename=out_path.stem + ".png",
+            camera=camera_actor,
+            mask_enabled=False,
+            capture_hdr=False,
+        )
+    except Exception as e:
+        log(f"!! take_high_res_screenshot raised : {e}")
+        return False
+
+    # Poll Saved/Screenshots for a new PNG (typical write 5-20s)
+    new_file = None
+    for _ in range(60):
+        time.sleep(1)
+        if shots_dir.exists():
+            current = set(shots_dir.glob("*.png"))
+            fresh = current - pre_existing
+            if fresh:
+                new_file = max(fresh, key=lambda p: p.stat().st_mtime)
+                break
+
+    if new_file is None:
+        log(f"!! no new screenshot appeared under {shots_dir} after 60s")
+        return False
+
+    # Move to the requested output_path (overwrite if needed)
+    try:
+        if out_path.exists():
+            out_path.unlink()
+        new_file.rename(out_path)
+    except Exception as e:
+        log(f"!! rename {new_file} → {out_path} failed : {e}")
+        return False
+
+    log(f"✓ screenshot saved → {out_path} ({out_path.stat().st_size:,} bytes)")
+    return True
+
+
 def render_with_movie_pipeline(sequence_asset, output_path: str,
                                 width: int, height: int) -> bool:
     """Configure Movie Render Queue and execute synchronous render.
@@ -508,6 +571,40 @@ def render_with_movie_pipeline(sequence_asset, output_path: str,
 
 
 # ── Main pipeline ─────────────────────────────────────────────────
+def _find_cine_camera() -> "unreal.CineCameraActor":
+    """Pick the CineCameraActor we (or the USD) added to the level."""
+    try:
+        subsys = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+        actors = subsys.get_all_level_actors()
+    except Exception:
+        actors = unreal.EditorLevelLibrary.get_all_level_actors()
+    for a in actors:
+        if isinstance(a, unreal.CineCameraActor):
+            return a
+        try:
+            for child in a.get_attached_actors():
+                if isinstance(child, unreal.CineCameraActor):
+                    return child
+        except Exception:
+            pass
+    return None
+
+
+def _save_current_level_safely() -> None:
+    """Best-effort save of the current level so a subsequent crash doesn't
+    lose all the import/material work."""
+    try:
+        subsys = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+        subsys.save_current_level()
+        log("  ✓ level saved")
+    except Exception:
+        try:
+            unreal.EditorLevelLibrary.save_current_level()
+            log("  ✓ level saved (legacy API)")
+        except Exception as e:
+            log(f"  ! could not save level : {e}")
+
+
 def main() -> int:
     log("=" * 60)
     log("ArchiClaude UE5 Headless Importer + Renderer")
@@ -524,8 +621,17 @@ def main() -> int:
     import_usda(USDA_PATH)
     apply_materials_to_imported_meshes()
     setup_lighting()
-    sequence = create_level_sequence_with_camera()
-    ok = render_with_movie_pipeline(sequence, OUTPUT_PNG, OUTPUT_WIDTH, OUTPUT_HEIGHT)
+    # Save now : if the screenshot step crashes UE5 we don't lose the
+    # whole scene setup.
+    _save_current_level_safely()
+    create_level_sequence_with_camera()
+    camera = _find_cine_camera()
+    if camera is None:
+        fatal("No CineCameraActor found after setup")
+
+    # Lightweight path : HighRes screenshot. MRQ is overkill for our
+    # one-PNG-per-iter use case and was crashing UE 5.7 on this hardware.
+    ok = render_with_screenshot(camera, OUTPUT_PNG, OUTPUT_WIDTH, OUTPUT_HEIGHT)
 
     if ok:
         log("✓ Pipeline complete")
