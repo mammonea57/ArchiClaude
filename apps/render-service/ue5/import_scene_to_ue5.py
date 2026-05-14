@@ -113,14 +113,76 @@ def fatal(msg: str) -> None:
 
 # ── Scene setup ───────────────────────────────────────────────────
 def create_or_clear_level() -> None:
-    """Open a fresh level so subsequent imports don't conflict with stale
-    actors from prior runs."""
+    """Open a fresh level — or, if that fails, hard-clear every actor in
+    the current one. The previous version sometimes silently kept stale
+    UsdStageActors around, which made each rerun stack a duplicate copy
+    of the scene on top of the previous one (and broke rendering)."""
     log("Creating fresh empty level …")
-    editor_level_lib = unreal.EditorLevelLibrary
+    success = False
     try:
-        editor_level_lib.new_level(LEVEL_PATH)
+        lev_subsys = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+        lev_subsys.new_level(LEVEL_PATH)
+        success = True
     except Exception as e:
-        log(f"new_level failed ({e}) — fallback to current level")
+        log(f"  LevelEditorSubsystem.new_level failed : {e}")
+    if not success:
+        try:
+            unreal.EditorLevelLibrary.new_level(LEVEL_PATH)
+            success = True
+        except Exception as e:
+            log(f"  EditorLevelLibrary.new_level failed : {e}")
+
+    # Whether new_level succeeded or not, force-remove any UsdStageActor +
+    # USD-spawned children left over from a previous run. This prevents
+    # the "two stages stacked" rendering bug.
+    try:
+        actor_subsys = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+        all_actors = actor_subsys.get_all_level_actors()
+    except Exception:
+        all_actors = list(unreal.EditorLevelLibrary.get_all_level_actors())
+
+    def _walk(a, acc):
+        acc.append(a)
+        try:
+            for c in a.get_attached_actors():
+                _walk(c, acc)
+        except Exception:
+            pass
+
+    to_remove = []
+    for a in all_actors:
+        is_stage = isinstance(a, unreal.UsdStageActor)
+        if is_stage:
+            _walk(a, to_remove)
+            continue
+        # Also drop any leftover lighting/camera from a prior pipeline run
+        if isinstance(a, (unreal.DirectionalLight, unreal.SkyAtmosphere,
+                          unreal.SkyLight, unreal.ExponentialHeightFog,
+                          unreal.CineCameraActor)):
+            to_remove.append(a)
+            continue
+        # Drop the default "Floor" checker plane that comes with the
+        # Architecture template (would dominate every render otherwise),
+        # and the InstancedFoliageActor that the template adds.
+        if isinstance(a, unreal.StaticMeshActor):
+            try:
+                lbl = a.get_actor_label().lower()
+            except Exception:
+                lbl = ""
+            if "floor" in lbl or "ground" in lbl or "plane" in lbl:
+                to_remove.append(a)
+                continue
+        if type(a).__name__ in ("InstancedFoliageActor", "Floor"):
+            to_remove.append(a)
+
+    if to_remove:
+        log(f"  cleaning {len(to_remove)} stale actor(s) …")
+        for a in to_remove:
+            try:
+                a.destroy_actor()
+            except Exception:
+                pass
+
     log("✓ Level ready")
 
 
@@ -223,9 +285,16 @@ def _make_fallback_material(mat_name: str) -> unreal.MaterialInterface:
 def _known_material_names() -> list:
     """Return the canonical list of material names to match labels against.
     Prefers the centralised MATERIAL_LIBRARY in textures/library.py, falls
-    back to MEGASCANS_ASSETS keys when running outside the repo tree."""
+    back to MEGASCANS_ASSETS keys when running outside the repo tree.
+
+    Forces a reload to dodge UE5's long-lived Python interpreter caching
+    a stale version of library.py from an earlier session.
+    """
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
+        # Drop the cached module so we pick up edits to library.py
+        sys.modules.pop("textures.library", None)
+        sys.modules.pop("library", None)
         from textures.library import MATERIAL_LIBRARY  # type: ignore
         return list(MATERIAL_LIBRARY.keys())
     except Exception:
@@ -362,44 +431,146 @@ def apply_materials_to_imported_meshes() -> int:
 
 
 def setup_lighting() -> None:
-    """Lumen + Sky Atmosphere + DirectionalLight (sun) + Fog."""
+    """Movable Lumen lighting : Sun + SkyAtmosphere + SkyLight + Fog.
+
+    Critical : all lights are set to Movable mobility. With the default
+    Stationary lights UE prompts "L'éclairage doit être régénéré" and
+    refuses to render dynamic GI. Movable + Lumen Dynamic = no lightmap
+    bake needed.
+    """
     log("Setting up Lumen lighting …")
-    # SunLight (DirectionalLight)
+    MOVABLE = unreal.ComponentMobility.MOVABLE
+
+    # Force dynamic Lumen via console (cheap, idempotent)
+    for cvar in (
+        "r.DynamicGlobalIlluminationMethod 1",   # 1 = Lumen
+        "r.ReflectionMethod 1",                  # 1 = Lumen
+        "r.Lumen.HardwareRayTracing 0",          # software RT (more stable on 3070L)
+        "r.Mobility.AllowStaticLighting 0",      # no static lighting prompts
+    ):
+        try:
+            unreal.SystemLibrary.execute_console_command(None, cvar)
+        except Exception:
+            pass
+
+    # SunLight (DirectionalLight) — Movable so it casts dynamic shadows
     sun = unreal.EditorLevelLibrary.spawn_actor_from_class(
         unreal.DirectionalLight,
         unreal.Vector(0, 0, 5000),
         unreal.Rotator(-45, 140, 0),
     )
+    try:
+        sun.root_component.set_mobility(MOVABLE)
+    except Exception:
+        pass
     sun.light_component.set_intensity(5.0)
     sun.light_component.set_light_color(unreal.LinearColor(1.0, 0.97, 0.92))
+
     # SkyAtmosphere
     unreal.EditorLevelLibrary.spawn_actor_from_class(
         unreal.SkyAtmosphere, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0)
     )
-    # SkyLight (catch ambient from sky)
+
+    # SkyLight (Movable + real-time capture so Lumen GI uses live env)
     sky = unreal.EditorLevelLibrary.spawn_actor_from_class(
         unreal.SkyLight, unreal.Vector(0, 0, 1000), unreal.Rotator(0, 0, 0)
     )
+    try:
+        sky.root_component.set_mobility(MOVABLE)
+    except Exception:
+        pass
+    try:
+        sky.light_component.set_editor_property("real_time_capture", True)
+    except Exception:
+        pass
     sky.light_component.set_intensity(1.0)
+
     # ExponentialHeightFog
-    fog = unreal.EditorLevelLibrary.spawn_actor_from_class(
+    unreal.EditorLevelLibrary.spawn_actor_from_class(
         unreal.ExponentialHeightFog, unreal.Vector(0, 0, 500), unreal.Rotator(0, 0, 0)
     )
-    log("✓ Lighting : Sun + SkyAtmosphere + SkyLight + Fog")
+    log("✓ Lighting : Movable Sun + SkyAtmosphere + Real-time SkyLight + Fog + Lumen Dynamic")
+
+
+def _compute_scene_bounds():
+    """Walk every imported mesh in the level and return (min_v, max_v) of the
+    combined world-space bounding box. Used to auto-frame the camera so we
+    don't end up rendering the inside of a wall."""
+    INF = 1e9
+    mn = [INF, INF, INF]
+    mx = [-INF, -INF, -INF]
+    try:
+        subsys = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+        top = subsys.get_all_level_actors()
+    except Exception:
+        top = list(unreal.EditorLevelLibrary.get_all_level_actors())
+
+    def walk(actor):
+        try:
+            for c in actor.get_components_by_class(unreal.StaticMeshComponent):
+                if c.get_editor_property("static_mesh") is None:
+                    continue
+                # CineCam helper mesh — skip
+                m = c.get_editor_property("static_mesh")
+                if m.get_name() in ("SM_CineCam",):
+                    continue
+                origin = c.get_world_location()
+                extents = unreal.Vector(0, 0, 0)
+                try:
+                    bounds = c.calc_local_bounds()
+                    extents = bounds.box_extent
+                except Exception:
+                    pass
+                for axis in (0, 1, 2):
+                    mn[axis] = min(mn[axis], origin.x if axis == 0 else origin.y if axis == 1 else origin.z)
+                    mx[axis] = max(mx[axis], origin.x if axis == 0 else origin.y if axis == 1 else origin.z)
+        except Exception:
+            pass
+        try:
+            for child in actor.get_attached_actors():
+                walk(child)
+        except Exception:
+            pass
+    for a in top:
+        walk(a)
+    if mn[0] > 1e8:
+        return None, None
+    return unreal.Vector(*mn), unreal.Vector(*mx)
 
 
 def create_level_sequence_with_camera() -> Optional[object]:
-    """Create a LevelSequence with a single CineCameraActor for MRQ to render.
-    Camera position/target derived from USD camera prim if present."""
+    """Create a LevelSequence with a single CineCameraActor.
+
+    We **ignore** the USD-imported camera's position/orientation : Blender's
+    USD export uses meters while UE5 imports as centimeters with axis
+    remap, leaving the camera somewhere inside the building. Instead we
+    compute the scene's bounding box and place the camera in a 3/4 view
+    looking at the building centre — a guaranteed-good frame for archi-viz.
+    """
     log("Creating LevelSequence + CineCamera …")
-    # Find the camera position from USD imported camera (or fallback)
-    cam_pos = unreal.Vector(2500, -2500, 1500)
-    cam_target = unreal.Vector(0, 0, 700)
-    for actor in unreal.EditorLevelLibrary.get_all_level_actors():
-        if isinstance(actor, unreal.CineCameraActor):
-            cam_pos = actor.get_actor_location()
-            log(f"  found imported camera at {cam_pos}")
-            break
+    mn, mx = _compute_scene_bounds()
+    if mn is None:
+        cam_pos = unreal.Vector(2500, -2500, 1500)
+        cam_target = unreal.Vector(0, 0, 700)
+        log("  ! could not compute bounds — using default 3/4 view")
+    else:
+        cx = (mn.x + mx.x) / 2.0
+        cy = (mn.y + mx.y) / 2.0
+        cz_top = max(mx.z, 1000.0)   # at least 10 m
+        # Archi-viz hero shot : place camera OUTSIDE the scene bounding
+        # box (offset past the +X / -Y corner so we're guaranteed to be
+        # outside the building, not inside its footprint). Look at the
+        # building's lower-middle for a hero angle.
+        SIDE_OFFSET = 2000.0   # 20 m beyond the scene corner
+        cam_pos = unreal.Vector(
+            mx.x + SIDE_OFFSET,
+            mn.y - SIDE_OFFSET,
+            cz_top * 0.7,
+        )
+        cam_target = unreal.Vector(cx, cy, cz_top * 0.5)
+        log(f"  bounds : {mn} → {mx}")
+        log(f"  cam_pos    : {cam_pos}")
+        log(f"  cam_target : {cam_target}")
     # If no camera was imported, spawn one
     cine_cam = unreal.EditorLevelLibrary.spawn_actor_from_class(
         unreal.CineCameraActor,
@@ -425,67 +596,143 @@ def create_level_sequence_with_camera() -> Optional[object]:
     return sequence
 
 
+def _get_viewport_camera_pose():
+    """Return (location, rotation) of the active editor viewport's
+    free-fly camera, so the SceneCapture can render exactly what the
+    user is seeing in the editor."""
+    try:
+        ues = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
+        loc, rot = ues.get_level_viewport_camera_info()
+        return loc, rot
+    except Exception:
+        return None, None
+
+
 def render_with_screenshot(camera_actor, output_path: str,
                             width: int, height: int) -> bool:
-    """Single-frame render via AutomationLibrary.take_high_res_screenshot.
+    """Single-frame render via SceneCaptureComponent2D + RenderTarget2D.
 
-    Much lighter than Movie Render Queue (no PIE, no executor lifecycle,
-    no async polling) — fits our use case (one PNG per pipeline run) and
-    is stable on an 8 GB RTX 3070 Laptop where MRQ kept crashing UE 5.7.
+    Pure Python path : we spawn a SceneCapture2D at the editor viewport's
+    camera location (so the PNG matches what the user sees in the editor),
+    point it at a transient RenderTarget2D, trigger a synchronous capture,
+    then export the render target to PNG via RenderingLibrary.
 
-    Saves to Project/Saved/Screenshots/<platform>/<file>, then moves the
-    resulting file to the requested output_path.
+    Falls back to the CineCameraActor's transform if the viewport pose
+    can't be queried.
+
+    Works under Remote Execution because it doesn't depend on a focused
+    viewport — the engine renders straight into the render target.
     """
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    log(f"Taking high-res screenshot → {out_path.name} ({width}×{height}) …")
+    log(f"Rendering via SceneCapture2D → {out_path.name} ({width}×{height}) …")
 
-    # take_high_res_screenshot is fire-and-forget : it queues the capture
-    # for the next viewport draw and writes to Saved/Screenshots. We have
-    # to poll the screenshots directory to know when it's done.
-    proj_dir = Path(unreal.SystemLibrary.get_project_directory())
-    shots_dir = proj_dir / "Saved" / "Screenshots" / "WindowsEditor"
-    pre_existing = set(shots_dir.glob("*.png")) if shots_dir.exists() else set()
-
+    # 1. Create a transient RenderTarget2D.
+    # The UE 5.7 RenderingLibrary method is `create_render_target2d`
+    # (target2d, not target_2d — the underscore went missing in newer
+    # versions).
+    rt = None
     try:
-        unreal.AutomationLibrary.take_high_res_screenshot(
-            res_x=width,
-            res_y=height,
-            filename=out_path.stem + ".png",
-            camera=camera_actor,
-            mask_enabled=False,
-            capture_hdr=False,
+        try:
+            world = unreal.UnrealEditorSubsystem().get_editor_world()
+        except Exception:
+            world = unreal.EditorLevelLibrary.get_editor_world()
+        rt = unreal.RenderingLibrary.create_render_target2d(
+            world, width, height, unreal.TextureRenderTargetFormat.RTF_RGBA8
         )
     except Exception as e:
-        log(f"!! take_high_res_screenshot raised : {e}")
-        return False
+        log(f"  ! create_render_target2d failed : {e}")
 
-    # Poll Saved/Screenshots for a new PNG (typical write 5-20s)
-    new_file = None
-    for _ in range(60):
-        time.sleep(1)
-        if shots_dir.exists():
-            current = set(shots_dir.glob("*.png"))
-            fresh = current - pre_existing
-            if fresh:
-                new_file = max(fresh, key=lambda p: p.stat().st_mtime)
-                break
+    if rt is None:
+        try:
+            rt = unreal.TextureRenderTarget2D()
+            rt.set_editor_property("size_x", width)
+            rt.set_editor_property("size_y", height)
+            rt.set_editor_property("render_target_format",
+                                    unreal.TextureRenderTargetFormat.RTF_RGBA8)
+        except Exception as e:
+            log(f"!! could not create RenderTarget2D : {e}")
+            return False
+    log(f"  ✓ render target ready ({width}x{height})")
 
-    if new_file is None:
-        log(f"!! no new screenshot appeared under {shots_dir} after 60s")
-        return False
-
-    # Move to the requested output_path (overwrite if needed)
+    # 2. Spawn SceneCapture2D — prefer the viewport's pose so the PNG
+    # matches what the user is seeing in the editor.
+    vp_loc, vp_rot = _get_viewport_camera_pose()
+    if vp_loc is not None and vp_rot is not None:
+        cam_loc, cam_rot = vp_loc, vp_rot
+        log(f"  using viewport camera pose : loc={cam_loc} rot={cam_rot}")
+    else:
+        cam_loc = camera_actor.get_actor_location()
+        cam_rot = camera_actor.get_actor_rotation()
+        log(f"  fallback to CineCamera pose")
     try:
-        if out_path.exists():
-            out_path.unlink()
-        new_file.rename(out_path)
+        capture = unreal.EditorLevelLibrary.spawn_actor_from_class(
+            unreal.SceneCapture2D, cam_loc, cam_rot
+        )
+        ccomp = capture.capture_component2d
+        ccomp.set_editor_property("texture_target", rt)
+        # Match the cine camera FOV (default UE5 FOV 90 is too wide)
+        try:
+            cine = camera_actor.camera_component
+            fov = cine.get_editor_property("field_of_view")
+            ccomp.set_editor_property("fov_angle", fov)
+        except Exception:
+            ccomp.set_editor_property("fov_angle", 42.0)
+        ccomp.set_editor_property("capture_source",
+                                    unreal.SceneCaptureSource.SCS_FINAL_COLOR_LDR)
+        log("  ✓ SceneCapture2D spawned")
     except Exception as e:
-        log(f"!! rename {new_file} → {out_path} failed : {e}")
+        log(f"!! could not spawn SceneCapture2D : {e}")
         return False
 
-    log(f"✓ screenshot saved → {out_path} ({out_path.stat().st_size:,} bytes)")
-    return True
+    # 3. Trigger capture (synchronous on this thread)
+    try:
+        ccomp.capture_scene()
+        log("  ✓ scene captured")
+    except Exception as e:
+        log(f"!! capture_scene raised : {e}")
+        try:
+            capture.destroy_actor()
+        except Exception:
+            pass
+        return False
+
+    # 4. Export render target to PNG
+    try:
+        unreal.RenderingLibrary.export_render_target(
+            None, rt, str(out_path.parent), out_path.name
+        )
+    except Exception as e:
+        log(f"!! export_render_target raised : {e}")
+        try:
+            capture.destroy_actor()
+        except Exception:
+            pass
+        return False
+
+    # 5. Cleanup the capture actor
+    try:
+        capture.destroy_actor()
+    except Exception:
+        pass
+
+    if out_path.exists():
+        log(f"✓ render saved → {out_path} ({out_path.stat().st_size:,} bytes)")
+        return True
+    # export_render_target may have written `<out_dir>/<file_name>` or
+    # something subtly different — scan the dir for any matching PNG
+    for f in out_path.parent.glob(out_path.stem + "*.png"):
+        if f.stat().st_mtime > time.time() - 30:
+            try:
+                if out_path.exists():
+                    out_path.unlink()
+                f.rename(out_path)
+                log(f"✓ render saved (renamed from {f.name}) → {out_path}")
+                return True
+            except Exception:
+                pass
+    log(f"!! export finished but no PNG found at expected path {out_path}")
+    return False
 
 
 def render_with_movie_pipeline(sequence_asset, output_path: str,

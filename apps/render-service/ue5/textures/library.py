@@ -120,4 +120,19 @@ MATERIAL_LIBRARY: dict[str, MaterialDef] = {
         roughness_scale=0.7,
         notes="Black wrought iron — too specific, fallback only",
     ),
+    "verre": MaterialDef(
+        name="verre",
+        polyhaven_slug=None,
+        tile_meters=1.0,
+        fallback_color=(0.10, 0.18, 0.28),
+        roughness_scale=0.05,
+        notes="Window glass — flat dark blue fallback, no texture",
+    ),
+    "road_paint_white": MaterialDef(
+        name="road_paint_white",
+        polyhaven_slug=None,
+        tile_meters=1.0,
+        fallback_color=(0.97, 0.97, 0.95),
+        notes="White road marking — flat white fallback",
+    ),
 }
