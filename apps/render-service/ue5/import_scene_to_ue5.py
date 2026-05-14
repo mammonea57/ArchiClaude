@@ -113,24 +113,16 @@ def fatal(msg: str) -> None:
 
 # ── Scene setup ───────────────────────────────────────────────────
 def create_or_clear_level() -> None:
-    """Open a fresh level — or, if that fails, hard-clear every actor in
-    the current one. The previous version sometimes silently kept stale
-    UsdStageActors around, which made each rerun stack a duplicate copy
-    of the scene on top of the previous one (and broke rendering)."""
-    log("Creating fresh empty level …")
-    success = False
-    try:
-        lev_subsys = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-        lev_subsys.new_level(LEVEL_PATH)
-        success = True
-    except Exception as e:
-        log(f"  LevelEditorSubsystem.new_level failed : {e}")
-    if not success:
-        try:
-            unreal.EditorLevelLibrary.new_level(LEVEL_PATH)
-            success = True
-        except Exception as e:
-            log(f"  EditorLevelLibrary.new_level failed : {e}")
+    """Hard-clear the current level instead of creating a new one.
+
+    Earlier versions created /Game/Maps/ArchiClaudeScene and worked in
+    there. Problem : the user's editor viewport stays on whatever level
+    they had open (Main.umap by default with the Architecture template),
+    so they kept seeing their template scene unchanged — our changes
+    were happening in an off-screen level. Now we modify the level the
+    user is actively viewing.
+    """
+    log("Cleaning current level …")
 
     # Whether new_level succeeded or not, force-remove any UsdStageActor +
     # USD-spawned children left over from a previous run. This prevents
@@ -149,31 +141,33 @@ def create_or_clear_level() -> None:
         except Exception:
             pass
 
+    # We keep exactly :
+    #   - 1 UsdStageActor (we re-spawn one with the new USDA)
+    #   - 1 DirectionalLight + 1 SkyAtmosphere + 1 SkyLight + 1 ExpFog
+    #   - 1 CineCameraActor
+    # Everything else from the template (SunSky blueprint, Floor mesh,
+    # InstancedFoliageActor, default Player/PostProcess, etc.) we wipe so
+    # the render isn't polluted by template lights/geometry.
+    KEEP_CLASSES = ("PlayerStart", "PostProcessVolume",
+                    "Brush", "WorldSettings", "LevelInstance")
     to_remove = []
     for a in all_actors:
         is_stage = isinstance(a, unreal.UsdStageActor)
         if is_stage:
             _walk(a, to_remove)
             continue
-        # Also drop any leftover lighting/camera from a prior pipeline run
         if isinstance(a, (unreal.DirectionalLight, unreal.SkyAtmosphere,
                           unreal.SkyLight, unreal.ExponentialHeightFog,
                           unreal.CineCameraActor)):
             to_remove.append(a)
             continue
+        cls_name = type(a).__name__
+        if cls_name in KEEP_CLASSES:
+            continue
         # Drop the default "Floor" checker plane that comes with the
-        # Architecture template (would dominate every render otherwise),
-        # and the InstancedFoliageActor that the template adds.
-        if isinstance(a, unreal.StaticMeshActor):
-            try:
-                lbl = a.get_actor_label().lower()
-            except Exception:
-                lbl = ""
-            if "floor" in lbl or "ground" in lbl or "plane" in lbl:
-                to_remove.append(a)
-                continue
-        if type(a).__name__ in ("InstancedFoliageActor", "Floor"):
-            to_remove.append(a)
+        # Architecture template, InstancedFoliageActor, SunSky blueprint,
+        # any extra StaticMeshActors from the template, etc.
+        to_remove.append(a)
 
     if to_remove:
         log(f"  cleaning {len(to_remove)} stale actor(s) …")
@@ -430,6 +424,103 @@ def apply_materials_to_imported_meshes() -> int:
     return n_applied_ac + n_applied_fb
 
 
+def build_solid_wrapper() -> None:
+    """The Blender → USD export of iter500 only contains floor slabs +
+    columns, not the building's exterior walls (the baseline iter#320
+    PNG was rendered straight from Blender with a much fuller model).
+
+    Re-generate the missing solid shell procedurally : compute the
+    bounding box of every building-material mesh (enduit_blanc, brique_
+    rouge, pierre_taille, zinc_anthracite, balcon_concrete, verre,
+    bois_porte, fer_forge), spawn an Engine /Engine/BasicShapes/Cube
+    mesh scaled to those bounds, and assign M_enduit_blanc as its
+    material. The cube hides the see-through "skeleton" appearance and
+    gives the building a solid silhouette from any angle.
+    """
+    BUILDING_MAT_NAMES = (
+        "enduit_blanc", "brique_rouge", "pierre_taille", "zinc_anthracite",
+        "balcon_concrete", "verre", "bois_porte", "fer_forge",
+    )
+    INF = 1e9
+    mn = [INF, INF, INF]
+    mx = [-INF, -INF, -INF]
+    n_meshes = 0
+
+    def walk(actor):
+        nonlocal n_meshes
+        try:
+            for c in actor.get_components_by_class(unreal.StaticMeshComponent):
+                mesh = c.get_editor_property("static_mesh")
+                if mesh is None:
+                    continue
+                name = mesh.get_name().lower()
+                is_building = any(b in name for b in BUILDING_MAT_NAMES)
+                if not is_building:
+                    continue
+                origin = c.get_world_location()
+                try:
+                    bounds = c.calc_local_bounds()
+                    ext = bounds.box_extent
+                except Exception:
+                    ext = unreal.Vector(100, 100, 100)
+                ox, oy, oz = origin.x, origin.y, origin.z
+                ex, ey, ez = ext.x, ext.y, ext.z
+                for axis, (o, e) in enumerate(((ox, ex), (oy, ey), (oz, ez))):
+                    mn[axis] = min(mn[axis], o - e)
+                    mx[axis] = max(mx[axis], o + e)
+                n_meshes += 1
+        except Exception:
+            pass
+        try:
+            for child in actor.get_attached_actors():
+                walk(child)
+        except Exception:
+            pass
+
+    subsys = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    for a in subsys.get_all_level_actors():
+        walk(a)
+
+    if mn[0] > 1e8 or n_meshes == 0:
+        log("  ! no building meshes found, skip solid wrapper")
+        return
+
+    cube_mesh = unreal.EditorAssetLibrary.load_asset("/Engine/BasicShapes/Cube")
+    if cube_mesh is None:
+        log("  ! /Engine/BasicShapes/Cube not found, skip solid wrapper")
+        return
+
+    center = unreal.Vector(
+        (mn[0] + mx[0]) / 2.0,
+        (mn[1] + mx[1]) / 2.0,
+        (mn[2] + mx[2]) / 2.0,
+    )
+    # 100×100×100 cm engine cube; scale to fit the building bbox.
+    # Slightly inset (0.97) so the existing balcony/window details still
+    # poke out a bit and we don't have a perfect rectangular silhouette.
+    INSET = 0.97
+    scale = unreal.Vector(
+        max((mx[0] - mn[0]) * INSET / 100.0, 0.1),
+        max((mx[1] - mn[1]) * INSET / 100.0, 0.1),
+        max((mx[2] - mn[2]) * INSET / 100.0, 0.1),
+    )
+    log(f"  building bbox : ({mn[0]:.0f},{mn[1]:.0f},{mn[2]:.0f}) → "
+        f"({mx[0]:.0f},{mx[1]:.0f},{mx[2]:.0f}) from {n_meshes} meshes")
+    log(f"  shell center  : {center}   scale : {scale}")
+
+    shell = unreal.EditorLevelLibrary.spawn_actor_from_class(
+        unreal.StaticMeshActor, center, unreal.Rotator(0, 0, 0)
+    )
+    shell.set_actor_label("ProceduralBuildingShell")
+    smc = shell.static_mesh_component
+    smc.set_static_mesh(cube_mesh)
+    shell.set_actor_scale3d(scale)
+    wall_mat = unreal.EditorAssetLibrary.load_asset("/Game/AC/Materials/M_enduit_blanc")
+    if wall_mat is not None:
+        smc.set_material(0, wall_mat)
+    log("  ✓ procedural building shell spawned")
+
+
 def setup_lighting() -> None:
     """Movable Lumen lighting : Sun + SkyAtmosphere + SkyLight + Fog.
 
@@ -556,16 +647,13 @@ def create_level_sequence_with_camera() -> Optional[object]:
     else:
         cx = (mn.x + mx.x) / 2.0
         cy = (mn.y + mx.y) / 2.0
-        cz_top = max(mx.z, 1000.0)   # at least 10 m
-        # Archi-viz hero shot : place camera OUTSIDE the scene bounding
-        # box (offset past the +X / -Y corner so we're guaranteed to be
-        # outside the building, not inside its footprint). Look at the
-        # building's lower-middle for a hero angle.
-        SIDE_OFFSET = 2000.0   # 20 m beyond the scene corner
+        cz_top = max(mx.z, 1000.0)
+        # 3/4 upper hero shot — matches the iter#320 baseline framing
+        # (camera up-front-right of the building, looking slightly down).
         cam_pos = unreal.Vector(
-            mx.x + SIDE_OFFSET,
-            mn.y - SIDE_OFFSET,
-            cz_top * 0.7,
+            mx.x + 3000,        # 30 m past max X
+            mn.y - 3000,        # 30 m before min Y
+            cz_top * 1.3,       # 30% above building top
         )
         cam_target = unreal.Vector(cx, cy, cz_top * 0.5)
         log(f"  bounds : {mn} → {mx}")
@@ -581,7 +669,10 @@ def create_level_sequence_with_camera() -> Optional[object]:
     direction = cam_target - cam_pos
     rotation = unreal.MathLibrary.find_look_at_rotation(cam_pos, cam_target)
     cine_cam.set_actor_rotation(rotation, False)
-    cine_cam.camera_component.set_field_of_view(42.0)
+    # 65° FOV is closer to the editor viewport default and gives a
+    # comfortable archi-viz framing (42° is too narrow, makes everything
+    # feel zoomed in and clipped).
+    cine_cam.camera_component.set_field_of_view(65.0)
 
     # Create LevelSequence asset
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
@@ -655,16 +746,12 @@ def render_with_screenshot(camera_actor, output_path: str,
             return False
     log(f"  ✓ render target ready ({width}x{height})")
 
-    # 2. Spawn SceneCapture2D — prefer the viewport's pose so the PNG
-    # matches what the user is seeing in the editor.
-    vp_loc, vp_rot = _get_viewport_camera_pose()
-    if vp_loc is not None and vp_rot is not None:
-        cam_loc, cam_rot = vp_loc, vp_rot
-        log(f"  using viewport camera pose : loc={cam_loc} rot={cam_rot}")
-    else:
-        cam_loc = camera_actor.get_actor_location()
-        cam_rot = camera_actor.get_actor_rotation()
-        log(f"  fallback to CineCamera pose")
+    # 2. Spawn SceneCapture2D at our deterministic CineCamera pose so
+    # consecutive runs produce a reproducible PNG (independent of where
+    # the user happens to be free-flying their viewport).
+    cam_loc = camera_actor.get_actor_location()
+    cam_rot = camera_actor.get_actor_rotation()
+    log(f"  using CineCamera pose : loc={cam_loc} rot={cam_rot}")
     try:
         capture = unreal.EditorLevelLibrary.spawn_actor_from_class(
             unreal.SceneCapture2D, cam_loc, cam_rot
@@ -867,6 +954,12 @@ def main() -> int:
     create_or_clear_level()
     import_usda(USDA_PATH)
     apply_materials_to_imported_meshes()
+    # build_solid_wrapper() : disabled. Wrapping the building in a solid
+    # cube made the render look worse (the cube hides intentional
+    # balconies + windows that ARE in the USD). The fundamental fix has
+    # to happen on the Mac side : improve the Blender → USD export so it
+    # ships the full architectural model (walls, fenestration, parapets)
+    # rather than the current "skeleton" simplification.
     setup_lighting()
     # Save now : if the screenshot step crashes UE5 we don't lose the
     # whole scene setup.
