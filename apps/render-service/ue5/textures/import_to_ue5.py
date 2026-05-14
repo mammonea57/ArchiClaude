@@ -326,8 +326,17 @@ def create_material_instance(
     MIEL.set_material_instance_scalar_parameter_value(
         mi, "RoughnessScale", mat_def.roughness_scale
     )
-    # Fallback tint
-    tint = mat_def.tint or mat_def.fallback_color
+    # FallbackTint multiplies the Albedo texture in the parent material.
+    # - When the material has Polyhaven textures (textures != {}) we want
+    #   the texture rendered AS-IS, so tint = white (multiply by 1 is a
+    #   no-op).
+    # - When the material has no textures (zinc, fer_forge, verre,
+    #   road_paint_white) the parent's Albedo defaults to a white engine
+    #   texture, so tint = fallback_color renders as that flat color.
+    if textures:
+        tint = mat_def.tint or (1.0, 1.0, 1.0)
+    else:
+        tint = mat_def.tint or mat_def.fallback_color
     MIEL.set_material_instance_vector_parameter_value(
         mi, "FallbackTint",
         unreal.LinearColor(tint[0], tint[1], tint[2], 1.0),
