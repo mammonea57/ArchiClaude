@@ -9,6 +9,18 @@ Pipeline :
      centre (matches the BM's local frame).
   4. Extrude each to its `hauteur` value to produce Quads.
   5. Concatenate with the project building's Quads in render_depth_map.
+
+Two sources are supported :
+  * `bdtopo_legacy`     → live WFS fetch (`fetch_voisins_bdtopo`), heights
+                          come from `properties.hauteur` only. This is the
+                          original path that all renders before iter #500
+                          went through and remains the default.
+  * `ign_photogrammetry`→ load the cached `bdtopo_buildings.geojson` produced
+                          by `photogrammetry.build_context.build_context_for_project`,
+                          which is BDTOPO V3 LOD2 (z baked into each vertex).
+                          Heights are derived from per-vertex z, with the
+                          parcelle centroid's ground altitude subtracted so
+                          the local frame matches the BM's z=0 ground.
 """
 from __future__ import annotations
 
@@ -17,7 +29,13 @@ import math
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from pathlib import Path
+from typing import Iterable, Optional, Sequence
+
+from .voisinage_cache import cached
+
+# IGN BDTOPO V3 LOD2 sentinel : when no z is known, IGN writes -1000.
+IGN_Z_SENTINEL_NULL = -1000.0
 
 
 @dataclass(frozen=True)
@@ -27,8 +45,9 @@ class GeoOrigin:
     lng: float
 
 
-def geocode_address(address: str) -> GeoOrigin:
-    """Geocode a French address via the BAN public API. Returns lat/lng."""
+def _geocode_uncached(address: str) -> dict:
+    """Hit the BAN public API. Raises on network error / no result so the
+    failure is never cached."""
     q = urllib.parse.quote_plus(address)
     url = f"https://api-adresse.data.gouv.fr/search/?q={q}&limit=1"
     with urllib.request.urlopen(url, timeout=10) as r:
@@ -37,7 +56,17 @@ def geocode_address(address: str) -> GeoOrigin:
         raise ValueError(f"no geocode result for {address!r}")
     f = d["features"][0]
     lng, lat = f["geometry"]["coordinates"]
-    return GeoOrigin(lat=lat, lng=lng)
+    return {"lat": lat, "lng": lng}
+
+
+def geocode_address(address: str) -> GeoOrigin:
+    """Geocode a French address via the BAN public API. Returns lat/lng.
+
+    Memoised on disk : the same address resolves to the same lat/lng forever,
+    so we only ever hit BAN once per address.
+    """
+    d = cached("geocode", {"address": address}, lambda: _geocode_uncached(address))
+    return GeoOrigin(lat=d["lat"], lng=d["lng"])
 
 
 def fetch_voisins_bdtopo(origin: GeoOrigin, radius_m: float = 200.0) -> list[dict]:
@@ -45,15 +74,16 @@ def fetch_voisins_bdtopo(origin: GeoOrigin, radius_m: float = 200.0) -> list[dic
 
     Returns the raw GeoJSON features list.
     """
-    return _fetch_bdtopo_layer(origin, radius_m, "BDTOPO_V3:batiment", count=500)
+    return cached(
+        "bdtopo_batiment",
+        {"lat": origin.lat, "lng": origin.lng, "r": radius_m},
+        lambda: _fetch_bdtopo_layer(origin, radius_m, "BDTOPO_V3:batiment", count=500),
+    )
 
 
-def fetch_osm_street_lamps(origin: GeoOrigin, radius_m: float = 150.0) -> list[tuple[float, float]]:
-    """Query OSM Overpass for man_made=street_lamp nodes around origin.
-
-    Returns list of (lat, lng) for each street lamp. If OSM has no lamps
-    mapped (street furniture often missing in Overpass), returns empty.
-    """
+def _osm_street_lamps_uncached(origin: GeoOrigin, radius_m: float) -> list[list[float]]:
+    """Hit Overpass for street lamps. Raises on network/parse error so a
+    transient failure is never cached as an empty result."""
     deg_per_m_lat = 1.0 / 111320.0
     deg_per_m_lng = 1.0 / (111320.0 * math.cos(math.radians(origin.lat)))
     dlat = radius_m * deg_per_m_lat
@@ -72,24 +102,36 @@ def fetch_osm_street_lamps(origin: GeoOrigin, radius_m: float = 150.0) -> list[t
         data=body,
         headers={"User-Agent": "ArchiClaude/1.0 (PC dossier renderer)"},
     )
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            d = json.loads(r.read())
-    except Exception as e:
-        print(f"!! Overpass street_lamp fetch failed ({e})")
-        return []
+    with urllib.request.urlopen(req, timeout=20) as r:
+        d = json.loads(r.read())
     elems = d.get("elements", []) or []
-    return [(float(e["lat"]), float(e["lon"])) for e in elems
+    return [[float(e["lat"]), float(e["lon"])] for e in elems
             if e.get("type") == "node" and "lat" in e and "lon" in e]
 
 
-def fetch_osm_trees(origin: GeoOrigin, radius_m: float = 150.0) -> list[tuple[float, float]]:
-    """Query OpenStreetMap Overpass API for natural=tree nodes around origin.
+def fetch_osm_street_lamps(origin: GeoOrigin, radius_m: float = 150.0) -> list[tuple[float, float]]:
+    """Query OSM Overpass for man_made=street_lamp nodes around origin.
 
-    Returns a list of (lat, lng) tuples for each individual tree mapped
-    in OSM. If OSM has no trees nearby (residential street with sparse
-    mapping), returns an empty list — DO NOT synthesize fake positions.
+    Returns list of (lat, lng) for each street lamp. If OSM has no lamps
+    mapped (street furniture often missing in Overpass), returns empty.
+    Successful responses are memoised on disk ; transient failures are NOT
+    cached — they fall back to [] without poisoning the cache.
     """
+    try:
+        raw = cached(
+            "osm_street_lamps",
+            {"lat": origin.lat, "lng": origin.lng, "r": radius_m},
+            lambda: _osm_street_lamps_uncached(origin, radius_m),
+        )
+    except Exception as e:
+        print(f"!! Overpass street_lamp fetch failed ({e})")
+        return []
+    return [(float(lat), float(lng)) for lat, lng in raw]
+
+
+def _osm_trees_uncached(origin: GeoOrigin, radius_m: float) -> list[list[float]]:
+    """Hit Overpass for trees. Raises on network/parse error so a transient
+    failure is never cached as an empty result."""
     deg_per_m_lat = 1.0 / 111320.0
     deg_per_m_lng = 1.0 / (111320.0 * math.cos(math.radians(origin.lat)))
     dlat = radius_m * deg_per_m_lat
@@ -109,15 +151,32 @@ def fetch_osm_trees(origin: GeoOrigin, radius_m: float = 150.0) -> list[tuple[fl
         data=body,
         headers={"User-Agent": "ArchiClaude/1.0 (PC dossier renderer)"},
     )
+    with urllib.request.urlopen(req, timeout=20) as r:
+        d = json.loads(r.read())
+    elems = d.get("elements", []) or []
+    return [[float(e["lat"]), float(e["lon"])] for e in elems
+            if e.get("type") == "node" and "lat" in e and "lon" in e]
+
+
+def fetch_osm_trees(origin: GeoOrigin, radius_m: float = 150.0) -> list[tuple[float, float]]:
+    """Query OpenStreetMap Overpass API for natural=tree nodes around origin.
+
+    Returns a list of (lat, lng) tuples for each individual tree mapped
+    in OSM. If OSM has no trees nearby (residential street with sparse
+    mapping), returns an empty list — DO NOT synthesize fake positions.
+    Successful responses are memoised on disk ; transient failures are NOT
+    cached — they fall back to [] without poisoning the cache.
+    """
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            d = json.loads(r.read())
+        raw = cached(
+            "osm_trees",
+            {"lat": origin.lat, "lng": origin.lng, "r": radius_m},
+            lambda: _osm_trees_uncached(origin, radius_m),
+        )
     except Exception as e:
         print(f"!! Overpass tree fetch failed ({e})")
         return []
-    elems = d.get("elements", []) or []
-    return [(float(e["lat"]), float(e["lon"])) for e in elems
-            if e.get("type") == "node" and "lat" in e and "lon" in e]
+    return [(float(lat), float(lng)) for lat, lng in raw]
 
 
 def fetch_roads_bdtopo(origin: GeoOrigin, radius_m: float = 200.0) -> list[dict]:
@@ -133,7 +192,11 @@ def fetch_roads_bdtopo(origin: GeoOrigin, radius_m: float = 200.0) -> list[dict]
     Returns the raw GeoJSON features list. Filtering of tunnels/bridges
     is left to the caller (typically only `position == 0` is rendered).
     """
-    return _fetch_bdtopo_layer(origin, radius_m, "BDTOPO_V3:troncon_de_route", count=300)
+    return cached(
+        "bdtopo_routes",
+        {"lat": origin.lat, "lng": origin.lng, "r": radius_m},
+        lambda: _fetch_bdtopo_layer(origin, radius_m, "BDTOPO_V3:troncon_de_route", count=300),
+    )
 
 
 def _fetch_bdtopo_layer(origin: GeoOrigin, radius_m: float, type_name: str, count: int) -> list[dict]:
@@ -238,6 +301,9 @@ def voisins_to_local_polygons(
     max_distance_m: float = 80.0,
     min_height_m: float = 3.0,
     max_height_m: float = 20.0,
+    forward_cone_cos: float = 0.25,
+    min_camera_distance_ratio: float = 0.90,
+    max_voisin_count: Optional[int] = None,
 ) -> list[tuple[list[tuple[float, float]], float]]:
     """Convert BDTopo features to (footprint_local, hauteur_m) pairs.
 
@@ -249,9 +315,21 @@ def voisins_to_local_polygons(
       - drops buildings shorter than `min_height_m` (small sheds, kiosks)
         which produce noise in the depth map without context value
       - when `block_camera_sight=True`, drops buildings between camera and
-        project that would occlude the foreground.
+        project that would occlude the foreground :
+          * `forward_cone_cos` — cosine of the half-angle of the forward cone
+            (default 0.25 = ±75°). Lower it (e.g. -1.0) to keep all voisins
+            including those behind the camera (useful for full-context USDA
+            scenes consumed by Cycles/UE5).
+          * `min_camera_distance_ratio` — drop voisins closer to the camera
+            than `ratio × cam_to_project_distance` (default 0.90 — depth-map
+            mode kills the foreground). Set to 0.0 to keep all foreground
+            voisins (photoreal/USDA mode where foreground = context).
+
+    Cap :
+      - `max_voisin_count` — keep at most N voisins, ordered by ascending
+        distance to the parcel centre. None = no cap. Useful to bound mesh
+        count for Cycles perf when the full radius would yield 300+ buildings.
     """
-    out: list[tuple[list[tuple[float, float]], float]] = []
     parcel_cx = parcel_cy = None
     if skip_overlap_with:
         parcel_cx = sum(p[0] for p in skip_overlap_with) / len(skip_overlap_with)
@@ -266,6 +344,9 @@ def voisins_to_local_polygons(
         if cam_to_proj > 1e-6:
             cam_forward = (fx / cam_to_proj, fy / cam_to_proj)
 
+    # Collect candidates with their distance to the parcel centre so we can
+    # sort + cap deterministically (keep nearest N voisins).
+    candidates: list[tuple[float, list[tuple[float, float]], float]] = []
     for f in features:
         rings = project_to_parcel_frame(f, origin, parcel_center_local)
         if not rings:
@@ -282,6 +363,7 @@ def voisins_to_local_polygons(
         for ring in rings:
             rcx = sum(p[0] for p in ring) / len(ring)
             rcy = sum(p[1] for p in ring) / len(ring)
+            d_proj = 0.0
             if skip_overlap_with:
                 d_proj = ((rcx - parcel_cx) ** 2 + (rcy - parcel_cy) ** 2) ** 0.5
                 if d_proj < 5.0:
@@ -292,22 +374,20 @@ def voisins_to_local_polygons(
                 vdx = rcx - camera_pos_xy[0]
                 vdy = rcy - camera_pos_xy[1]
                 d_cam = (vdx * vdx + vdy * vdy) ** 0.5
-                # 1. Drop voisins BEHIND the camera : their view_z is negative
-                #    so they project as garbage and saturate the depth map.
+                # 1. Drop voisins BEHIND the camera (configurable cone).
                 if cam_forward is not None and d_cam > 1e-6:
                     forward_dot = (vdx * cam_forward[0] + vdy * cam_forward[1]) / d_cam
-                    # cos(75°) — keep a wide ±75° forward cone : flanking
-                    # voisins fill the horizon, but anything behind the
-                    # camera plane (negative view_z) is rejected so it
-                    # doesn't pollute the zbuf.
-                    if forward_dot < 0.25:
+                    if forward_dot < forward_cone_cos:
                         continue
-                # 2. Drop voisins between camera and project (occluders) :
-                #    must be at least 90 % as far from camera as the project.
-                if d_cam < cam_to_proj * 0.90:
+                # 2. Drop voisins between camera and project (occluders).
+                if min_camera_distance_ratio > 0.0 and d_cam < cam_to_proj * min_camera_distance_ratio:
                     continue
-            out.append((ring, float(h)))
-    return out
+            candidates.append((d_proj, ring, float(h)))
+
+    candidates.sort(key=lambda t: t[0])
+    if max_voisin_count is not None and max_voisin_count > 0:
+        candidates = candidates[: max_voisin_count]
+    return [(ring, h) for _d, ring, h in candidates]
 
 
 def roads_to_local_polylines(
@@ -385,4 +465,186 @@ def roads_to_local_polylines(
         })
     if features and not out:
         print(f"   roads_to_local_polylines drops: {drops}")
+    return out
+
+
+# ─── IGN photogrammetry source (Jour 4 — BDTOPO V3 LOD2 from disk) ──────
+
+
+def _walk_z(node, out: list) -> None:
+    """Collect every z value from a nested GeoJSON coordinates structure."""
+    if isinstance(node, list) and node and isinstance(node[0], (int, float)) and len(node) >= 3:
+        out.append(float(node[2]))
+    elif isinstance(node, list):
+        for child in node:
+            _walk_z(child, out)
+
+
+def _feature_z_range(feature: dict) -> Optional[tuple[float, float]]:
+    """Return (z_min, z_max) for a single feature's outer rings, dropping
+    IGN -1000 sentinels. Returns None if no valid z found."""
+    zs: list[float] = []
+    _walk_z(feature.get("geometry", {}).get("coordinates", []), zs)
+    valid = [z for z in zs if z > IGN_Z_SENTINEL_NULL + 1]
+    if not valid:
+        return None
+    return (min(valid), max(valid))
+
+
+def load_ign_bdtopo_geojson(project_id: str, refs_root: Optional[Path] = None) -> dict:
+    """Load the BDTOPO LOD2 GeoJSON saved on disk by build_context_for_project.
+
+    Returns the parsed FeatureCollection. Raises FileNotFoundError if the
+    context has never been built for this project.
+    """
+    if refs_root is None:
+        # walk up from this module to repo root, then refs/photogrammetry
+        refs_root = Path(__file__).resolve().parent.parent.parent.parent / "refs" / "photogrammetry"
+    gj_path = Path(refs_root) / project_id / "bdtopo_buildings.geojson"
+    if not gj_path.is_file():
+        raise FileNotFoundError(
+            f"IGN context not built for project {project_id}: missing {gj_path}. "
+            f"Run photogrammetry.build_context.build_context_for_project first."
+        )
+    with open(gj_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def voisins_from_ign_geojson(
+    project_id: str,
+    origin: GeoOrigin,
+    parcel_center_local: tuple[float, float],
+    *,
+    refs_root: Optional[Path] = None,
+    skip_overlap_with: Sequence[tuple[float, float]] | None = None,
+    camera_pos_xy: tuple[float, float] | None = None,
+    block_camera_sight: bool = False,
+    max_distance_m: float = 250.0,
+    min_height_m: float = 2.5,
+    max_height_m: float = 35.0,
+    ground_z_ngf: Optional[float] = None,
+) -> list[tuple[list[tuple[float, float]], float, float]]:
+    """Load BDTOPO LOD2 buildings from the cached IGN photogrammetry GeoJSON
+    and project them to the BM local frame, **using the per-vertex z** (true
+    LOD2 roof altitude) instead of the flat `properties.hauteur` field.
+
+    Returns a list of `(footprint_local, height_m, z_base_m)` triples where
+    `z_base_m` is the building's ground altitude relative to the parcelle
+    centroid's ground (i.e. the elevation difference of the voisin's foot
+    relative to our z=0 plane). For Nogent, neighbouring streets vary by a
+    few meters of slope; this lets the voisinage sit at correct elevations
+    rather than all stamped at z=0.
+
+    Filters mirror voisins_to_local_polygons (own building, distance, height
+    band, behind-camera, occluders). When `ground_z_ngf` is None the smallest
+    `altitude_minimale_sol` of any feature within 25 m of the parcel centroid
+    is used as the reference ground.
+    """
+    geojson = load_ign_bdtopo_geojson(project_id, refs_root=refs_root)
+    features = list(geojson.get("features", []))
+
+    parcel_cx = parcel_cy = None
+    if skip_overlap_with:
+        parcel_cx = sum(p[0] for p in skip_overlap_with) / len(skip_overlap_with)
+        parcel_cy = sum(p[1] for p in skip_overlap_with) / len(skip_overlap_with)
+
+    # 1) Auto-detect ground z if not provided : take the altitude_minimale_sol
+    #    of the closest valid feature to the parcel centroid.
+    if ground_z_ngf is None:
+        best_d = float("inf")
+        for f in features:
+            props = f.get("properties", {}) or {}
+            sol = props.get("altitude_minimale_sol")
+            if sol is None or sol <= IGN_Z_SENTINEL_NULL + 1:
+                continue
+            rings = project_to_parcel_frame(f, origin, parcel_center_local)
+            for ring in rings:
+                rcx = sum(p[0] for p in ring) / len(ring)
+                rcy = sum(p[1] for p in ring) / len(ring)
+                d = ((rcx - parcel_center_local[0]) ** 2 +
+                     (rcy - parcel_center_local[1]) ** 2) ** 0.5
+                if d < best_d:
+                    best_d = d
+                    ground_z_ngf = float(sol)
+        if ground_z_ngf is None:
+            ground_z_ngf = 0.0
+
+    cam_to_proj = None
+    cam_forward = None
+    if camera_pos_xy is not None and parcel_cx is not None:
+        fx = parcel_cx - camera_pos_xy[0]
+        fy = parcel_cy - camera_pos_xy[1]
+        cam_to_proj = (fx * fx + fy * fy) ** 0.5
+        if cam_to_proj > 1e-6:
+            cam_forward = (fx / cam_to_proj, fy / cam_to_proj)
+
+    out: list[tuple[list[tuple[float, float]], float, float]] = []
+    dropped = {
+        "sentinel": 0, "no_z": 0, "own_building": 0, "too_far": 0,
+        "too_short": 0, "behind_cam": 0, "occluder": 0,
+    }
+
+    for f in features:
+        z_range = _feature_z_range(f)
+        if z_range is None:
+            dropped["sentinel"] += 1
+            continue
+        z_min, z_max = z_range
+        props = f.get("properties", {}) or {}
+        sol = props.get("altitude_minimale_sol")
+        if sol is not None and sol > IGN_Z_SENTINEL_NULL + 1:
+            z_base_ngf = float(sol)
+        else:
+            z_base_ngf = z_min   # fallback : vertex min
+        height_m = max(0.0, z_max - z_base_ngf)
+        # Fallback to BDTopo 'hauteur' attribute when z range is degenerate
+        # (e.g. parking, single-vertex polygon flagged with hauteur).
+        if height_m < 0.5:
+            h_attr = props.get("hauteur")
+            if h_attr is not None:
+                try:
+                    height_m = float(h_attr)
+                except (TypeError, ValueError):
+                    pass
+        if height_m < min_height_m:
+            dropped["too_short"] += 1
+            continue
+        if height_m > max_height_m:
+            height_m = max_height_m
+
+        z_base_local = z_base_ngf - ground_z_ngf
+
+        rings = project_to_parcel_frame(f, origin, parcel_center_local)
+        if not rings:
+            dropped["no_z"] += 1
+            continue
+        for ring in rings:
+            rcx = sum(p[0] for p in ring) / len(ring)
+            rcy = sum(p[1] for p in ring) / len(ring)
+            if skip_overlap_with:
+                d_proj = ((rcx - parcel_cx) ** 2 + (rcy - parcel_cy) ** 2) ** 0.5
+                if d_proj < 5.0:
+                    dropped["own_building"] += 1
+                    continue
+                if d_proj > max_distance_m:
+                    dropped["too_far"] += 1
+                    continue
+            if cam_to_proj is not None and block_camera_sight and camera_pos_xy is not None:
+                vdx = rcx - camera_pos_xy[0]
+                vdy = rcy - camera_pos_xy[1]
+                d_cam = (vdx * vdx + vdy * vdy) ** 0.5
+                if cam_forward is not None and d_cam > 1e-6:
+                    forward_dot = (vdx * cam_forward[0] + vdy * cam_forward[1]) / d_cam
+                    if forward_dot < 0.25:
+                        dropped["behind_cam"] += 1
+                        continue
+                if d_cam < cam_to_proj * 0.90:
+                    dropped["occluder"] += 1
+                    continue
+            out.append((ring, float(height_m), float(z_base_local)))
+
+    print(
+        f"  IGN voisins kept : {len(out)} / {len(features)} "
+        f"(ground NGF={ground_z_ngf:.1f} m, drops={dropped})"
+    )
     return out

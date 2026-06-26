@@ -61,6 +61,10 @@ refs/renders/*.tiff
 refs/renders/index.html
 backups/
 
+# Network response caches (BAN / IGN WFS / OSM Overpass / GPU WFS …) —
+# regenerated on demand, never committed.
+refs/cache/
+
 
 # Scheduled tasks lock
 .claude/scheduled_tasks.lock

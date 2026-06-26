@@ -49,8 +49,8 @@ image = (
         "-O /root/hdri.hdr || echo 'HDRI download failed (will fallback to Nishita sky)'",
         # PBR textures — Poly Haven CC0, 1k diffuse maps for photorealism.
         # Each texture is the diffuse/albedo channel for its material.
-        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/red_brick_03/red_brick_03_diff_1k.jpg -O /root/textures/brique_rouge.jpg || echo 'brique fail'",
-        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/red_brick_03/red_brick_03_nor_gl_1k.jpg -O /root/textures/brique_rouge_normal.jpg || echo 'brique norm fail'",
+        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/red_brick_03/red_brick_03_diff_2k.jpg -O /root/textures/brique_rouge.jpg || echo 'brique fail'",
+        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/red_brick_03/red_brick_03_nor_gl_2k.jpg -O /root/textures/brique_rouge_normal.jpg || echo 'brique norm fail'",
         "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/cobblestone_floor_03/cobblestone_floor_03_diff_1k.jpg -O /root/textures/pierre_taille.jpg || echo 'pierre fail'",
         "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_plaster_wall/painted_plaster_wall_diff_1k.jpg -O /root/textures/enduit.jpg || echo 'enduit fail'",
         "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_diff_1k.jpg -O /root/textures/asphalte.jpg || echo 'asphalt fail'",
@@ -101,6 +101,12 @@ class BlenderPipeline:
         tree_positions: Optional[list] = None,    # [(x, y, height_m, canopy_r), ...]
         lamp_positions: Optional[list] = None,    # [(x, y), ...] (height fixed 5m)
         silhouette_mode: bool = False,            # iter #302 : pure white emit on black bg
+        photoreal: bool = False,                  # persuasion-mode : Poly Haven PBR textures
+        adaptive_threshold: float = 0.01,         # 0 = fixed `samples` (identical pixels);
+                                                  # >0 = adaptive sampling, `samples` becomes
+                                                  # the max cap, converged pixels stop early.
+                                                  # 0.01 validated lossless on Nogent (PSNR
+                                                  # 69 dB) for −41 % Cycles time — see ArchiBrain.
     ) -> bytes:
         """Render a scene_mesh Quad list with Cycles path tracing.
 
@@ -124,7 +130,7 @@ class BlenderPipeline:
         scene = bpy.context.scene
 
         # Build PBR materials dict.
-        materials = self._build_materials()
+        materials = self._build_materials(photoreal=photoreal)
 
         # Build a single mesh with multiple materials.
         mesh = bpy.data.meshes.new("ProjectMesh")
@@ -214,20 +220,34 @@ class BlenderPipeline:
                 bulb.data.materials.append(pole_mat)
             print(f"  + {len(lamp_positions)} street lamps (pole + bulb)")
 
-        # ── Sun light : balanced, warm late-morning ──
-        # Note : with MULTIPLE_SCATTERING sky, the sky itself contributes a
-        # lot of indirect/diffuse light, so we reduce sun energy compared
-        # to a black-sky setup. iter #201 was overexposed at 8.0 — calibrating to 5.0.
+        # ── Sun light : plein jour ENSOLEILLÉ DOUX — pas golden hour cramé ──
+        # iter 2026-06-24 (light agent) : le réglage golden hour (energy 7.5 +
+        # élévation forcée 18°) CRAMAIT le côté droit (flare, voisin invisible
+        # dans la lumière). AMBIANCE_REELLE = rue claire crème, lumineuse mais
+        # DOUCE. On vise donc une lumière de plein jour ensoleillée modelée :
+        #   - energy 3.4 : éclaire et modèle sans blowout (était 7.5 → cramait).
+        #   - élévation 34° : soleil plus HAUT → sort de l'axe caméra plongeante,
+        #     plus de lèche-façade aveuglant, ombres courtes/modelées pas plates.
+        #   - azimut DÉCALÉ +28° vers le côté : lumière plus LATÉRALE pour
+        #     sculpter les reliefs (bandeaux, encadrements) sans frapper la
+        #     caméra de face → tue le flare directionnel côté droit.
+        #   - couleur à peine chaude (lumière du jour douce, pas ambre saturé).
         import math
         sun_data = bpy.data.lights.new(name="Sun", type="SUN")
-        sun_data.energy = 5.0
-        sun_data.angle = math.radians(2.0)   # softer shadows (sun disk size)
-        sun_data.color = (1.0, 0.97, 0.92)   # slight warm tint
+        sun_data.energy = 4.2                 # ensoleillé mais doux (pas de flare)
+        sun_data.angle = math.radians(2.0)    # bord d'ombre légèrement adouci
+        sun_data.color = (1.0, 0.90, 0.76)    # soleil chaud léger (plein jour ensoleillé)
         sun_obj = bpy.data.objects.new("Sun", sun_data)
         bpy.context.collection.objects.link(sun_obj)
+        # On part de l'AZIMUT fourni par sun_direction (cohérence HDRI), mais on
+        # le rend plus LATÉRAL (+28°) et on remonte l'élévation à 34° pour
+        # modeler sans flare frontal côté droit.
         sx, sy, sz = sun_direction
-        slen = (sx*sx + sy*sy + sz*sz) ** 0.5 or 1.0
-        sx, sy, sz = sx/slen, sy/slen, sz/slen
+        _az = math.atan2(sx, -sy) + math.radians(28.0)   # azimut + décalage latéral
+        _elev = math.radians(34.0)            # soleil haut → pas dans l'axe caméra
+        sx = math.cos(_elev) * math.sin(_az)
+        sy = -math.cos(_elev) * math.cos(_az)
+        sz = math.sin(_elev)
         sun_obj.rotation_euler = (math.atan2(-sy, sz), math.atan2(sx, sz), 0.0)
 
         # ── Sky : Poly Haven HDRI (real photo + clouds) with fallback ──
@@ -317,10 +337,33 @@ class BlenderPipeline:
                 mapping.inputs["Rotation"].default_value[2] = math.radians(140)
                 nt.links.new(tex_coord.outputs["Generated"], mapping.inputs["Vector"])
                 nt.links.new(mapping.outputs["Vector"], env_node.inputs["Vector"])
-                nt.links.new(env_node.outputs["Color"], bg.inputs["Color"])
-                bg.inputs["Strength"].default_value = 1.8
+                # iter 2026-06-24 : le HDRI puresky est NEUTRE/FROID (bleu-gris).
+                # On le RÉCHAUFFE pour un ciel golden hour : (1) Hue/Sat décale
+                # légèrement la teinte vers le chaud, (2) un Mix MULTIPLY ambre
+                # baigne l'ensemble dans une dominante fin d'après-midi. Le fill
+                # ambiant qui éclaire les ombres devient ainsi chaud (plus de
+                # bleu froid dans les zones d'ombre).
+                # iter 2026-06-24 (light agent) : on calme le grade ambre (il
+                # virait orange + assombrissait le fill, ce qui forçait à monter
+                # le soleil → flare). Léger réchauffement seulement ; le ciel
+                # reste un fill diffus CLAIR qui débouche les ombres et baigne
+                # la pierre crème dans une lumière douce.
+                hsv = nt.nodes.new("ShaderNodeHueSaturation")
+                hsv.inputs["Saturation"].default_value = 1.10   # ciel un peu coloré
+                hsv.inputs["Value"].default_value = 1.0
+                nt.links.new(env_node.outputs["Color"], hsv.inputs["Color"])
+                warm = nt.nodes.new("ShaderNodeMixRGB")
+                warm.blend_type = "MULTIPLY"
+                warm.inputs["Fac"].default_value = 0.35           # réchauffement léger
+                warm.inputs["Color2"].default_value = (1.0, 0.86, 0.70, 1.0)  # crème chaud doux
+                nt.links.new(hsv.outputs["Color"], warm.inputs["Color1"])
+                nt.links.new(warm.outputs["Color"], bg.inputs["Color"])
+                # strength remonté : fill clair = ombres modelées (pas noires),
+                # contraste maîtrisé → pas de blowout côté soleil. Le ciel
+                # éclaire largement, le soleil ne fait que sculpter.
+                bg.inputs["Strength"].default_value = 0.85
                 used_hdri = True
-                print("✓ HDRI environment loaded (Poly Haven kloppenheim_06_puresky)")
+                print("✓ HDRI environment loaded (Poly Haven kloppenheim_06_puresky) + warm grade")
             except Exception as e:
                 print(f"!! HDRI load failed ({e}) — fallback to procedural sky")
         if not used_hdri:
@@ -345,8 +388,11 @@ class BlenderPipeline:
         # Filmic compresses highlights instead of clipping → no blown whites
         # on south facade or pale voisin renders.
         scene.view_settings.view_transform = "Filmic"
+        # iter 2026-06-24 (light agent) : contraste medium (pas high) + exposure
+        # plus basse → Filmic compresse les highlights de la pierre claire au
+        # lieu de les cramer. Lumineux mais DOUX, pas de blowout côté soleil.
         scene.view_settings.look = "Medium Contrast"
-        scene.view_settings.exposure = +0.4    # +0.4 EV : lighter exposure for clean modern look
+        scene.view_settings.exposure = +0.15   # pierre crème lumineuse, highlights préservés
 
         # Camera.
         cam_data = bpy.data.cameras.new(name="Cam")
@@ -366,25 +412,48 @@ class BlenderPipeline:
         scene.cycles.device = "GPU"
         scene.cycles.samples = samples
         scene.cycles.use_denoising = True
+        # Adaptive sampling : Cycles stops sampling pixels that have already
+        # converged (flat sky / enduit / asphalte) and pours the budget into
+        # noisy regions. `samples` becomes the per-pixel cap. Perceptually
+        # lossless ; default off (threshold 0) keeps the exact prior behaviour.
+        if adaptive_threshold > 0.0:
+            scene.cycles.use_adaptive_sampling = True
+            scene.cycles.adaptive_threshold = adaptive_threshold
+        else:
+            scene.cycles.use_adaptive_sampling = False
         scene.render.resolution_x = width
         scene.render.resolution_y = height
         scene.render.image_settings.file_format = "PNG"
         scene.render.filepath = "/tmp/blender_scene.png"
 
-        print(f"→ Cycles {width}×{height} samples={samples} GPU …")
+        print(f"→ Cycles {width}×{height} samples={samples} "
+              f"adaptive={adaptive_threshold or 'off'} GPU …")
+        import time as _time
+        _t0 = _time.time()
         bpy.ops.render.render(write_still=True)
-        print(f"✓ render complete")
+        _dt = _time.time() - _t0
+        print(f"✓ render complete — RENDER_SECONDS={_dt:.2f}")
         return Path("/tmp/blender_scene.png").read_bytes()
 
-    def _build_materials(self) -> dict:
-        """Build a dict of PBR materials for the scene."""
+    def _build_materials(self, photoreal: bool = False) -> dict:
+        """Build a dict of PBR materials for the scene.
+
+        `photoreal=True` swaps the key facade / ground / vegetation materials
+        from flat-colour `_make_principled` to Poly Haven PBR via
+        `_make_textured`. Used in persuasion-mode (brochure renders that go
+        through the SDXL + LoRA pipeline) — the LoRA polishes the realistic
+        texture into a clean new brick brochure look. For PC-dossier mode
+        we keep flat colours so the building reads as new construction
+        (the 2026-05 textured tests looked « 20 years dirty »).
+        """
         import bpy
         mats: dict = {}
 
         import os as _os_mat
         def _make_textured(name: str, tex_path: str, normal_path: str | None = None,
                            tile_size_m: float = 2.0, fallback_color=(0.7, 0.7, 0.7),
-                           roughness: float = 0.7, metallic: float = 0.0, specular: float = 0.3):
+                           roughness: float = 0.7, metallic: float = 0.0, specular: float = 0.3,
+                           color_break: float = 0.0, break_scale: float = 0.9):
             """PBR material : diffuse texture + optional normal map, tiled by tile_size_m in world space.
 
             Uses Object texture coords (world space meters) + Mapping scale
@@ -415,7 +484,37 @@ class BlenderPipeline:
                     tex.image.colorspace_settings.name = "sRGB"
                     nt.links.new(tex_coord.outputs["Object"], mapping.inputs["Vector"])
                     nt.links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
-                    nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+                    if color_break > 0:
+                        # Variation tonale MACRO : un bruit grande-échelle (en
+                        # mètres-monde, indépendant du tiling) module la couleur
+                        # par zones — certaines briques plus chaudes/sombres,
+                        # d'autres plus claires. Casse l'aspect texture-tuilée
+                        # uniforme et donne la lecture "brique-par-brique" réelle.
+                        bcoord = nt.nodes.new("ShaderNodeTexCoord")
+                        bmap = nt.nodes.new("ShaderNodeMapping")
+                        bmap.inputs["Scale"].default_value = (break_scale, break_scale, break_scale)
+                        noise = nt.nodes.new("ShaderNodeTexNoise")
+                        noise.inputs["Scale"].default_value = 1.0
+                        noise.inputs["Detail"].default_value = 4.0
+                        if "Roughness" in noise.inputs:
+                            noise.inputs["Roughness"].default_value = 0.6
+                        ramp = nt.nodes.new("ShaderNodeValToRGB")
+                        # rampe resserrée autour de 1.0 → multiplie ±, garde la teinte
+                        ramp.color_ramp.elements[0].position = 0.30
+                        ramp.color_ramp.elements[0].color = (1.0 - 0.45 * color_break,) * 3 + (1.0,)
+                        ramp.color_ramp.elements[1].position = 0.72
+                        ramp.color_ramp.elements[1].color = (1.0 + 0.30 * color_break,) * 3 + (1.0,)
+                        mix = nt.nodes.new("ShaderNodeMixRGB")
+                        mix.blend_type = "MULTIPLY"
+                        mix.inputs["Fac"].default_value = 1.0
+                        nt.links.new(bcoord.outputs["Object"], bmap.inputs["Vector"])
+                        nt.links.new(bmap.outputs["Vector"], noise.inputs["Vector"])
+                        nt.links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
+                        nt.links.new(tex.outputs["Color"], mix.inputs["Color1"])
+                        nt.links.new(ramp.outputs["Color"], mix.inputs["Color2"])
+                        nt.links.new(mix.outputs["Color"], bsdf.inputs["Base Color"])
+                    else:
+                        nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
                     if normal_path and _os_mat.path.exists(normal_path) and _os_mat.path.getsize(normal_path) > 1000:
                         nor_tex = nt.nodes.new("ShaderNodeTexImage")
                         nor_tex.image = bpy.data.images.load(normal_path)
@@ -605,6 +704,86 @@ class BlenderPipeline:
         mats["fer_forge"]       = _make_principled("fer_forge",
                                                     (0.04, 0.04, 0.05), 0.30, 0.8,
                                                     specular=0.6)
+
+        # ── Photoreal swap : replace key surface materials with Poly Haven
+        # PBR textures (downloaded at image-build time, see image.run_commands
+        # at top of this file). Tile sizes chosen for archviz human-scale.
+        if photoreal:
+            mats["brique_rouge"] = _make_textured(
+                "brique_rouge",
+                "/root/textures/brique_rouge.jpg",
+                normal_path="/root/textures/brique_rouge_normal.jpg",
+                tile_size_m=1.5, fallback_color=(0.55, 0.22, 0.12),
+                roughness=0.78, specular=0.15,
+                color_break=0.85, break_scale=0.85,   # variation brique-par-brique (cible_B)
+            )
+            mats["asphalte"] = _make_textured(
+                "asphalte", "/root/textures/asphalte.jpg",
+                tile_size_m=3.0, fallback_color=(0.16, 0.16, 0.16),
+                roughness=0.92, specular=0.04,
+            )
+            mats["pavers_concrete"] = _make_textured(
+                "pavers_concrete", "/root/textures/concrete.jpg",
+                tile_size_m=1.0, fallback_color=(0.58, 0.58, 0.55),
+                roughness=0.86, specular=0.12,
+            )
+            # FIX 2026-06-24 : la texture aerial_grass_rock (herbe.jpg) sortait
+            # en BANDES JAUNES/VERTES criardes à chaque balcon (jardinières) —
+            # pelouse sèche/rocailleuse vue du ciel, hideux à l'échelle façade.
+            # On repasse en PRINCIPLED vert NATUREL PROFOND et MAT, discret :
+            # vert forêt désaturé, roughness haute (feuillage mat), micro-noise
+            # léger pour éviter l'aplat plastique. Plus de jaune criard.
+            mats["vegetation"] = _make_principled(
+                "vegetation", (0.075, 0.135, 0.065), roughness=0.97,
+                specular=0.02, noise_amount=0.07, noise_scale=70.0,
+                color_variation=0.05,
+            )
+            mats["terre_neutre"] = _make_textured(
+                "terre_neutre", "/root/textures/terre.jpg",
+                tile_size_m=2.5, fallback_color=(0.42, 0.40, 0.36),
+                roughness=0.92, specular=0.05,
+            )
+            # iter 2026-06-24 (light agent) : variation tonale DISCRÈTE sur
+            # l'enduit crème pour casser l'aplat plat (profondeur sans salir,
+            # reste clair crème). Plus subtil que la pierre (façade plus lisse).
+            mats["enduit_blanc"] = _make_textured(
+                "enduit_blanc", "/root/textures/enduit.jpg",
+                tile_size_m=3.5, fallback_color=(0.92, 0.86, 0.74),
+                roughness=0.75, specular=0.25,
+                color_break=0.22, break_scale=0.40,
+            )
+            mats["voisin"] = _make_textured(
+                "voisin", "/root/textures/enduit.jpg",
+                tile_size_m=3.5, fallback_color=(0.50, 0.45, 0.38),
+                roughness=0.92, specular=0.08,
+            )
+            # FIX 2026-06-24 : la cobblestone faisait des RAYURES sur les murs.
+            # Pierre de taille = plâtre LISSE (enduit) teinté pierre crème.
+            # Le relief vient de la géométrie (soubassement, bandeaux, encadrements).
+            # iter 2026-06-24 (light agent) : la pierre lisait PLATE ("pâte à
+            # modeler"). On ajoute color_break = variation tonale MACRO (bruit
+            # grande-échelle multiplié autour de 1.0 → garde la teinte CRÈME,
+            # certaines zones un peu plus claires/sombres) + on remonte break_scale
+            # pour des plages de la taille d'un bloc de pierre. Donne la
+            # profondeur d'une VRAIE pierre claire, pas un beige uniforme.
+            # roughness un peu plus haute + micro normal map (déjà dans la
+            # texture enduit) → grain mat photographique.
+            mats["pierre_taille"] = _make_textured(
+                "pierre_taille", "/root/textures/enduit.jpg",
+                tile_size_m=2.6, fallback_color=(0.85, 0.79, 0.66),
+                roughness=0.80, specular=0.14,
+                color_break=0.45, break_scale=0.55,   # variation tonale crème par blocs
+            )
+            mats["bois_clair"] = _make_textured(
+                "bois_clair", "/root/textures/bois.jpg",
+                tile_size_m=1.4, fallback_color=(0.50, 0.32, 0.18),
+                roughness=0.65, specular=0.25,
+            )
+            # Zinc anthracite LISSE (la tôle ondulée donnait des vagues).
+            mats["zinc_anthracite"] = _make_principled(
+                "zinc_anthracite", (0.17, 0.17, 0.19), 0.42, 0.55,
+                specular=0.5, noise_amount=0.015, noise_scale=120.0,
+            )
         return mats
 
     @modal.method()
@@ -653,8 +832,7 @@ class BlenderPipeline:
         return Path("/tmp/blender_poc.png").read_bytes()
 
 
-@app.local_entrypoint()
-def main(
+def _render_one(
     project_id: str = "e9a960c8-081f-4c42-a65b-619610a61134",
     preset: str = "rue_se_eloignee",
     seed: int = 11,
@@ -662,8 +840,13 @@ def main(
     height: int = 1024,
     samples: int = 128,
     test_only: bool = False,
+    photoreal: bool = False,
+    adaptive_threshold: float = 0.01,   # validated lossless (−41 % Cycles); 0 to force fixed
 ):
-    """Build the project's scene_mesh quads + render via Blender Cycles."""
+    """Build the project's scene_mesh quads + render ONE preset via Blender
+    Cycles. Plain function (no entrypoint decorator) so it can be called both
+    by the single-shot `main` entrypoint and looped by `batch` within a single
+    warm Modal container."""
     if test_only:
         bp = BlenderPipeline()
         print("→ rendering test cube …")
@@ -1546,6 +1729,8 @@ def main(
         width=width, height=height, samples=samples,
         tree_positions=tree_positions,
         lamp_positions=lamp_positions,
+        photoreal=photoreal,
+        adaptive_threshold=adaptive_threshold,
     )
     # Save to /tmp for fast local access (used by FLUX finish pipeline).
     out = Path(f"/tmp/blender_{preset}_{seed}.png")
@@ -1633,3 +1818,115 @@ def main(
             print(f"  → gallery refreshed : {persist_dir / 'index.html'}")
     except Exception as _e:
         print(f"  !! gallery regen failed ({_e})")
+
+
+@app.local_entrypoint()
+def main(
+    project_id: str = "e9a960c8-081f-4c42-a65b-619610a61134",
+    preset: str = "rue_se_eloignee",
+    seed: int = 11,
+    width: int = 1024,
+    height: int = 1024,
+    samples: int = 128,
+    test_only: bool = False,
+    photoreal: bool = False,
+    adaptive_threshold: float = 0.01,   # validated lossless (−41 % Cycles); 0 to force fixed
+):
+    """Render a single preset. Thin passthrough to `_render_one` — behaviour
+    identical to before the batch refactor."""
+    _render_one(
+        project_id=project_id, preset=preset, seed=seed,
+        width=width, height=height, samples=samples,
+        test_only=test_only, photoreal=photoreal,
+        adaptive_threshold=adaptive_threshold,
+    )
+
+
+@app.local_entrypoint()
+def batch(
+    project_id: str = "e9a960c8-081f-4c42-a65b-619610a61134",
+    presets: str = "junction_pov,rue_se_eloignee,oiseau_iso,angle_3_4",
+    seed: int = 11,
+    width: int = 1024,
+    height: int = 1024,
+    samples: int = 128,
+    photoreal: bool = False,
+    adaptive_threshold: float = 0.01,
+):
+    """Render SEVERAL presets of one project in a single Modal app session.
+
+    Lossless vs N separate `modal run main` calls (same scene, same cameras →
+    identical pixels). The win is operational : all presets run back-to-back in
+    one session, so the Blender container is spun up ONCE and stays warm across
+    the loop — no cold start re-paid when you render angles spread out over a
+    review session. Use `main` for single/iterative renders, `batch` for the
+    final angle set.
+
+        modal run src/modal_blender_endpoint.py::batch \\
+          --project-id <id> --presets "junction_pov,oiseau_iso,angle_3_4"
+    """
+    preset_list = [p.strip() for p in presets.split(",") if p.strip()]
+    print(f"══ batch : {len(preset_list)} presets, one warm container ══")
+    for i, preset in enumerate(preset_list, 1):
+        print(f"\n── [{i}/{len(preset_list)}] preset={preset} ──")
+        _render_one(
+            project_id=project_id, preset=preset, seed=seed,
+            width=width, height=height, samples=samples,
+            test_only=False, photoreal=photoreal,
+            adaptive_threshold=adaptive_threshold,
+        )
+    print(f"\n✓ batch complete — {len(preset_list)} presets rendered")
+
+
+# ---------------------------------------------------------------------------
+# iter #303 — minimal CLI : render from a JSON config (quads + camera).
+# Used by the L building 6-options × 6-POVs fan-out for Nogent 80 Héros.
+# Bypasses building_model API — geometry/cameras passed via JSON directly.
+# Invoked via :
+#   modal run src/modal_blender_endpoint.py::render_from_json_cli \
+#     --config-path /abs/path/to/config.json --out-png /abs/path/to/render.png
+# ---------------------------------------------------------------------------
+@app.local_entrypoint()
+def render_from_json_cli(
+    config_path: str,
+    out_png: str,
+    samples: int = 64,
+    photoreal: bool = True,
+):
+    """Render one Cycles image from a JSON config file.
+
+    JSON schema :
+      {
+        "quads_by_material": {<material>: [[ [x,y,z], [x,y,z], [x,y,z], [x,y,z] ], ...]},
+        "camera_pos":  [x, y, z],
+        "camera_target": [x, y, z],
+        "camera_fov_deg": 45.0,
+        "sun_direction": [0.4, -0.6, 0.7]
+      }
+    """
+    import json as _json
+    cfg = _json.loads(Path(config_path).read_text())
+    quads_by_material = cfg["quads_by_material"]
+    cam_pos = tuple(cfg["camera_pos"])
+    cam_target = tuple(cfg["camera_target"])
+    fov = float(cfg.get("camera_fov_deg", 45.0))
+    sun = tuple(cfg.get("sun_direction", (0.4, -0.6, 0.7)))
+
+    bp = BlenderPipeline()
+    print(f"→ rendering from {config_path}")
+    print(f"  materials: {list(quads_by_material.keys())}")
+    print(f"  total quads: {sum(len(qs) for qs in quads_by_material.values())}")
+    png = bp.render_from_quads.remote(
+        quads_by_material=quads_by_material,
+        camera_pos=cam_pos,
+        camera_target=cam_target,
+        camera_fov_deg=fov,
+        sun_direction=sun,
+        width=1024, height=1024,
+        samples=samples,
+        photoreal=photoreal,
+    )
+    out = Path(out_png)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(png)
+    print(f"✓ saved {len(png):,} bytes → {out}")
