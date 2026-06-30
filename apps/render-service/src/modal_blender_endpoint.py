@@ -43,10 +43,19 @@ image = (
         "pillow>=10.4",
     )
     .run_commands(
-        # Cache a Poly Haven daytime HDRI inside the image.
+        # iter 2026-06-27 (light2 agent) : le HDRI kloppenheim_06_puresky est un
+        # ciel NUAGEUX → même saturé il reste gris/laiteux en haut (B-R≈+9, ciel
+        # quasi blanc). Les Street View Nogent montrent un CIEL BLEU FRANC dégagé.
+        # On passe à qwantani_noon (Poly Haven, ciel bleu midi dégagé, soleil
+        # haut net). On garde puresky en FALLBACK si le primaire échoue.
         "mkdir -p /root/textures && wget -q "
-        "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloppenheim_06_puresky_1k.hdr "
-        "-O /root/hdri.hdr || echo 'HDRI download failed (will fallback to Nishita sky)'",
+        "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/qwantani_noon_1k.hdr "
+        "-O /root/hdri.hdr || echo 'HDRI primaire (qwantani_noon) failed'",
+        # Fallback ciel : si le primaire est trop petit/manquant, on récupère le
+        # puresky (nuageux mais valide) pour ne jamais retomber sur Nishita seul.
+        "test -s /root/hdri.hdr && [ $(stat -c%s /root/hdri.hdr) -gt 100000 ] || "
+        "wget -q https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloppenheim_06_puresky_1k.hdr "
+        "-O /root/hdri.hdr || echo 'HDRI fallback (puresky) failed too — Nishita sky'",
         # PBR textures — Poly Haven CC0, 1k diffuse maps for photorealism.
         # Each texture is the diffuse/albedo channel for its material.
         "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/red_brick_03/red_brick_03_diff_2k.jpg -O /root/textures/brique_rouge.jpg || echo 'brique fail'",
@@ -55,6 +64,23 @@ image = (
         "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_plaster_wall/painted_plaster_wall_diff_1k.jpg -O /root/textures/enduit.jpg || echo 'enduit fail'",
         "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_diff_1k.jpg -O /root/textures/asphalte.jpg || echo 'asphalt fail'",
         "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_floor_painted/concrete_floor_painted_diff_1k.jpg -O /root/textures/concrete.jpg || echo 'concrete fail'",
+        # iter 2026-06-27 (mat2 agent) — matériaux LISSES/PLASTIQUE → on ajoute
+        # des textures DÉFINIES pour pierre façade, béton balcon, dallage trottoir.
+        # Béton lisse propre (neuf) pour les dalles/sous-faces de balcon : grain
+        # béton + normal map → tranche/sous-face lisent comme béton mat, pas aplat.
+        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete_wall_006/concrete_wall_006_diff_2k.jpg -O /root/textures/beton_lisse.jpg || echo 'beton_lisse fail'",
+        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete_wall_006/concrete_wall_006_nor_gl_2k.jpg -O /root/textures/beton_lisse_normal.jpg || echo 'beton_lisse norm fail'",
+        # Pierre/enduit de taille DÉFINIE : mur beige fin avec grain + normal map →
+        # remplace l'aplat lisse de la façade par une vraie pierre/enduit claire.
+        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/beige_wall_001/beige_wall_001_diff_2k.jpg -O /root/textures/pierre_facade.jpg || echo 'pierre_facade fail'",
+        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/beige_wall_001/beige_wall_001_nor_gl_2k.jpg -O /root/textures/pierre_facade_normal.jpg || echo 'pierre_facade norm fail'",
+        # Normal map de l'enduit existant (painted plaster) → relief sur enduit_blanc.
+        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/painted_plaster_wall/painted_plaster_wall_nor_gl_1k.jpg -O /root/textures/enduit_normal.jpg || echo 'enduit norm fail'",
+        # Dallage trottoir avec DALLES + JOINTS visibles (vrai trottoir, pas aplat).
+        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete_pavement_03/concrete_pavement_03_diff_2k.jpg -O /root/textures/dallage.jpg || echo 'dallage fail'",
+        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete_pavement_03/concrete_pavement_03_nor_gl_2k.jpg -O /root/textures/dallage_normal.jpg || echo 'dallage norm fail'",
+        # Asphalte avec normal map (grain) → bitume non-aplat.
+        "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_nor_gl_1k.jpg -O /root/textures/asphalte_normal.jpg || echo 'asphalt norm fail'",
         "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_planks/wood_planks_diff_1k.jpg -O /root/textures/bois.jpg || echo 'bois fail'",
         "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/metal_corrugated_iron_02/metal_corrugated_iron_02_diff_1k.jpg -O /root/textures/zinc.jpg || echo 'zinc fail'",
         "wget -q https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_01/forest_ground_01_diff_1k.jpg -O /root/textures/terre.jpg || echo 'terre fail'",
@@ -101,6 +127,7 @@ class BlenderPipeline:
         tree_positions: Optional[list] = None,    # [(x, y, height_m, canopy_r), ...]
         lamp_positions: Optional[list] = None,    # [(x, y), ...] (height fixed 5m)
         silhouette_mode: bool = False,            # iter #302 : pure white emit on black bg
+        add_real_assets: bool = False,            # POC entourage : vrais arbres/voitures/personnes 3D
         photoreal: bool = False,                  # persuasion-mode : Poly Haven PBR textures
         adaptive_threshold: float = 0.01,         # 0 = fixed `samples` (identical pixels);
                                                   # >0 = adaptive sampling, `samples` becomes
@@ -168,6 +195,20 @@ class BlenderPipeline:
         print(f"✓ mesh built : {len(verts)} verts, {len(faces)} faces, "
               f"{len(material_index)} materials")
 
+        # ── POC ENTOURAGE : VRAIS assets 3D (arbres / voitures / personnes) ──
+        # Étape #2 du POC « base seule = photo ». Les proxys carton (quads plats)
+        # sont retirés en amont (POC_NOENTOURAGE). On injecte ici de VRAIS objets
+        # 3D volumétriques (ombres portées, matière) placés le long du trottoir,
+        # PROCHES du carrefour et DEVANT la caméra. Désactivable via
+        # add_real_assets=False (silhouette pass, etc.).
+        if add_real_assets and not silhouette_mode:
+            try:
+                self._add_real_entourage(camera_pos, camera_target)
+            except Exception as _ea:
+                import traceback as _tb
+                print(f"!! real-entourage step failed ({_ea})")
+                _tb.print_exc()
+
         # ── Trees as Blender primitives (cylinder trunk + sphere canopy) ──
         # iter #218/#219 showed flat-quad trees look like ad panels.
         # UV sphere + cylinder give organic shapes FLUX reads as trees.
@@ -233,18 +274,36 @@ class BlenderPipeline:
         #     caméra de face → tue le flare directionnel côté droit.
         #   - couleur à peine chaude (lumière du jour douce, pas ambre saturé).
         import math
+        # iter 2026-06-27 (light2 agent) : constat user = "ne lit pas comme une
+        # photo", lumière PLATE et GRISE, ciel laiteux. Les vraies Street View
+        # (refs/streetview/survey_*) montrent PLEIN SOLEIL : ciel bleu franc,
+        # OMBRES PORTÉES NETTES, façade modelée (un côté chaud / un côté ombre).
+        # On RÉ-AUGMENTE le punch directionnel pour ce modelé-là :
+        #   - energy 4.2 → 6.2 : soleil franc → ombres portées VISIBLES + fort
+        #     modelé. Filmic High Contrast compresse les highlights donc on peut
+        #     monter sans cramer (blowout surveillé <1% à 255).
+        #   - angle 2.0° → 0.5° : bord d'ombre NET. 2° donnait des ombres molles
+        #     qui se lisaient comme de la brume. 0.5° = ombre dure de plein jour
+        #     (le soleil réel = ~0.53° de diamètre apparent).
+        #   - couleur À PEINE chaude (0.90→0.95 sur G/B) : lumière du jour claire,
+        #     pas ambre — l'ambre jaunissait la pierre et tuait la lecture photo.
         sun_data = bpy.data.lights.new(name="Sun", type="SUN")
-        sun_data.energy = 4.2                 # ensoleillé mais doux (pas de flare)
-        sun_data.angle = math.radians(2.0)    # bord d'ombre légèrement adouci
-        sun_data.color = (1.0, 0.90, 0.76)    # soleil chaud léger (plein jour ensoleillé)
+        sun_data.energy = 7.5                 # plein soleil franc mais split moins dur (face ombre pas noire)
+        sun_data.angle = math.radians(0.5)    # bord d'ombre net (réaliste, pas de flou brume)
+        sun_data.color = (1.0, 0.96, 0.90)    # lumière du jour ensoleillée (à peine chaude)
         sun_obj = bpy.data.objects.new("Sun", sun_data)
         bpy.context.collection.objects.link(sun_obj)
         # On part de l'AZIMUT fourni par sun_direction (cohérence HDRI), mais on
         # le rend plus LATÉRAL (+28°) et on remonte l'élévation à 34° pour
         # modeler sans flare frontal côté droit.
+        # iter 2026-06-27 (light2 agent) : on RAKE davantage le soleil en travers
+        # des deux faces visibles du coin (offset +28° → +55°) pour un vrai
+        # split lumière/ombre (une face au soleil, l'autre à l'ombre = le modelé
+        # qui fait la photo), et on abaisse un peu l'élévation (34° → 30°) pour
+        # des ombres portées plus LONGUES et lisibles au sol sans flare frontal.
         sx, sy, sz = sun_direction
-        _az = math.atan2(sx, -sy) + math.radians(28.0)   # azimut + décalage latéral
-        _elev = math.radians(34.0)            # soleil haut → pas dans l'axe caméra
+        _az = math.atan2(sx, -sy) + math.radians(22.0)   # rake modéré : éclaire le coin face caméra + garde un côté à l'ombre
+        _elev = math.radians(30.0)            # soleil un peu plus bas → ombres longues lisibles
         sx = math.cos(_elev) * math.sin(_az)
         sy = -math.cos(_elev) * math.cos(_az)
         sz = math.sin(_elev)
@@ -348,22 +407,72 @@ class BlenderPipeline:
                 # le soleil → flare). Léger réchauffement seulement ; le ciel
                 # reste un fill diffus CLAIR qui débouche les ombres et baigne
                 # la pierre crème dans une lumière douce.
+                # iter 2026-06-27 (light2 agent) : HDRI = qwantani_noon (ciel
+                # bleu midi dégagé). Il est DÉJÀ bleu donc on sature modérément
+                # (1.30) pour un bleu d'été franc sans virer cyan irréel, et on
+                # densifie un peu (Value 0.94) pour qu'il ne lave pas en blanc.
                 hsv = nt.nodes.new("ShaderNodeHueSaturation")
-                hsv.inputs["Saturation"].default_value = 1.10   # ciel un peu coloré
-                hsv.inputs["Value"].default_value = 1.0
+                hsv.inputs["Saturation"].default_value = 1.30   # bleu d'été franc
+                hsv.inputs["Value"].default_value = 0.94        # ciel dense (pas blanc lavé)
                 nt.links.new(env_node.outputs["Color"], hsv.inputs["Color"])
+                # iter 2026-06-26 (atmo agent) — ANTI-BRUME / horizon cramé.
+                # Le puresky est ÉBLOUISSANT à l'horizon (bande Z≈0.5) : pile là
+                # où se trouvent les bâtiments voisins. Avec Filmic+exposure ils
+                # se noyaient dans le blanc (côté droit + fond du cadre lavés).
+                # On atténue UNIQUEMENT la bande d'horizon par un dégradé
+                # vertical : on lit le Z du vecteur de direction du ciel
+                # (Generated → Separate XYZ → Z), on le remappe en masque
+                # [horizon→plancher .. ciel haut→1] et on multiplie le ciel par
+                # ce masque (jamais nul). Le HAUT du ciel reste lumineux et
+                # ensoleillé, mais l'HORIZON redescend assez pour que les
+                # volumes voisins ressortent → profondeur photographique.
+                # ORDRE IMPORTANT : on applique le dégradé AVANT le grade chaud,
+                # comme ça le réchauffement (multiply ambre) teinte aussi la
+                # bande d'horizon assombrie → l'horizon reste CHAUD, pas gris.
+                sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+                nt.links.new(tex_coord.outputs["Generated"], sep.inputs["Vector"])
+                # Z du Generated ≈ 0.5 à l'horizon, →1 au zénith, →0 au nadir.
+                horizon_map = nt.nodes.new("ShaderNodeMapRange")
+                horizon_map.inputs["From Min"].default_value = 0.46
+                horizon_map.inputs["From Max"].default_value = 0.82
+                horizon_map.inputs["To Min"].default_value = 0.78   # iter light2 : plancher remonté → horizon reste BLEU (qwantani clear), pas gris
+                horizon_map.inputs["To Max"].default_value = 1.0    # ciel haut : pleine luminosité
+                horizon_map.clamp = True
+                nt.links.new(sep.outputs["Z"], horizon_map.inputs["Value"])
+                horizon_atten = nt.nodes.new("ShaderNodeMixRGB")
+                horizon_atten.blend_type = "MULTIPLY"
+                horizon_atten.inputs["Fac"].default_value = 1.0
+                nt.links.new(hsv.outputs["Color"], horizon_atten.inputs["Color1"])
+                nt.links.new(horizon_map.outputs["Result"], horizon_atten.inputs["Color2"])
+
+                # iter 2026-06-27 (light2 agent) : le grade ambre MULTIPLY
+                # fac=0.50 (1.0,0.81,0.60) était la CAUSE n°1 du ciel laiteux/
+                # jaune — il repeignait le bleu en crème chaud et baignait toute
+                # la scène dans une dominante terne. On le RETIRE quasiment :
+                # fac 0.50 → 0.10 et un ambre BEAUCOUP plus léger (0.97,0.94,0.90),
+                # juste de quoi éviter un fill cyan glacé dans les ombres SANS
+                # tuer le bleu du ciel. Le ciel reste BLEU, l'ambiance ensoleillée
+                # vient du soleil directionnel chaud, pas d'un wash global ambre.
                 warm = nt.nodes.new("ShaderNodeMixRGB")
                 warm.blend_type = "MULTIPLY"
-                warm.inputs["Fac"].default_value = 0.35           # réchauffement léger
-                warm.inputs["Color2"].default_value = (1.0, 0.86, 0.70, 1.0)  # crème chaud doux
-                nt.links.new(hsv.outputs["Color"], warm.inputs["Color1"])
+                warm.inputs["Fac"].default_value = 0.10           # réchauffement minimal (garde le bleu)
+                warm.inputs["Color2"].default_value = (0.97, 0.94, 0.90, 1.0)  # quasi neutre tiède
+                nt.links.new(horizon_atten.outputs["Color"], warm.inputs["Color1"])
                 nt.links.new(warm.outputs["Color"], bg.inputs["Color"])
-                # strength remonté : fill clair = ombres modelées (pas noires),
-                # contraste maîtrisé → pas de blowout côté soleil. Le ciel
-                # éclaire largement, le soleil ne fait que sculpter.
-                bg.inputs["Strength"].default_value = 0.85
+                # strength : fill ambiant qui débouche les ombres. Baissé
+                # 0.80 → 0.62 : avec un soleil plus fort (energy 6.2) le fill HDRI
+                # peut être plus bas → meilleur CONTRASTE soleil/ombre (les ombres
+                # ne sont plus débouchées à plat) tout en restant lisibles. Évite
+                # aussi de cramer la pierre claire côté soleil.
+                # PHASE 1 (photo agent) : le POV corner montrait une face à
+                # l'ombre BOUCHÉE (presque noire) = tell CGI. En plein soleil
+                # réel le ciel bleu remplit fortement les ombres → elles restent
+                # LISIBLES (cf. réfs SV : faces nord crème-gris, jamais noires).
+                # On remonte le fill ambiant 0.78 → 1.0. AgX compresse le haut
+                # donc la face soleil ne crame pas malgré le fill plus fort.
+                bg.inputs["Strength"].default_value = 1.0   # fill plein-soleil : ombres débouchées, lisibles
                 used_hdri = True
-                print("✓ HDRI environment loaded (Poly Haven kloppenheim_06_puresky) + warm grade")
+                print("✓ HDRI environment loaded (puresky) + bleu saturé + soleil franc")
             except Exception as e:
                 print(f"!! HDRI load failed ({e}) — fallback to procedural sky")
         if not used_hdri:
@@ -384,17 +493,38 @@ class BlenderPipeline:
         nt.links.new(bg.outputs["Background"], out.inputs["Surface"])
         scene.world = world
 
-        # ── Filmic view transform + lower exposure ──
-        # Filmic compresses highlights instead of clipping → no blown whites
-        # on south facade or pale voisin renders.
-        scene.view_settings.view_transform = "Filmic"
-        # iter 2026-06-24 (light agent) : contraste medium (pas high) + exposure
-        # plus basse → Filmic compresse les highlights de la pierre claire au
-        # lieu de les cramer. Lumineux mais DOUX, pas de blowout côté soleil.
-        scene.view_settings.look = "Medium Contrast"
-        scene.view_settings.exposure = +0.15   # pierre crème lumineuse, highlights préservés
+        # ── Color management : AgX (PHASE 1, photo agent 2026-06-27) ──
+        # On passe Filmic → AgX. AgX est le tone-mapper de référence pour le
+        # photoréalisme (desaturation progressive des highlights, pas de
+        # virage de teinte sur la pierre claire en plein soleil ; rendu
+        # « caméra » plutôt que « CGI saturé »). Filmic High Contrast donnait
+        # une image dense mais qui « claquait » trop façon 3D. AgX + look
+        # Medium High Contrast garde le punch ensoleillé tout en restant doux
+        # comme une vraie photo. On laisse un fallback Filmic si AgX absent.
+        try:
+            scene.view_settings.view_transform = "AgX"
+            # Look AgX : « AgX - Medium High Contrast » donne le contraste
+            # ensoleillé sans cramer la pierre crème. On tente les noms
+            # connus, fallback sur le premier look AgX dispo.
+            for _look in ("AgX - Medium High Contrast", "AgX - Base Contrast",
+                          "Medium High Contrast", "None"):
+                try:
+                    scene.view_settings.look = _look
+                    break
+                except Exception:
+                    continue
+            print("✓ color management : AgX")
+        except Exception as _e:
+            scene.view_settings.view_transform = "Filmic"
+            scene.view_settings.look = "High Contrast"
+            print(f"!! AgX unavailable ({_e}) — fallback Filmic High Contrast")
+        # exposure : AgX est légèrement plus sombre que Filmic dans les
+        # midtones → on remonte +0.3 EV pour retrouver une façade claire
+        # ensoleillée sans cramer (AgX compresse fort le haut).
+        scene.view_settings.exposure = 0.55   # façade plus claire (réf SV = murs lumineux)
+        scene.view_settings.gamma = 1.0
 
-        # Camera.
+        # ── Camera (avec PROFONDEUR DE CHAMP — signature photo) ──
         cam_data = bpy.data.cameras.new(name="Cam")
         cam_data.lens_unit = "FOV"
         cam_data.angle = math.radians(camera_fov_deg)
@@ -407,11 +537,44 @@ class BlenderPipeline:
         cam_obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
         scene.camera = cam_obj
 
+        # DOF : mise au point sur le bâtiment (camera_target), arrière-plan
+        # (voisins lointains, ciel) légèrement flou → signature optique d'une
+        # VRAIE photo prise au reflex. f/5.6 = flou doux qui n'écrase pas la
+        # netteté du bâtiment principal mais détache le fond. focus_distance
+        # = distance caméra→cible exacte pour que la façade soit nette.
+        _focus_dist = (Vector(camera_target) - Vector(camera_pos)).length
+        cam_data.dof.use_dof = True
+        cam_data.dof.focus_distance = _focus_dist
+        cam_data.dof.aperture_fstop = 5.6
+        cam_data.dof.aperture_blades = 7   # bokeh hexagonal réaliste
+        print(f"✓ DOF on — focus {_focus_dist:.1f} m, f/5.6")
+
         # Cycles config.
         scene.render.engine = "CYCLES"
         scene.cycles.device = "GPU"
         scene.cycles.samples = samples
+        # ── Denoiser OpenImageDenoise (PHASE 1) ──
+        # OIDN (Intel) = denoiser de référence pour le photoréalisme : nettoie
+        # le bruit Cycles sans baver les détails. On le configure explicitement
+        # avec passes Albedo+Normal (guides) → bords nets, matières préservées.
         scene.cycles.use_denoising = True
+        try:
+            scene.cycles.denoiser = "OPENIMAGEDENOISE"
+            scene.cycles.denoising_input_passes = "RGB_ALBEDO_NORMAL"
+            if hasattr(scene.cycles, "denoising_prefilter"):
+                scene.cycles.denoising_prefilter = "ACCURATE"
+            print("✓ denoiser : OpenImageDenoise (Albedo+Normal guides)")
+        except Exception as _e:
+            print(f"!! OIDN config failed ({_e}) — default denoiser")
+        # ── Light path bounces : GI suffisante pour le rebond de lumière ──
+        # Le verre (transmission) + l'ambiance réaliste ont besoin de bounces
+        # généreux pour que la lumière traverse les baies et rebondisse dans la
+        # rue (sous-faces de balcon débouchées, fenêtres avec profondeur).
+        scene.cycles.max_bounces = 12
+        scene.cycles.diffuse_bounces = 6
+        scene.cycles.glossy_bounces = 8
+        scene.cycles.transmission_bounces = 12   # verre : assez de bounces pour la profondeur
+        scene.cycles.transparent_max_bounces = 12
         # Adaptive sampling : Cycles stops sampling pixels that have already
         # converged (flat sky / enduit / asphalte) and pours the budget into
         # noisy regions. `samples` becomes the per-pixel cap. Perceptually
@@ -435,6 +598,434 @@ class BlenderPipeline:
         print(f"✓ render complete — RENDER_SECONDS={_dt:.2f}")
         return Path("/tmp/blender_scene.png").read_bytes()
 
+    # ──────────────────────────────────────────────────────────────────────
+    # POC ENTOURAGE — VRAIS assets 3D (arbres / voitures / personnes)
+    # ──────────────────────────────────────────────────────────────────────
+    def _add_real_entourage(self, camera_pos, camera_target):
+        """Place QUELQUES vrais assets 3D le long du trottoir, proches du
+        carrefour et devant la caméra. Volume réel + ombres portées + matière
+        (vs proxys carton plats). Tout est procédural/intégré → zéro download
+        obligatoire (les cutouts CC0 sont tentés mais ont un fallback 3D).
+
+        Repère : coords locales scene_mesh. Sol à z≈0. JUNCTION ≈ (11.9, 32.5).
+        La caméra regarde grosso modo vers -Y (carrefour → bâtiment).
+        """
+        import bpy, math, os
+        from mathutils import Vector
+
+        cam = Vector(camera_pos)
+        tgt = Vector(camera_target)
+        fwd = (tgt - cam)
+        fwd.z = 0.0
+        if fwd.length < 1e-6:
+            fwd = Vector((0.0, -1.0, 0.0))
+        fwd.normalize()
+        # Vecteur « droite » au sol (perpendiculaire à la visée) pour décaler
+        # les assets latéralement de l'axe caméra→cible vers le trottoir.
+        right = Vector((fwd.y, -fwd.x, 0.0))
+
+        def ground_point(dist, lateral):
+            """Point au sol à `dist` m devant la caméra, décalé de `lateral` m
+            sur la droite (latéral). z=0."""
+            p = cam + fwd * dist + right * lateral
+            return (p.x, p.y, 0.0)
+
+        # ── Matériaux dédiés entourage ─────────────────────────────────────
+        def _mat_leaves():
+            m = bpy.data.materials.new("entourage_leaves")
+            m.use_nodes = True
+            nt = m.node_tree
+            for n in list(nt.nodes):
+                nt.nodes.remove(n)
+            out = nt.nodes.new("ShaderNodeOutputMaterial")
+            bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+            # vert feuillage été, légère translucence simulée par base color claire
+            bsdf.inputs["Base Color"].default_value = (0.10, 0.26, 0.07, 1.0)
+            bsdf.inputs["Roughness"].default_value = 0.85
+            # variation de teinte par noise pour casser l'aplat
+            noise = nt.nodes.new("ShaderNodeTexNoise")
+            noise.inputs["Scale"].default_value = 6.0
+            noise.inputs["Detail"].default_value = 5.0
+            cr = nt.nodes.new("ShaderNodeValToRGB")
+            cr.color_ramp.elements[0].color = (0.07, 0.18, 0.04, 1.0)
+            cr.color_ramp.elements[1].color = (0.16, 0.34, 0.10, 1.0)
+            nt.links.new(noise.outputs["Fac"], cr.inputs["Fac"])
+            nt.links.new(cr.outputs["Color"], bsdf.inputs["Base Color"])
+            # micro-bump pour accrocher la lumière
+            bump = nt.nodes.new("ShaderNodeBump")
+            bump.inputs["Strength"].default_value = 0.25
+            nt.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+            nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+            nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+            return m
+
+        def _mat_bark():
+            m = bpy.data.materials.new("entourage_bark")
+            m.use_nodes = True
+            nt = m.node_tree
+            bsdf = nt.nodes.get("Principled BSDF")
+            bsdf.inputs["Base Color"].default_value = (0.18, 0.12, 0.08, 1.0)
+            bsdf.inputs["Roughness"].default_value = 0.9
+            return m
+
+        def _mat_carpaint(rgb):
+            m = bpy.data.materials.new("entourage_carpaint")
+            m.use_nodes = True
+            nt = m.node_tree
+            bsdf = nt.nodes.get("Principled BSDF")
+            bsdf.inputs["Base Color"].default_value = (*rgb, 1.0)
+            bsdf.inputs["Metallic"].default_value = 0.85
+            bsdf.inputs["Roughness"].default_value = 0.28
+            for k in ("Coat Weight", "Clearcoat", "Coat"):
+                if k in bsdf.inputs:
+                    bsdf.inputs[k].default_value = 1.0
+                    break
+            for k in ("Coat Roughness", "Clearcoat Roughness"):
+                if k in bsdf.inputs:
+                    bsdf.inputs[k].default_value = 0.05
+                    break
+            return m
+
+        def _mat_glass_dark():
+            m = bpy.data.materials.new("entourage_carglass")
+            m.use_nodes = True
+            nt = m.node_tree
+            bsdf = nt.nodes.get("Principled BSDF")
+            bsdf.inputs["Base Color"].default_value = (0.02, 0.03, 0.04, 1.0)
+            bsdf.inputs["Metallic"].default_value = 0.0
+            bsdf.inputs["Roughness"].default_value = 0.08
+            for k in ("Specular IOR Level", "Specular"):
+                if k in bsdf.inputs:
+                    bsdf.inputs[k].default_value = 0.9
+                    break
+            return m
+
+        def _mat_rubber():
+            m = bpy.data.materials.new("entourage_rubber")
+            m.use_nodes = True
+            nt = m.node_tree
+            bsdf = nt.nodes.get("Principled BSDF")
+            bsdf.inputs["Base Color"].default_value = (0.02, 0.02, 0.02, 1.0)
+            bsdf.inputs["Roughness"].default_value = 0.8
+            return m
+
+        def _mat_chrome():
+            m = bpy.data.materials.new("entourage_chrome")
+            m.use_nodes = True
+            nt = m.node_tree
+            bsdf = nt.nodes.get("Principled BSDF")
+            bsdf.inputs["Base Color"].default_value = (0.8, 0.8, 0.82, 1.0)
+            bsdf.inputs["Metallic"].default_value = 1.0
+            bsdf.inputs["Roughness"].default_value = 0.15
+            return m
+
+        def _mat_cloth(rgb):
+            m = bpy.data.materials.new("entourage_cloth")
+            m.use_nodes = True
+            nt = m.node_tree
+            bsdf = nt.nodes.get("Principled BSDF")
+            bsdf.inputs["Base Color"].default_value = (*rgb, 1.0)
+            bsdf.inputs["Roughness"].default_value = 0.9
+            return m
+
+        def _mat_skin():
+            m = bpy.data.materials.new("entourage_skin")
+            m.use_nodes = True
+            nt = m.node_tree
+            bsdf = nt.nodes.get("Principled BSDF")
+            bsdf.inputs["Base Color"].default_value = (0.62, 0.46, 0.38, 1.0)
+            bsdf.inputs["Roughness"].default_value = 0.65
+            return m
+
+        leaves_mat = _mat_leaves()
+        bark_mat = _mat_bark()
+        rubber_mat = _mat_rubber()
+        chrome_mat = _mat_chrome()
+        carglass_mat = _mat_glass_dark()
+        skin_mat = _mat_skin()
+
+        # ════════════════════════ 1) ARBRES (Sapling) ════════════════════════
+        n_trees = 0
+        sapling_ok = False
+        try:
+            try:
+                bpy.ops.preferences.addon_enable(module="add_curve_sapling")
+            except Exception:
+                bpy.ops.preferences.addon_enable(module="add_curve_extra_objects")
+            sapling_ok = hasattr(bpy.ops.curve, "tree_add")
+        except Exception as e:
+            print(f"  !! Sapling addon enable failed ({e})")
+
+        # Positions arbres : sur le trottoir, latéral +6 m (côté droit de la
+        # visée), à 16 m et 30 m de la caméra → encadrent le carrefour.
+        tree_spots = [
+            ground_point(17.0, 7.5),
+            ground_point(30.0, 9.0),
+        ]
+        if sapling_ok:
+            for ti, (tx, ty, tz) in enumerate(tree_spots):
+                try:
+                    bpy.ops.curve.tree_add(
+                        do_update=True,
+                        bevel=True,
+                        prune=False,
+                        showLeaves=True,
+                        useArm=False,
+                        levels=3,
+                        length=(0.9, 0.45, 0.45, 0.45),
+                        branches=(0, 28, 22, 1),
+                        leaves=180,
+                        leafScale=0.32,
+                        ratio=0.018,
+                        scale=6.0, scaleV=0.8,
+                    )
+                except Exception:
+                    # Signature ops varie selon versions → fallback presets.
+                    bpy.ops.curve.tree_add(do_update=True, showLeaves=True)
+                # Le tronc (curve) est l'objet actif ; les feuilles sont un
+                # mesh enfant créé dans la foulée. On les déplace ensemble.
+                created = [o for o in bpy.context.selected_objects]
+                tree_curve = bpy.context.active_object
+                grp = set(created) | {tree_curve}
+                # Récupère aussi un éventuel objet "leaves" récent.
+                for o in bpy.data.objects:
+                    if o.name.lower().startswith("leaves") and o not in grp:
+                        grp.add(o)
+                for o in grp:
+                    o.location = (o.location.x + tx, o.location.y + ty, o.location.z + tz)
+                    nm = o.name.lower()
+                    if "leaves" in nm or "leaf" in nm:
+                        o.data.materials.clear() if hasattr(o.data, "materials") else None
+                        try: o.data.materials.append(leaves_mat)
+                        except Exception: pass
+                    else:
+                        try:
+                            o.data.materials.clear()
+                            o.data.materials.append(bark_mat)
+                        except Exception:
+                            pass
+                n_trees += 1
+            print(f"  + {n_trees} Sapling trees (vrai arbre ramifié + feuillage)")
+        if not sapling_ok or n_trees == 0:
+            # Fallback : tronc conique haut + 3 amas de feuillage (icosphères
+            # lissées, bruitées, de tailles/positions variées) → silhouette
+            # d'arbre organique (pas une boule low-poly). Smooth shading +
+            # subdivisions=4 tuent l'aspect facetté.
+            import random as _rnd
+            _rnd.seed(7)
+            for ci, (tx, ty, tz) in enumerate(tree_spots):
+                trunk_h = 2.6
+                # Tronc légèrement conique (cône tronqué) → vrai tronc.
+                bpy.ops.mesh.primitive_cone_add(vertices=12, radius1=0.22,
+                                                radius2=0.12, depth=trunk_h,
+                                                location=(tx, ty, trunk_h / 2))
+                trunk = bpy.context.active_object
+                bpy.ops.object.shade_smooth()
+                trunk.data.materials.append(bark_mat)
+                # 3 amas de feuillage formant une couronne organique.
+                clusters = [
+                    (0.0, 0.0, trunk_h + 1.7, 2.3),
+                    (0.9, 0.5, trunk_h + 2.6, 1.7),
+                    (-0.8, -0.6, trunk_h + 2.3, 1.8),
+                ]
+                for (dx, dy, dz, r) in clusters:
+                    rr = r * (0.92 + 0.16 * _rnd.random())
+                    bpy.ops.mesh.primitive_ico_sphere_add(
+                        subdivisions=4, radius=rr,
+                        location=(tx + dx, ty + dy, dz))
+                    can = bpy.context.active_object
+                    can.scale = (1.0, 1.0, 1.05)
+                    bpy.ops.object.shade_smooth()
+                    # déformation organique pour casser la sphère parfaite
+                    bpy.ops.object.modifier_add(type="DISPLACE")
+                    try:
+                        disp = can.modifiers[-1]
+                        tex = bpy.data.textures.new("canopy_noise", type="CLOUDS")
+                        tex.noise_scale = 0.5
+                        disp.texture = tex
+                        disp.strength = 0.5
+                    except Exception:
+                        pass
+                    can.data.materials.append(leaves_mat)
+                n_trees += 1
+            print(f"  + {n_trees} fallback trees (tronc conique + 3 amas feuillage lissés)")
+
+        # ════════════════════════ 2) VOITURES (procédural) ════════════════════
+        # Pas de modèle CC0 fiable garanti en headless → carrosserie low-poly
+        # crédible : châssis + cabine inclinée (boolean-free, profil biseauté) +
+        # 4 roues cylindriques + vitres. Matériau car-paint metallic + clearcoat.
+        def build_car(origin, heading_deg, color):
+            ox, oy, oz = origin
+            paint = _mat_carpaint(color)
+            parts = []
+            L, W = 4.3, 1.8          # longueur / largeur réelles
+            # Corps bas (capot/coffre) : boîte biseautée.
+            bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, 0, 0.55))
+            body = bpy.context.active_object
+            body.scale = (L / 2, W / 2, 0.45)
+            bpy.ops.object.transform_apply(scale=True)
+            bpy.ops.object.modifier_add(type="BEVEL")
+            body.modifiers[-1].width = 0.18
+            body.modifiers[-1].segments = 2
+            body.data.materials.append(paint)
+            parts.append(body)
+            # Cabine (toit) plus étroite et reculée, biseautée → pare-brise incliné.
+            bpy.ops.mesh.primitive_cube_add(size=1.0, location=(-0.15, 0, 1.15))
+            cab = bpy.context.active_object
+            cab.scale = (L / 4.2, W / 2.4, 0.32)
+            bpy.ops.object.transform_apply(scale=True)
+            bpy.ops.object.modifier_add(type="BEVEL")
+            cab.modifiers[-1].width = 0.28
+            cab.modifiers[-1].segments = 3
+            cab.data.materials.append(carglass_mat)
+            parts.append(cab)
+            # Roues : 4 cylindres couchés.
+            for wx, wy in ((L/2 - 0.95, W/2 - 0.05), (L/2 - 0.95, -(W/2 - 0.05)),
+                           (-(L/2 - 0.95), W/2 - 0.05), (-(L/2 - 0.95), -(W/2 - 0.05))):
+                bpy.ops.mesh.primitive_cylinder_add(vertices=20, radius=0.34,
+                                                    depth=0.22, location=(wx, wy, 0.34),
+                                                    rotation=(math.radians(90), 0, 0))
+                w = bpy.context.active_object
+                w.data.materials.append(rubber_mat)
+                parts.append(w)
+            # Joindre, orienter, positionner.
+            for p in parts:
+                p.select_set(True)
+            bpy.context.view_layer.objects.active = body
+            bpy.ops.object.join()
+            car = bpy.context.active_object
+            car.rotation_euler = (0, 0, math.radians(heading_deg))
+            car.location = (ox, oy, oz)
+            return car
+
+        # Heading aligné approx. avec la rue (le long de la visée caméra).
+        street_heading = math.degrees(math.atan2(fwd.y, fwd.x))
+        car_specs = [
+            (ground_point(24.0, 1.5), street_heading + 4, (0.12, 0.16, 0.28)),    # bleu, sur chaussée
+            (ground_point(36.0, -6.0), street_heading + 182, (0.55, 0.06, 0.07)), # rouge, sens inverse
+        ]
+        n_cars = 0
+        for (pos, hd, col) in car_specs:
+            try:
+                build_car(pos, hd, col)
+                n_cars += 1
+            except Exception as e:
+                print(f"  !! car build failed ({e})")
+        print(f"  + {n_cars} voitures low-poly (car-paint metallic + clearcoat + vitres)")
+
+        # ════════════════════════ 3) PERSONNES ════════════════════════════════
+        # Tentative cutout photo CC0 (PNG alpha) sur plan face-caméra. Si pas de
+        # source fiable → figures low-poly proportionnées (tête/torse/jambes).
+        # Personnes : sur le trottoir côté droit, ÉCHELONNÉES en distance et
+        # espacées latéralement pour qu'elles se lisent individuellement
+        # (l'angle plongeant tasse la perspective → on évite le cluster).
+        person_spots = [
+            ground_point(12.0, 6.0),
+            ground_point(15.5, 9.0),
+            ground_point(21.0, 7.0),
+            ground_point(28.0, 11.0),
+        ]
+        cutout_png = "/root/textures/person_cutout.png"
+        cutout_ok = False
+        if not os.path.exists(cutout_png):
+            # Sources CC0 possibles (silhouettes alpha). Best-effort, timeout court.
+            for url in (
+                "https://dl.polyhaven.org/file/ph-assets/Models/png/1k/person/person.png",
+            ):
+                try:
+                    import subprocess
+                    subprocess.run(["wget", "-q", "-T", "8", url, "-O", cutout_png],
+                                   check=True, timeout=12)
+                    if os.path.getsize(cutout_png) > 2000:
+                        cutout_ok = True
+                        break
+                except Exception:
+                    pass
+        else:
+            cutout_ok = os.path.getsize(cutout_png) > 2000
+
+        def build_person_lowpoly(origin, cloth_rgb):
+            ox, oy, oz = origin
+            cloth = _mat_cloth(cloth_rgb)
+            parts = []
+            # Jambes (deux cylindres) 0.0 → 0.85
+            for lx in (-0.11, 0.11):
+                bpy.ops.mesh.primitive_cylinder_add(vertices=10, radius=0.08,
+                                                    depth=0.85, location=(lx, 0, 0.43))
+                leg = bpy.context.active_object
+                leg.data.materials.append(cloth)
+                parts.append(leg)
+            # Torse (cube biseauté) 0.85 → 1.42
+            bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, 0, 1.13))
+            torso = bpy.context.active_object
+            torso.scale = (0.20, 0.13, 0.30)
+            bpy.ops.object.transform_apply(scale=True)
+            bpy.ops.object.modifier_add(type="BEVEL")
+            torso.modifiers[-1].width = 0.06
+            torso.data.materials.append(cloth)
+            parts.append(torso)
+            # Bras (deux cylindres le long du corps)
+            for ax in (-0.24, 0.24):
+                bpy.ops.mesh.primitive_cylinder_add(vertices=8, radius=0.05,
+                                                    depth=0.55, location=(ax, 0, 1.12))
+                arm = bpy.context.active_object
+                arm.data.materials.append(cloth)
+                parts.append(arm)
+            # Tête (icosphère) ~1.55 → 1.72
+            bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=2, radius=0.115,
+                                                  location=(0, 0, 1.60))
+            head = bpy.context.active_object
+            head.data.materials.append(skin_mat)
+            parts.append(head)
+            for p in parts:
+                p.select_set(True)
+            bpy.context.view_layer.objects.active = torso
+            bpy.ops.object.join()
+            person = bpy.context.active_object
+            person.location = (ox, oy, oz)
+            return person
+
+        n_people = 0
+        # Couleurs vêtements variées et assez contrastées pour se détacher du
+        # damier clair du trottoir (sinon les figures se noient en gris).
+        cloth_palette = [(0.18, 0.30, 0.55), (0.60, 0.18, 0.16),
+                         (0.85, 0.82, 0.78), (0.25, 0.45, 0.30)]
+        if cutout_ok:
+            try:
+                img = bpy.data.images.load(cutout_png)
+                pmat = bpy.data.materials.new("entourage_person_cutout")
+                pmat.use_nodes = True
+                pmat.blend_method = "CLIP"
+                nt = pmat.node_tree
+                bsdf = nt.nodes.get("Principled BSDF")
+                tex = nt.nodes.new("ShaderNodeTexImage")
+                tex.image = img
+                nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+                nt.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+                bsdf.inputs["Roughness"].default_value = 0.7
+                for (px, py, pz) in person_spots:
+                    bpy.ops.mesh.primitive_plane_add(size=1.0, location=(px, py, 0.9))
+                    pl = bpy.context.active_object
+                    pl.rotation_euler = (math.radians(90), 0,
+                                         math.atan2(cam.y - py, cam.x - px) + math.radians(90))
+                    pl.scale = (0.7, 1.8, 1.0)
+                    pl.data.materials.append(pmat)
+                    n_people += 1
+                print(f"  + {n_people} personnes (cutout photo CC0 face-caméra)")
+            except Exception as e:
+                print(f"  !! cutout people failed ({e}) — fallback low-poly")
+                cutout_ok = False
+        if not cutout_ok:
+            for i, (px, py, pz) in enumerate(person_spots):
+                try:
+                    build_person_lowpoly((px, py, pz), cloth_palette[i % len(cloth_palette)])
+                    n_people += 1
+                except Exception as e:
+                    print(f"  !! person build failed ({e})")
+            print(f"  + {n_people} personnes low-poly (tête/torse/bras/jambes proportionnés)")
+
+        print(f"✓ entourage 3D réel : {n_trees} arbres, {n_cars} voitures, {n_people} personnes")
+
     def _build_materials(self, photoreal: bool = False) -> dict:
         """Build a dict of PBR materials for the scene.
 
@@ -453,7 +1044,10 @@ class BlenderPipeline:
         def _make_textured(name: str, tex_path: str, normal_path: str | None = None,
                            tile_size_m: float = 2.0, fallback_color=(0.7, 0.7, 0.7),
                            roughness: float = 0.7, metallic: float = 0.0, specular: float = 0.3,
-                           color_break: float = 0.0, break_scale: float = 0.9):
+                           color_break: float = 0.0, break_scale: float = 0.9,
+                           normal_strength: float = 0.8, tint=None,
+                           rough_var: float = 0.0, rough_var_scale: float = 6.0,
+                           bump_strength: float = 0.0):
             """PBR material : diffuse texture + optional normal map, tiled by tile_size_m in world space.
 
             Uses Object texture coords (world space meters) + Mapping scale
@@ -512,18 +1106,72 @@ class BlenderPipeline:
                         nt.links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
                         nt.links.new(tex.outputs["Color"], mix.inputs["Color1"])
                         nt.links.new(ramp.outputs["Color"], mix.inputs["Color2"])
-                        nt.links.new(mix.outputs["Color"], bsdf.inputs["Base Color"])
+                        color_out = mix.outputs["Color"]
                     else:
-                        nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+                        color_out = tex.outputs["Color"]
+                    # TINT optionnel : multiplie l'albédo de la photo par une
+                    # teinte cible → on impose la couleur (ex. crème clair) quelle
+                    # que soit la dominante propre de la texture (qui peut être
+                    # plus brune/grise). Garde le GRAIN + le relief de la photo
+                    # mais aligne la teinte sur le matériau voulu.
+                    if tint is not None:
+                        tnode = nt.nodes.new("ShaderNodeMixRGB")
+                        tnode.blend_type = "MULTIPLY"
+                        tnode.inputs["Fac"].default_value = 1.0
+                        tnode.inputs["Color2"].default_value = (*tint, 1.0)
+                        nt.links.new(color_out, tnode.inputs["Color1"])
+                        color_out = tnode.outputs["Color"]
+                    nt.links.new(color_out, bsdf.inputs["Base Color"])
+                    # ── NORMAL : carte normale de la photo, chaînée vers une
+                    #    couche BUMP procédurale optionnelle (micro-relief macro
+                    #    de pierre/enduit que la normal map 2k ne porte pas à
+                    #    cette échelle de façade). bump_strength>0 ajoute du
+                    #    grain grande-échelle qui accroche la lumière → la pierre
+                    #    cesse de lire comme un aplat plastique.
+                    normal_socket = None
                     if normal_path and _os_mat.path.exists(normal_path) and _os_mat.path.getsize(normal_path) > 1000:
                         nor_tex = nt.nodes.new("ShaderNodeTexImage")
                         nor_tex.image = bpy.data.images.load(normal_path)
                         nor_tex.image.colorspace_settings.name = "Non-Color"
                         nor_map = nt.nodes.new("ShaderNodeNormalMap")
-                        nor_map.inputs["Strength"].default_value = 0.8
+                        nor_map.inputs["Strength"].default_value = normal_strength
                         nt.links.new(mapping.outputs["Vector"], nor_tex.inputs["Vector"])
                         nt.links.new(nor_tex.outputs["Color"], nor_map.inputs["Color"])
-                        nt.links.new(nor_map.outputs["Normal"], bsdf.inputs["Normal"])
+                        normal_socket = nor_map.outputs["Normal"]
+                    if bump_strength > 0:
+                        bcoord = nt.nodes.new("ShaderNodeTexCoord")
+                        bnoise = nt.nodes.new("ShaderNodeTexNoise")
+                        bnoise.inputs["Scale"].default_value = 12.0   # ~grain de pierre
+                        bnoise.inputs["Detail"].default_value = 6.0
+                        if "Roughness" in bnoise.inputs:
+                            bnoise.inputs["Roughness"].default_value = 0.7
+                        bump = nt.nodes.new("ShaderNodeBump")
+                        bump.inputs["Strength"].default_value = bump_strength
+                        nt.links.new(bcoord.outputs["Object"], bnoise.inputs["Vector"])
+                        nt.links.new(bnoise.outputs["Fac"], bump.inputs["Height"])
+                        if normal_socket is not None:
+                            nt.links.new(normal_socket, bump.inputs["Normal"])
+                        normal_socket = bump.outputs["Normal"]
+                    if normal_socket is not None:
+                        nt.links.new(normal_socket, bsdf.inputs["Normal"])
+                    # ── ROUGHNESS variation : un vrai mur n'a PAS une rugosité
+                    #    uniforme. On module la roughness par un bruit macro →
+                    #    micro-variations de brillance qui captent la lumière du
+                    #    soleil = signal « surface réelle » fort (≠ plastique).
+                    if rough_var > 0:
+                        rcoord = nt.nodes.new("ShaderNodeTexCoord")
+                        rmap = nt.nodes.new("ShaderNodeMapping")
+                        rmap.inputs["Scale"].default_value = (rough_var_scale,)*3
+                        rnoise = nt.nodes.new("ShaderNodeTexNoise")
+                        rnoise.inputs["Scale"].default_value = 1.5
+                        rnoise.inputs["Detail"].default_value = 4.0
+                        rramp = nt.nodes.new("ShaderNodeMapRange")
+                        rramp.inputs["To Min"].default_value = max(0.0, roughness - rough_var)
+                        rramp.inputs["To Max"].default_value = min(1.0, roughness + rough_var)
+                        nt.links.new(rcoord.outputs["Object"], rmap.inputs["Vector"])
+                        nt.links.new(rmap.outputs["Vector"], rnoise.inputs["Vector"])
+                        nt.links.new(rnoise.outputs["Fac"], rramp.inputs["Value"])
+                        nt.links.new(rramp.outputs["Result"], bsdf.inputs["Roughness"])
                     print(f"  ✓ textured material {name} ← {_os_mat.path.basename(tex_path)}")
                 except Exception as _e:
                     print(f"  !! material {name} texture load failed ({_e}), using color")
@@ -588,6 +1236,71 @@ class BlenderPipeline:
             nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
             return m
 
+        def _make_glass(name: str, tint=(0.55, 0.68, 0.72),
+                        roughness=0.04, ior=1.45,
+                        interior=(0.015, 0.020, 0.030), interior_emit=0.06):
+            """Verre architectural PHOTORÉALISTE (PHASE 1, photo agent).
+
+            Construction Fresnel-mixée : un seul shader « verre » ne peut pas à
+            la fois réfléchir le ciel sous angle rasant ET montrer un intérieur
+            profond de face. On mixe donc deux shaders par le FRESNEL de la
+            surface (Layer Weight) :
+              - GLOSSY (reflet ciel net) → domine sous angle rasant (Fresnel↑),
+                c'est le reflet du ciel bleu + voisins qui fait « vitre ».
+              - INTÉRIEUR (Glass transmission + légère émission bleu-sombre) →
+                domine de face. L'émission faible évite le « trou noir » plat :
+                la baie a une PROFONDEUR sombre vivante (intérieur d'appart non
+                éclairé) au lieu d'un aplat noir.
+            IOR 1.45, roughness 0.04 = verre réel net. tint bleu-vert léger.
+            """
+            m = bpy.data.materials.new(name=name)
+            m.use_nodes = True
+            nt = m.node_tree
+            for n in list(nt.nodes):
+                nt.nodes.remove(n)
+            out = nt.nodes.new("ShaderNodeOutputMaterial")
+
+            # NB : on n'utilise PAS de Glass/transmission ici. Sur une façade,
+            # un verre transmissif laisse voir le MUR INTÉRIEUR (quad enduit
+            # juste derrière la baie) → la fenêtre lisait beige-plat « peinte ».
+            # Le vrai vitrage d'un immeuble vu de la rue = MIROIR SOMBRE : on ne
+            # voit pas l'intérieur, on voit un intérieur sombre + le reflet du
+            # ciel. On construit donc un « dark mirror glass » OPAQUE :
+            #   intérieur sombre bleuté  ⟶ (Fresnel) ⟶  reflet ciel glossy net.
+
+            # 1) Reflet ciel : Glossy net, presque blanc → renvoie le HDRI bleu.
+            glossy = nt.nodes.new("ShaderNodeBsdfGlossy")
+            glossy.inputs["Color"].default_value = (0.95, 0.97, 1.0, 1.0)
+            glossy.inputs["Roughness"].default_value = roughness
+
+            # 2) Intérieur sombre : verre teinté bleu-froid TRÈS sombre (vitre
+            #    vue de face = on devine un intérieur non éclairé) + une lueur
+            #    d'émission infime pour ne pas être noir-mort. Glossy sombre =
+            #    garde un micro-reflet même de face (pas un aplat).
+            inner = nt.nodes.new("ShaderNodeBsdfGlossy")
+            inner.inputs["Color"].default_value = (*tint, 1.0)
+            inner.inputs["Roughness"].default_value = 0.18   # reflet flou sombre = profondeur
+            emit = nt.nodes.new("ShaderNodeEmission")
+            emit.inputs["Color"].default_value = (*interior, 1.0)
+            emit.inputs["Strength"].default_value = interior_emit
+            interior_mix = nt.nodes.new("ShaderNodeMixShader")
+            interior_mix.inputs["Fac"].default_value = 0.35   # surtout reflet sombre, un peu de lueur
+            nt.links.new(inner.outputs["BSDF"], interior_mix.inputs[1])
+            nt.links.new(emit.outputs["Emission"], interior_mix.inputs[2])
+
+            # 3) Fresnel : de face → intérieur sombre ; angle rasant → reflet
+            #    ciel net. C'est CE gradient (sombre au centre, ciel clair sur
+            #    les bords/haut) qui fait lire « vitre » à l'œil.
+            fres = nt.nodes.new("ShaderNodeFresnel")
+            fres.inputs["IOR"].default_value = ior
+            fresnel_mix = nt.nodes.new("ShaderNodeMixShader")
+            nt.links.new(fres.outputs["Fac"], fresnel_mix.inputs["Fac"])
+            # Fresnel Fac≈0 de face → slot1 (intérieur) ; →1 rasant → slot2 (ciel)
+            nt.links.new(interior_mix.outputs["Shader"], fresnel_mix.inputs[1])
+            nt.links.new(glossy.outputs["BSDF"], fresnel_mix.inputs[2])
+            nt.links.new(fresnel_mix.outputs["Shader"], out.inputs["Surface"])
+            return m
+
         # Materials with procedural noise → adds the micro-detail FLUX needs
         # to grab onto. Without this, FLUX sees uniform flat colour and the
         # img2img stays neutral. With noise, every surface has tiny texture
@@ -617,16 +1330,28 @@ class BlenderPipeline:
         # to 0.94 light cream-gray. With Filmic + exposure this should
         # render as bright cream-white concrete, balcons read as elegant
         # slim slabs (residential) not heavy industrial bands.
+        # iter 2026-06-27 (mat2 agent) — CAUSE DU LISERÉ JAUNE sous les balcons :
+        # cette couleur était (0.94, 0.92, 0.88), un crème CHAUD (B nettement <
+        # R). La sous-face + le chant de dalle reçoivent la lumière chaude
+        # (soleil 1.0,0.96,0.90) + le rebond de la pierre crème → avec Filmic
+        # High Contrast cette teinte chaude SATURE en jaune-or. Fix = béton
+        # blanc-GRIS NEUTRE FROID (R=G=B, B très légèrement >) → plus de jaune.
         mats["balcon_concrete"] = _make_principled("balcon_concrete",
-                                                    (0.94, 0.92, 0.88), 0.80,
-                                                    specular=0.20,
+                                                    (0.88, 0.89, 0.90), 0.82,
+                                                    specular=0.12,
                                                     noise_amount=0.04, noise_scale=40.0)
         mats["balcon_metal"]    = _make_principled("balcon_metal",
                                                     (0.18, 0.18, 0.20), 0.5, 0.6,
                                                     specular=0.5)
-        mats["verre"]           = _make_principled("verre",
-                                                    (0.05, 0.10, 0.18), 0.05, 0.0, 0.3,
-                                                    specular=0.5)
+        # iter 2026-06-27 (mat2 agent) — verre INCOHÉRENT (baies opaques blanches
+        # vs bleues plates, sans reflet). Cause : Principled BSDF sans
+        # transmission ni reflet contrôlé → l'angle de vue décidait du rendu
+        # (Fresnel → certaines baies renvoyaient le ciel en blanc cramé, d'autres
+        # le bleu sombre du base color → mélange incohérent). On construit un
+        # vrai verre architectural homogène : Transmission élevée + teinte
+        # sombre-bleutée + roughness basse → reflet ciel net + lecture vitrage
+        # uniforme sur TOUTES les baies. Helper dédié plus bas.
+        mats["verre"]           = _make_glass("verre")
         # iter #320 — REVERT EMISSION → PBR photoreal voirie.
         # Emission shader was a hack to kill the building shadow on chaussée
         # (iter #306). But it gave flat unconvincing "maquette" voirie.
@@ -719,13 +1444,20 @@ class BlenderPipeline:
             )
             mats["asphalte"] = _make_textured(
                 "asphalte", "/root/textures/asphalte.jpg",
+                normal_path="/root/textures/asphalte_normal.jpg",
                 tile_size_m=3.0, fallback_color=(0.16, 0.16, 0.16),
-                roughness=0.92, specular=0.04,
+                roughness=0.93, specular=0.04, normal_strength=0.6,
             )
+            # iter 2026-06-27 (mat2 agent) — dallage trottoir : aplat gris
+            # quadrillé → vraie texture béton avec DALLES + JOINTS visibles +
+            # normal map (relief des joints). tile 1.2 m ≈ dalle réelle. tint
+            # gris clair froid neutre (pas crème) pour un trottoir parisien net.
             mats["pavers_concrete"] = _make_textured(
-                "pavers_concrete", "/root/textures/concrete.jpg",
-                tile_size_m=1.0, fallback_color=(0.58, 0.58, 0.55),
-                roughness=0.86, specular=0.12,
+                "pavers_concrete", "/root/textures/dallage.jpg",
+                normal_path="/root/textures/dallage_normal.jpg",
+                tile_size_m=1.2, fallback_color=(0.60, 0.60, 0.60),
+                roughness=0.85, specular=0.10, normal_strength=0.9,
+                tint=(0.80, 0.81, 0.82),
             )
             # FIX 2026-06-24 : la texture aerial_grass_rock (herbe.jpg) sortait
             # en BANDES JAUNES/VERTES criardes à chaque balcon (jardinières) —
@@ -746,16 +1478,32 @@ class BlenderPipeline:
             # iter 2026-06-24 (light agent) : variation tonale DISCRÈTE sur
             # l'enduit crème pour casser l'aplat plat (profondeur sans salir,
             # reste clair crème). Plus subtil que la pierre (façade plus lisse).
+            # iter 2026-06-27 (mat2 agent) — enduit façade : aplat lisse plastique
+            # → on ajoute la NORMAL MAP de l'enduit (relief de crépi) + tint crème
+            # clair pour aligner la teinte (la photo painted_plaster est plus
+            # grise). Grain + micro-relief = lecture enduit réel, reste CLAIR.
+            # PHASE 1 (photo agent) : enduit_blanc = CORPS de façade des étages
+            # (mur extrudé de base) → c'est la grande surface qui lisait
+            # « carton » plat. On la matière fortement :
+            #   - tile 1.6 → 1.1 m : grain d'enduit lisible.
+            #   - normal 1.2 → 1.6 + BUMP 0.22 : micro-relief de crépi qui
+            #     accroche la lumière (le levier #1 du « pas plat »).
+            #   - rough_var 0.20 : taloche non-uniforme → micro-reflets soleil.
             mats["enduit_blanc"] = _make_textured(
                 "enduit_blanc", "/root/textures/enduit.jpg",
-                tile_size_m=3.5, fallback_color=(0.92, 0.86, 0.74),
-                roughness=0.75, specular=0.25,
-                color_break=0.22, break_scale=0.40,
+                normal_path="/root/textures/enduit_normal.jpg",
+                tile_size_m=1.1, fallback_color=(0.92, 0.86, 0.74),
+                roughness=0.88, specular=0.16, normal_strength=1.6,
+                color_break=0.30, break_scale=0.45,
+                tint=(0.96, 0.93, 0.87),   # crème clair froid (anti-orange)
+                rough_var=0.20, rough_var_scale=4.0, bump_strength=0.22,
             )
             mats["voisin"] = _make_textured(
                 "voisin", "/root/textures/enduit.jpg",
+                normal_path="/root/textures/enduit_normal.jpg",
                 tile_size_m=3.5, fallback_color=(0.50, 0.45, 0.38),
-                roughness=0.92, specular=0.08,
+                roughness=0.92, specular=0.08, normal_strength=0.5,
+                tint=(0.62, 0.58, 0.50),
             )
             # FIX 2026-06-24 : la cobblestone faisait des RAYURES sur les murs.
             # Pierre de taille = plâtre LISSE (enduit) teinté pierre crème.
@@ -768,11 +1516,28 @@ class BlenderPipeline:
             # profondeur d'une VRAIE pierre claire, pas un beige uniforme.
             # roughness un peu plus haute + micro normal map (déjà dans la
             # texture enduit) → grain mat photographique.
+            # iter 2026-06-27 (mat2 agent) — pierre de taille = CORPS de façade B.
+            # AVANT : enduit.jpg sans normal map → aplat lisse "pâte à modeler".
+            # MAINTENANT : texture beige_wall DÉDIÉE (grain de pierre fin) +
+            # NORMAL MAP (vrai relief de surface) + color_break modéré (variation
+            # tonale crème par blocs, pas par brique) + tint crème CLAIR pour
+            # garder la teinte voulue (pas brun, pas jaune). tile 2.4 m → grain à
+            # l'échelle. normal_strength 0.7 → relief lisible sans bosseler.
+            # PHASE 1 (photo agent) : la pierre lisait PLATE (aplat crème
+            # « carton »). On la rend matiérée :
+            #   - tile 1.6 → 0.9 m : grain de pierre VISIBLE à l'échelle façade.
+            #   - normal_strength 1.3 → 1.6 + BUMP procédural 0.18 : vrai relief
+            #     qui accroche la lumière rasante (modelé pierre).
+            #   - rough_var 0.18 : rugosité non-uniforme → micro-reflets soleil.
+            #   - color_break 0.55 : variation tonale bloc-à-bloc plus marquée.
             mats["pierre_taille"] = _make_textured(
-                "pierre_taille", "/root/textures/enduit.jpg",
-                tile_size_m=2.6, fallback_color=(0.85, 0.79, 0.66),
-                roughness=0.80, specular=0.14,
-                color_break=0.45, break_scale=0.55,   # variation tonale crème par blocs
+                "pierre_taille", "/root/textures/pierre_facade.jpg",
+                normal_path="/root/textures/pierre_facade_normal.jpg",
+                tile_size_m=0.9, fallback_color=(0.85, 0.79, 0.66),
+                roughness=0.78, specular=0.18, normal_strength=1.6,
+                color_break=0.55, break_scale=0.55,
+                tint=(0.94, 0.91, 0.85),   # crème CLAIR FROID (moins ambré → lecture photo)
+                rough_var=0.18, rough_var_scale=4.0, bump_strength=0.30,
             )
             mats["bois_clair"] = _make_textured(
                 "bois_clair", "/root/textures/bois.jpg",
@@ -783,6 +1548,19 @@ class BlenderPipeline:
             mats["zinc_anthracite"] = _make_principled(
                 "zinc_anthracite", (0.17, 0.17, 0.19), 0.42, 0.55,
                 specular=0.5, noise_amount=0.015, noise_scale=120.0,
+            )
+            # iter 2026-06-27 (mat2 agent) — béton balcon (dalle/sous-face/chant).
+            # En plus du fix couleur (gris neutre froid, anti-liseré-jaune), on
+            # ajoute le GRAIN béton + normal map → la dalle et sa sous-face lisent
+            # comme du vrai béton mat, plus comme un aplat plastique. tint gris
+            # blanc-froid (B léger >) pour verrouiller la neutralité même sous le
+            # soleil chaud / le rebond crème (la cause du jaune). normal léger.
+            mats["balcon_concrete"] = _make_textured(
+                "balcon_concrete", "/root/textures/beton_lisse.jpg",
+                normal_path="/root/textures/beton_lisse_normal.jpg",
+                tile_size_m=2.0, fallback_color=(0.88, 0.89, 0.90),
+                roughness=0.82, specular=0.10, normal_strength=0.4,
+                tint=(0.84, 0.86, 0.88),   # blanc-gris froid neutre (anti-jaune)
             )
         return mats
 
@@ -1925,6 +2703,7 @@ def render_from_json_cli(
         width=1024, height=1024,
         samples=samples,
         photoreal=photoreal,
+        add_real_assets=True,
     )
     out = Path(out_png)
     out.parent.mkdir(parents=True, exist_ok=True)
