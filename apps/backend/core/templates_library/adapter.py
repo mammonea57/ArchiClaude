@@ -39,7 +39,7 @@ class TemplateAdapter:
 
     def _fit_using_layout_generator(
         self, slot: ApartmentSlot, template: Template, footprint=None,
-        parcelle=None, other_cells_polys=None,
+        parcelle=None, other_cells_polys=None, voiries=None,
     ) -> FitResult:
         """Use the architectural layout generator instead of the grid template.
 
@@ -67,6 +67,7 @@ class TemplateAdapter:
             footprint=footprint,
             parcelle=parcelle,
             other_cells_polys=other_cells_polys,
+            voiries=voiries,
         )
 
         # Assign label_fr from the generator (already set) and re-label any
@@ -91,18 +92,26 @@ class TemplateAdapter:
 
     def fit_to_slot(
         self, template: Template, slot: ApartmentSlot, footprint=None,
-        parcelle=None, other_cells_polys=None,
+        parcelle=None, other_cells_polys=None, voiries=None,
+        bypass_dim_check=False,
     ) -> FitResult:
         # 1. Check slot dimensions compatibility
         minx, miny, maxx, maxy = slot.polygon.bounds
         slot_width = maxx - minx
         slot_depth = maxy - miny
 
-        # Range check vs template's declared dimensions
+        # Range check vs template's declared dimensions.
+        # ``bypass_dim_check`` : sauté quand le slot vient d'un dispatcher
+        # topologique faisant autorité (layout_l / layout_u) sans template pile
+        # dans ses plages. Le générateur algorithmique dessine le logement à
+        # partir de la seule géométrie du slot ; ce garde-fou dimensionnel
+        # (calibré pour les slots grille legacy) ferait sinon tomber une aile
+        # mono-façade peu profonde et la transformerait en cellule-poubelle
+        # géante en aval (pocket-fill).
         dim = template.dimensions_grille
         width_ok = dim.largeur_min_m * 0.85 <= slot_width <= dim.largeur_max_m * 1.15
         depth_ok = dim.profondeur_min_m * 0.85 <= slot_depth <= dim.profondeur_max_m * 1.15
-        if not (width_ok and depth_ok):
+        if not bypass_dim_check and not (width_ok and depth_ok):
             return FitResult(
                 success=False,
                 rejection_reason=(
@@ -122,7 +131,7 @@ class TemplateAdapter:
         ):
             return self._fit_using_layout_generator(
                 slot, template, footprint=footprint,
-                parcelle=parcelle, other_cells_polys=other_cells_polys,
+                parcelle=parcelle, other_cells_polys=other_cells_polys, voiries=voiries,
             )
 
         # Determine the template grid shape from bounds_cells, then size cells so

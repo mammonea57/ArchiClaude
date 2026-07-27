@@ -107,3 +107,59 @@ class TemplateSelector:
             rationale=f"Selected {best.template.id} (similarity {best.similarity:.2f}, "
                       f"matches typologie {slot.target_typologie.value} and dimensions).",
         )
+
+    async def select_fallback_for_slot(
+        self, slot: ApartmentSlot
+    ) -> SelectionResult | None:
+        """Sélection de SECOURS : renvoie le meilleur template de la typologie
+        cible (ou d'une typologie voisine) SANS filtrer sur les dimensions du
+        slot.
+
+        Sert quand ``select_for_slot`` renvoie None uniquement parce que la
+        géométrie du slot (issue d'un dispatcher topologique faisant autorité :
+        layout_l / layout_u) tombe légèrement hors des plages dimensionnelles
+        des templates seedés — typiquement une aile mono-façade single-loaded
+        peu profonde (~5,7 m) plus fine que la profondeur mini du template T2
+        (7 m). Le générateur de layout algorithmique (``_fit_using_layout_
+        generator``) sait dessiner un logement propre dans ces dimensions ; il
+        ne faut donc JAMAIS jeter ce slot silencieusement (sinon l'aile entière
+        s'effondre en une cellule-poubelle géante via le pocket-fill).
+
+        On garde le template comme simple RÉFÉRENCE (id + typologie) : le
+        générateur ne dépend pas de sa grille exacte pour ces typologies.
+        """
+        emb = [0.0] * 1536
+        target = slot.target_typologie.value
+        _TYPO_ORDER = ["studio", "T1", "T2", "T3", "T4", "T5"]
+        try_order: list[str] = [target]
+        if target in _TYPO_ORDER:
+            i = _TYPO_ORDER.index(target)
+            for delta in (-1, 1, -2, 2):
+                j = i + delta
+                if 0 <= j < len(_TYPO_ORDER):
+                    try_order.append(_TYPO_ORDER[j])
+
+        for typo_try in try_order:
+            candidates = await search_compatible_templates(
+                self.session, query_embedding=emb,
+                typologie=typo_try, limit=10,
+            )
+            if candidates:
+                # On ne filtre PAS sur les dimensions ici : c'est justement le
+                # point du fallback. On classe seulement par qualité/similarité.
+                best = max(
+                    candidates,
+                    key=lambda c: c.similarity * 0.7
+                    + (c.template.rating.success_rate or 0.0) * 0.3,
+                )
+                return SelectionResult(
+                    template=best.template,
+                    confidence=0.0,  # fallback : confiance nulle mais slot conservé
+                    alternatives=[],
+                    rationale=(
+                        f"Fallback template {best.template.id} (typo {typo_try}) "
+                        f"pour slot {slot.target_typologie.value} hors plages dims "
+                        f"— géométrie dispatcher conservée."
+                    ),
+                )
+        return None

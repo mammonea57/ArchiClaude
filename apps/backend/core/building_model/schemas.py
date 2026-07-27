@@ -29,6 +29,10 @@ class RoomType(str, Enum):
     CELLIER = "cellier"
     PLACARD_TECHNIQUE = "placard_technique"
     LOGGIA = "loggia"
+    # Dégagement NUIT (T4/T5 uniquement) : petit couloir desservant TOUTES les
+    # chambres + SdB, pour que le séjour redevienne un rectangle net (pas gonflé
+    # de circulation). Distinct de l'entrée/hall fermé interdit en open-plan.
+    DEGAGEMENT_NUIT = "degagement_nuit"
 
 
 class WallType(str, Enum):
@@ -166,6 +170,11 @@ class Room(BaseModel):
 class Loggia(BaseModel):
     surface_m2: float
     polygon_xy: list[tuple[float, float]]
+    # kind : "balcon" = saillie projetée (autorisée SEULEMENT côté cour/jardin,
+    # survol de terrain privé) ; "loggia" = creusée EN RETRAIT dans le volume
+    # (obligatoire côté RUE — jamais de saillie au-dessus du trottoir, UA.6). Au
+    # RDC : jamais de balcon saillant (on est au sol) → au mieux une loggia.
+    kind: Literal["balcon", "loggia"] = "balcon"
 
 
 class Cellule(BaseModel):
@@ -212,6 +221,32 @@ class Niveau(BaseModel):
     surface_plancher_m2: float = Field(gt=0)
     cellules: list[Cellule] = Field(default_factory=list)
     circulations_communes: list[Circulation] = Field(default_factory=list)
+    # COUR INTÉRIEURE OUVERTE (2026-07-06) : trou traversant à ciel ouvert au
+    # centre d'un immeuble sur cour (L / U). Ce polygone est un VIDE dans le
+    # plancher (retiré de surface_plancher_m2), rendu comme un espace planté à
+    # ciel ouvert (pas une dalle de circulation). Présent à TOUS les niveaux (la
+    # cour est un vide vertical traversant R+0..R+N). None = pas de cour.
+    cour_polygon_xy: list[tuple[float, float]] | None = None
+    # ESPACE VERT COMMUN au RDC (2026-07-07) : le RÉSIDU de la cour arrière que
+    # personne ne peut atteindre proprement en restant devant SA façade (fond de
+    # coin profond) est un jardin PARTAGÉ planté, distinct des jardins privatifs
+    # (rendu vert avec hachure/teinte différente + label « jardin commun »). Les
+    # jardins privatifs vivent sur chaque Cellule (jardin_polygon_xy) ; celui-ci
+    # est unique par niveau. None = pas de résidu commun (privatifs couvrent tout).
+    jardin_commun_polygon_xy: list[tuple[float, float]] | None = None
+    # PARTI ATRIUM PLANTÉ (2026-07-09) : quand True, la cour (``cour_polygon_xy``)
+    # n'est PAS un patio ouvert bordant la cage, mais un ATRIUM sous VERRIÈRE avec
+    # le noyau esc+ASC PLANTÉ EN SON CENTRE — on monte à travers un jardin. La cage
+    # touche le couloir sur UNE face ; l'anneau vert planté entoure les 3 autres.
+    # Aménité marquée pour le rendu 3D (verrière/puits de lumière + label ATRIUM +
+    # socle planté autour du noyau au RDC). None/False = cour ouverte simple (v23).
+    atrium_verriere: bool = False
+    # PARTI v23 FINANÇABLE (2026-07-09, défaut) : escalier ENCLOISONNÉ (conforme
+    # évacuation R+5) adossé à un ANGLE de la cour, sa PAROI côté cour étant VITRÉE
+    # (on voit le vert en montant). La cour reste À CIEL OUVERT, plantée (cœur
+    # d'îlot). Marqué pour le rendu 2D (liseré vitré + label COUR PLANTÉE) et la
+    # base 3D (paroi vitrée sur cour plantée + paliers plantés). Exclusif d'atrium.
+    cage_vitree_cour: bool = False
 
 
 class Envelope(BaseModel):
@@ -222,6 +257,24 @@ class Envelope(BaseModel):
     hauteur_rdc_m: float = Field(ge=2.5, le=5.0)
     hauteur_etage_courant_m: float = Field(ge=2.5, le=3.5)
     toiture: ToitureConfig
+
+
+class EnvelopeMaxPLU(BaseModel):
+    """Maximum PLU envelope — what the parcelle COULD sustain if optimised
+    against the PLU rules, independent of the actual designed project.
+
+    Stored alongside the designed ``Envelope`` so investors / lenders can
+    see the gap between the proposed programme and the legal ceiling.
+    """
+    footprint_max_plu_geojson: dict[str, Any]
+    emprise_max_m2: float = Field(gt=0)
+    emprise_max_pct: float = Field(ge=0.0, le=100.0)
+    niveaux_max_plu: int = Field(ge=0, le=20)
+    hauteur_max_plu_m: float = Field(ge=0.0)
+    sdp_max_plu_m2: float = Field(ge=0.0)
+    # Bookkeeping: which retrait was the binding constraint
+    retrait_applique_m: float = Field(ge=0.0)
+    notes: list[str] = Field(default_factory=list)
 
 
 class Site(BaseModel):
@@ -250,7 +303,15 @@ class Facade(BaseModel):
 
 class ConformiteAlert(BaseModel):
     level: Literal["info", "warning", "error"]
-    category: Literal["pmr", "incendie", "plu", "surface", "ventilation", "lumiere"]
+    category: Literal[
+        "pmr", "incendie", "plu", "surface", "ventilation", "lumiere",
+        "business", "r111_18", "typologie",
+        # TOP 20 conformite V2 categories — see
+        # refs/plu/taxonomy/FR_urbanism_documents_exhaustive_v1.md
+        "oap", "abf", "ppri", "pprt", "sru_sms", "sup_canalisation",
+        "rga", "pollution", "ebc", "l151_19", "natura2000", "cdpenaf",
+        "cdac", "re2020", "stationnement", "lineaire_commercial",
+    ]
     message: str
     affected_element_id: str | None = None
 
@@ -264,7 +325,42 @@ class ConformiteCheck(BaseModel):
     plu_retraits_ok: bool = True
     ventilation_ok: bool = True
     lumiere_ok: bool = True
+    # Pre-render gate booleans (default True = unchecked / no violation).
+    business_marge_ok: bool = True
+    business_lls_quota_ok: bool = True
+    business_typologie_ok: bool = True
+    r111_18_chambres_ok: bool = True
     alerts: list[ConformiteAlert] = Field(default_factory=list)
+    # Blocking errors emitted by the conformite validator (PLU + R.111-18
+    # + business). Non-blocking warnings live in ``warnings``. Kept
+    # separate from ``alerts`` so the pre-render gate can fail fast
+    # without re-walking the legacy alert list.
+    errors: list[ConformiteAlert] = Field(default_factory=list)
+    warnings: list[ConformiteAlert] = Field(default_factory=list)
+
+    def has_blocking_errors(self) -> bool:
+        """True if any error-level alert (errors or legacy alerts) blocks rendering."""
+        if any(a.level == "error" for a in self.errors):
+            return True
+        return any(a.level == "error" for a in self.alerts)
+
+    def blocking_summary(self) -> list[dict]:
+        """Return a JSON-friendly list of blocking violations for HTTP detail."""
+        out: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for a in list(self.errors) + list(self.alerts):
+            if a.level != "error":
+                continue
+            key = (a.category, a.message)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "category": a.category,
+                "message": a.message,
+                "affected_element_id": a.affected_element_id,
+            })
+        return out
 
 
 class BuildingModel(BaseModel):
@@ -272,8 +368,15 @@ class BuildingModel(BaseModel):
     metadata: Metadata
     site: Site
     envelope: Envelope
+    envelope_max_plu: EnvelopeMaxPLU | None = None
     core: Core
     niveaux: list[Niveau]
     facades: dict[Literal["nord", "sud", "est", "ouest"], Facade]
     materiaux_rendu: dict[str, Any] = Field(default_factory=dict)
     conformite_check: ConformiteCheck | None = None
+    # Optional bundle of every urbanism overlay (PLU/PLUi, SUP, risque,
+    # patrimoine, mixité, environnement, règles bâtiment, supra) that
+    # constrains the project. Kept as ``Any`` to avoid a hard import
+    # cycle with :mod:`core.urbanism_overlays.schemas`. Callers attach
+    # an :class:`UrbanismOverlayBundle` instance directly.
+    urbanism_overlays: Any | None = None

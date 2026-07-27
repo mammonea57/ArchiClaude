@@ -88,12 +88,10 @@ _TARGETS: dict[Typologie, list[_RoomTarget]] = {
         _RoomTarget(RoomType.CHAMBRE_PARENTS,10.0,11.0, 12.0, "r_ch_parents",  "chambre"),
     ],
     Typologie.T4: [
-        _RoomTarget(RoomType.ENTREE,          5.0,  6.0,  8.0, "r_entree",      "service"),
+        _RoomTarget(RoomType.ENTREE,          4.0,  5.0,  6.0, "r_entree",      "service"),
         _RoomTarget(RoomType.SDB,             4.5,  5.0,  6.0, "r_sdb",         "service"),
-        _RoomTarget(RoomType.SALLE_DE_DOUCHE, 2.0,  2.5,  3.0, "r_sde",         "service"),
         _RoomTarget(RoomType.WC,              1.5,  1.8,  2.0, "r_wc",          "service"),
-        _RoomTarget(RoomType.SEJOUR,        25.0, 28.0, 30.0, "r_sejour",      "sejour"),
-        _RoomTarget(RoomType.CUISINE,         5.0,  6.0,  7.0, "r_cuisine",     "cuisine"),
+        _RoomTarget(RoomType.SEJOUR_CUISINE,28.0, 32.0, 36.0, "r_sejour",      "sejour"),
         _RoomTarget(RoomType.CHAMBRE_ENFANT, 10.0,11.0, 12.0, "r_ch_enfant",   "chambre"),
         _RoomTarget(RoomType.CHAMBRE_SUPP,    9.0,10.0, 11.0, "r_ch_supp",     "chambre"),
         _RoomTarget(RoomType.CHAMBRE_PARENTS,11.0,12.0, 13.0, "r_ch_parents",  "chambre"),
@@ -219,7 +217,20 @@ def _layout_for_typology(typo: Typologie, slot_w: float, slot_d: float) -> list[
             if gap <= 0:
                 break
         if gap > 0:
-            service_ws[0] += gap  # remainder → entrée (acts as circulation)
+            # Cap entrée at its IDEAL width; the excess width becomes a CELLIER
+            # (useful storage) instead of a bloated hall / lost circulation.
+            entree_ideal_w = service[0].ideal_m2 / service_d
+            add = min(gap, max(0.0, entree_ideal_w - service_ws[0]))
+            service_ws[0] += add
+            gap -= add
+            if gap > 0.7:
+                cellier_area = gap * service_d
+                service.append(_RoomTarget(
+                    RoomType.CELLIER, 1.0, cellier_area, cellier_area,
+                    "r_cellier_x", "service"))
+                service_ws.append(gap)
+            elif gap > 0:
+                service_ws[0] += gap  # tiny remainder → entrée
 
     rects: list[_Rect] = []
     u = 0.0
@@ -227,84 +238,26 @@ def _layout_for_typology(typo: Typologie, slot_w: float, slot_d: float) -> list[
         rects.append(_Rect(u, 0.0, u + w, service_d, t.type, t.id_suffix))
         u += w
 
-    # ── Chambres column at u=ch_u0..slot_w, stacked in v.
-    # Column width from total chambre areas, clamped. Min 2.5m = comfortable
-    # chambre width; max = half of slot_w so séjour keeps >= half.
-    ch_areas = [sizes[id(t)] for t in chambres]
-    ch_total = sum(ch_areas)
-    ideal_col_w = ch_total / max(facade_d, 0.1)
-    ch_col_w = max(2.5, min(slot_w * 0.55, ideal_col_w))
-
-    # Heights at this col width
-    heights = [a / ch_col_w for a in ch_areas]
-    total_h = sum(heights)
-
-    if total_h > facade_d + 0.1:
-        # Column too short → shrink chambres proportionally to fit
-        k = facade_d / total_h
-        heights = [h * k for h in heights]
-        chambres_fill_column = True
-        empty_strip_h = 0.0
-    elif total_h < facade_d - 0.1:
-        # Column too long → chambres pushed to the FAÇADE end (best light),
-        # unused palier-side portion becomes a séjour extension (L-shape).
-        chambres_fill_column = False
-        empty_strip_h = facade_d - total_h
-    else:
-        chambres_fill_column = True
-        empty_strip_h = 0.0
-
-    ch_u0 = slot_w - ch_col_w
-    # Chambres start at service_d if filling, else at (service_d + empty_strip_h)
-    v = service_d + empty_strip_h
-    for t, h in zip(chambres, heights):
-        v1 = v + h
-        rects.append(_Rect(ch_u0, v, slot_w, v1, t.type, t.id_suffix))
-        v = v1
-
-    # ── Séjour (+ cuisine) on left portion of façade strip.
-    # Cuisine is a HORIZONTAL strip adjacent to service (so entrée→cuisine
-    # works) and below séjour. This keeps every chambre adjacent to séjour
-    # on its left edge (u=ch_u0) so the _should_link door logic fires.
-    sc_w = ch_u0
-    if cuisine_t is not None and sc_w > 2.5:
-        cui_area = sizes[id(cuisine_t)]
-        cui_h = cui_area / sc_w
-        cui_h = max(1.8, min(cui_h, 2.8))
-        cui_h = min(cui_h, facade_d * 0.35)
-        sej_v0 = service_d + cui_h
-        rects.append(_Rect(0.0, service_d, sc_w, sej_v0, cuisine_t.type, cuisine_t.id_suffix))
-    else:
-        sej_v0 = service_d
-
-    # If the main séjour rectangle would exceed max × 1.3 (pathological
-    # oversized slot), carve a CELLIER strip at the palier-adjacent corner
-    # of the séjour to cap séjour size and give the apt some storage.
-    sej_rect_area = sc_w * (slot_d - sej_v0)
-    sej_max = sejour_t.max_m2 * 1.3  # allow 30% overshoot
-    if sej_rect_area > sej_max + 3.0 and sc_w > 3.5:
-        excess = sej_rect_area - sejour_t.max_m2  # cap at clean max, not max×1.3
-        rang_w = min(2.5, sc_w * 0.35)
-        rang_h = min((slot_d - sej_v0) * 0.4, excess / rang_w)
-        # CELLIER at the palier-adjacent corner of séjour (left side, near cuisine)
-        rects.append(_Rect(0.0, sej_v0, rang_w, sej_v0 + rang_h,
-                          RoomType.CELLIER, "r_cellier"))
-        # Séjour L-shape: top strip + right-of-cellier strip
-        rects.append(_Rect(rang_w, sej_v0, sc_w, sej_v0 + rang_h,
-                          sejour_t.type, sejour_t.id_suffix + "_a"))
-        rects.append(_Rect(0.0, sej_v0 + rang_h, sc_w, slot_d,
-                          sejour_t.type, sejour_t.id_suffix + "_b"))
-    else:
-        # Main séjour (left column above cuisine/service)
-        rects.append(_Rect(0.0, sej_v0, sc_w, slot_d, sejour_t.type, sejour_t.id_suffix))
-
-    # If chambres don't fill the column, the palier-side strip (u=ch_u0..slot_w,
-    # v=service_d..service_d+empty_strip_h) becomes a séjour extension.
-    # Same type as main séjour → downstream treats it as one logical room.
-    if not chambres_fill_column and empty_strip_h > 0.3:
-        rects.append(_Rect(ch_u0, service_d, slot_w,
-                          service_d + empty_strip_h,
-                          sejour_t.type, sejour_t.id_suffix + "_ext"))
+    # ── Pièces de VIE (séjour + chambres + cuisine séparée) placées CÔTE À
+    #    CÔTE le long de la façade (v = service_d .. slot_d), chacune sur toute
+    #    la profondeur de façade → CHACUNE touche la façade et a une FENÊTRE.
+    #    Règle FR (validée user) : une fenêtre par chambre, séjour et cuisine ;
+    #    les pièces de service (entrée/sdb/wc/cellier, dans la bande v[0,
+    #    service_d]) n'en ont pas besoin. L'ancien layout empilait les chambres
+    #    en colonne dans la profondeur → les chambres du fond étaient BORGNES
+    #    (61% des chambres sans fenêtre). Le séjour vient en premier (u=0) donc
+    #    reste adjacent à l'entrée/cuisine ; les chambres suivent le long de la
+    #    façade. Largeurs proportionnelles aux surfaces cibles, calées sur slot_w.
+    living = [sejour_t] + list(chambres)
+    if cuisine_t is not None:
+        living.append(cuisine_t)
+    living_areas = [max(sizes[id(t)], 1.0) for t in living]
+    total_living = sum(living_areas) or 1.0
+    u = 0.0
+    for i, (t, a) in enumerate(zip(living, living_areas)):
+        u1 = slot_w if i == len(living) - 1 else u + (a / total_living) * slot_w
+        rects.append(_Rect(u, service_d, u1, slot_d, t.type, t.id_suffix))
+        u = u1
 
     return rects
 
@@ -346,6 +299,34 @@ def _rect_to_world_polygon(
     return [_transform_uv_to_world(u, v, slot_bounds, palier_side) for (u, v) in corners_uv]
 
 
+_MIN_LIVING_W = 2.6  # min comfortable façade width per living room (window)
+
+
+def _living_count(typo: Typologie) -> int:
+    """Number of rooms that NEED a window (séjour + chambres + separate
+    cuisine) for this typology."""
+    return sum(1 for r in _TARGETS.get(typo, [])
+               if r.zone in ("sejour", "chambre", "cuisine"))
+
+
+def _downgrade_for_facade(typo: Typologie, facade_w: float) -> Typologie:
+    """Downgrade the typology when the usable FAÇADE (slot_w) is too short to
+    give every living room its own window slice. A T4 (4 living rooms) needs
+    ~10.4 m of façade; a constrained slot (narrow corner / near-core) can only
+    light a T3 or T2. This prevents windowless bedrooms (hard rule) — the mix
+    is preserved by requesting extra T4/T5 upstream so the WIDE slots keep them."""
+    HIER = [Typologie.T5, Typologie.T4, Typologie.T3, Typologie.T2]
+    try:
+        i = HIER.index(typo)
+    except ValueError:
+        return typo
+    while i < len(HIER):
+        if facade_w >= _living_count(HIER[i]) * _MIN_LIVING_W:
+            return HIER[i]
+        i += 1
+    return Typologie.T2
+
+
 def effective_typology(
     slot_bounds: tuple[float, float, float, float],
     requested: Typologie,
@@ -363,7 +344,7 @@ def effective_typology(
     TYPO_MIN_SUM = {
         Typologie.T2: 38.5,   # 2 + 3.5 + 1 + 22 + 10
         Typologie.T3: 54.2,   # 4 + 4 + 1.2 + 26 + 9 + 10
-        Typologie.T4: 73.0,   # 5 + 4.5 + 2 + 1.5 + 25 + 5 + 10 + 9 + 11
+        Typologie.T4: 68.0,   # 4 + 4.5 + 1.5 + 28 + 10 + 9 + 11 (séjour+cuisine open)
         Typologie.T5: 94.5,   # 6 + 5 + 3 + 2 + 1.5 + 30 + 6 + 10 + 10 + 9 + 12
     }
     HIERARCHY = [Typologie.T5, Typologie.T4, Typologie.T3, Typologie.T2]
@@ -482,6 +463,7 @@ def build_walls_and_openings(
     footprint=None,
     parcelle=None,
     other_cells_polys=None,
+    voiries: tuple | None = None,
 ) -> tuple[list[Wall], list[Opening]]:
     """Given placed rooms, derive perimeter + partition walls and openings.
 
@@ -603,7 +585,9 @@ def build_walls_and_openings(
     #   - SDB links to WC (en-suite WC) and to CHAMBRE_PARENTS (suite
     #     parentale) so the SdB is accessible even if not adjacent to
     #     the entrée.
-    HUB_TYPES = {RoomType.ENTREE}
+    # DEGAGEMENT_NUIT (T4/T5) = hub de distribution nuit : il dessert les chambres
+    # + la SdB + le WC (portes sur ses arêtes), comme un vrai couloir de nuit.
+    HUB_TYPES = {RoomType.ENTREE, RoomType.DEGAGEMENT_NUIT}
     LIVING_TYPES = {
         RoomType.SEJOUR, RoomType.SEJOUR_CUISINE,
     }
@@ -637,21 +621,34 @@ def build_walls_and_openings(
             return True
         return False
 
+    # ── PLACEMENT PORTES en 2 temps (défaut user 2026-07-15 : « une chambre a 3
+    #    portes dont 2 inutiles » MAIS « la parentale PEUT avoir séjour + SdB ») :
+    #    (1) on pose une porte sur CHAQUE mur _should_link — état MONTRABLE éprouvé,
+    #        aucune pièce enclavée ; puis le FALLBACK couvre les pièces sans porte ;
+    #    (2) plus bas, un ÉLAGAGE retire les portes de CIRCULATION REDONDANTES
+    #        (chambre reliée à la fois au séjour ET au dégagement → on garde le
+    #        dégagement) en CONSERVANT la porte en-suite parents↔SdB. Robuste : ne
+    #        supprime jamais la dernière porte d'une pièce (contrairement au
+    #        placement 1-porte direct, fragile sur la géométrie loggia décalée).
+    _CH_T = {RoomType.CHAMBRE_PARENTS, RoomType.CHAMBRE_ENFANT, RoomType.CHAMBRE_SUPP}
+    _WET_T = {RoomType.SDB, RoomType.SALLE_DE_DOUCHE, RoomType.WC, RoomType.WC_SDB}
+    _wall_len = {
+        w.id: (((w.geometry["coords"][1][0] - w.geometry["coords"][0][0]) ** 2
+                + (w.geometry["coords"][1][1] - w.geometry["coords"][0][1]) ** 2) ** 0.5)
+        for w in walls}
+
     door_idx = 0
     for wid, ra, rb in wall_room_pairs:
         if not _should_link(ra, rb):
             continue
-        wcoords = next(w for w in walls if w.id == wid).geometry["coords"]
-        (x0, y0), (x1, y1) = wcoords[0], wcoords[1]
-        wlen = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
-        if wlen < 0.9:
-            continue  # wall too short for a 83 cm door
-        door_pos_cm = max(30, int(wlen * 50) - 42)
+        _wl = _wall_len.get(wid, 0.0)
+        if _wl < 0.9:
+            continue
         openings.append(Opening(
             id=f"{slot_id}_op_int_{door_idx}",
             type=OpeningType.PORTE_INTERIEURE,
             wall_id=wid,
-            position_along_wall_cm=door_pos_cm,
+            position_along_wall_cm=max(30, int(_wl * 50) - 42),
             width_cm=83,
             height_cm=210,
             allege_cm=None,
@@ -659,22 +656,282 @@ def build_walls_and_openings(
         ))
         door_idx += 1
 
+    # ── FALLBACK ROBUSTE : porte pour toute pièce à desservir SANS porte ────
+    # Le matching par arête collinéaire échoue si 2 pièces se CHEVAUCHENT
+    # légèrement (imprécision du relayout mono-façade) : aucune cloison n'est
+    # alors émise → chambre/SdB/WC sans porte = C2 KO. Ici on synthétise, pour
+    # chaque pièce non desservie, une cloison + porte sur son plus long CONTACT
+    # de frontière avec le distributeur (séjour/entrée), via shapely (robuste
+    # au chevauchement). Universel L+U.
+    from shapely.geometry import Polygon as _ShP, LineString as _LnS
+
+    def _door_segments():
+        segs = []
+        for op in openings:
+            if op.type != OpeningType.PORTE_INTERIEURE:
+                continue
+            w = next((w for w in walls if w.id == op.wall_id), None)
+            if w is None:
+                continue
+            (ax, ay), (bx, by) = w.geometry["coords"]
+            wl = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5 or 1.0
+            t = (op.position_along_wall_cm / 100.0) / wl
+            hw = 0.42  # demi-largeur porte (m)
+            segs.append(_LnS([
+                (ax + (bx - ax) * max(0, t - hw / wl), ay + (by - ay) * max(0, t - hw / wl)),
+                (ax + (bx - ax) * min(1, t + hw / wl), ay + (by - ay) * min(1, t + hw / wl)),
+            ]))
+        return segs
+
+    def _served_rooms() -> set[int]:
+        """Une pièce est DESSERVIE si un segment de porte est quasi ENTIÈREMENT
+        sur SA frontière (chevauchement ≥ 0.5 m avec boundary.buffer(0.12))."""
+        segs = _door_segments()
+        served: set[int] = set()
+        for i, r in enumerate(rooms):
+            try:
+                bnd = _ShP(r.polygon_xy).boundary.buffer(0.12)
+            except Exception:
+                continue
+            for seg in segs:
+                try:
+                    if seg.intersection(bnd).length >= 0.5:
+                        served.add(i)
+                        break
+                except Exception:
+                    pass
+        return served
+
+    _NEED = {
+        RoomType.CHAMBRE_PARENTS, RoomType.CHAMBRE_ENFANT, RoomType.CHAMBRE_SUPP,
+        RoomType.SDB, RoomType.SALLE_DE_DOUCHE, RoomType.WC, RoomType.WC_SDB,
+        RoomType.CUISINE,
+    }
+    _DISTRIB = {RoomType.SEJOUR, RoomType.SEJOUR_CUISINE, RoomType.ENTREE,
+                RoomType.DEGAGEMENT_NUIT}
+    served = _served_rooms()
+    distrib_polys = [(_ShP(r.polygon_xy), r) for r in rooms
+                     if r.type in _DISTRIB and len(r.polygon_xy) >= 3]
+    for i, r in enumerate(rooms):
+        if r.type not in _NEED or i in served or len(r.polygon_xy) < 3:
+            continue
+        rp = _ShP(r.polygon_xy)
+        # meilleur contact de frontière avec un distributeur
+        best_line = None
+        best_len = 0.0
+        for dp, dr in distrib_polys:
+            if dr is r:
+                continue
+            try:
+                inter = rp.boundary.intersection(dp.boundary)
+            except Exception:
+                inter = None
+            if inter is None or inter.is_empty:
+                # bords NON parfaitement collinéaires (apts loggia : séjour = reste,
+                # arête crantée) → on tolère un petit décalage : frontière de r à
+                # ≤ 0,4 m du distributeur. Évite « chambre sans porte » sur un micro-gap.
+                try:
+                    inter = rp.boundary.intersection(dp.buffer(0.4))
+                except Exception:
+                    inter = None
+            if inter is None or inter.is_empty:
+                continue
+            lines = [inter] if inter.geom_type == "LineString" else (
+                list(inter.geoms) if hasattr(inter, "geoms") else [])
+            for ln in lines:
+                if ln.geom_type != "LineString":
+                    continue
+                if ln.length > best_len:
+                    best_len, best_line = ln.length, ln
+        # Contact mini = largeur d'une porte étroite (70 cm) + jeu. Sous 0.7 m
+        # la pièce est réellement enclavée (défaut géométrique amont) → on ne
+        # fabrique pas une porte impossible.
+        if best_line is None or best_len < 0.55:
+            continue
+        # cloison synthétique + porte sur ce contact.
+        (px0, py0) = best_line.coords[0]
+        (px1, py1) = best_line.coords[-1]
+        wid = f"{slot_id}_pf_{door_idx}"
+        walls.append(_wall(wid, px0, py0, px1, py1, porteur=False))
+        _dw = min(83, max(63, int(best_len * 100) - 12))  # porte 63-83 cm
+        door_pos_cm = max(int(_dw / 2) + 2, int(best_len * 50))
+        openings.append(Opening(
+            id=f"{slot_id}_op_int_{door_idx}",
+            type=OpeningType.PORTE_INTERIEURE,
+            wall_id=wid,
+            position_along_wall_cm=door_pos_cm,
+            width_cm=_dw,
+            height_cm=210,
+            allege_cm=None,
+            swing="interior_right",
+        ))
+        door_idx += 1
+
+    # ── ÉLAGAGE DES PORTES DE CIRCULATION REDONDANTES (défaut user 2026-07-15 :
+    #    « une chambre a 3 portes dont 2 inutiles »). Une pièce reliée par PLUSIEURS
+    #    portes à des distributeurs (séjour ET dégagement, ou 2 murs sur le séjour)
+    #    n'en garde qu'UNE — la meilleure (dégagement > entrée > séjour). Les portes
+    #    EN-SUITE (parents↔SdB) et le chaînage SdB↔WC NE sont PAS des portes de
+    #    circulation → CONSERVÉS (2ᵉ porte UTILE de la parentale). On ne retire
+    #    jamais la dernière porte d'une pièce (desserte garantie). Comme on ne fait
+    #    que RETIRER, l'état reste MONTRABLE. Universel (s'adapte à chaque apt).
+    from shapely.geometry import Polygon as _PrPoly, Point as _PrPt, LineString as _PrLn
+    from collections import defaultdict as _dd2
+    _DISTRIB_T = {RoomType.SEJOUR, RoomType.SEJOUR_CUISINE, RoomType.DEGAGEMENT_NUIT,
+                  RoomType.ENTREE}
+    _drank = {RoomType.DEGAGEMENT_NUIT: 0, RoomType.ENTREE: 1,
+              RoomType.SEJOUR_CUISINE: 2, RoomType.SEJOUR: 3}
+    _NEEDD = _CH_T | _WET_T | {RoomType.CUISINE}
+    _wall_by_id = {w.id: w for w in walls}
+    _rbuf = [(_rr, _PrPoly(_rr.polygon_xy).buffer(0.22))
+             for _rr in rooms if len(_rr.polygon_xy) >= 3]
+    _rbnd = {id(_rr): _PrPoly(_rr.polygon_xy).boundary.buffer(0.15)
+             for _rr in rooms if len(_rr.polygon_xy) >= 3}
+
+    def _door_seg_pr(_op):
+        _w = _wall_by_id.get(_op.wall_id)
+        if _w is None:
+            return None, None
+        (ax, ay), (bx, by) = _w.geometry["coords"][0], _w.geometry["coords"][1]
+        _wl = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5 or 1.0
+        _t = (_op.position_along_wall_cm / 100.0) / _wl
+        _hw = (_op.width_cm / 100.0) / 2
+        _mp = _PrPt(ax + (bx - ax) * _t, ay + (by - ay) * _t)
+        _seg = _PrLn([
+            (ax + (bx - ax) * max(0, _t - _hw / _wl), ay + (by - ay) * max(0, _t - _hw / _wl)),
+            (ax + (bx - ax) * min(1, _t + _hw / _wl), ay + (by - ay) * min(1, _t + _hw / _wl))])
+        return _mp, _seg
+
+    _int_ops = [o for o in openings if o.type == OpeningType.PORTE_INTERIEURE]
+    # served[id(room)] = portes dont le SEGMENT longe la frontière (test verify_plan)
+    _served = _dd2(list)          # id(room) → [op]
+    _straddle = {}                # op.id → rooms dont la bbox contient le milieu
+    for _op in _int_ops:
+        _mp, _seg = _door_seg_pr(_op)
+        if _seg is None:
+            continue
+        _straddle[_op.id] = [_rr for _rr, _bp in _rbuf if _bp.contains(_mp)]
+        for _rr in rooms:
+            _b = _rbnd.get(id(_rr))
+            if _b is not None and _seg.intersection(_b).length >= 0.4:
+                _served[id(_rr)].append(_op)
+    # ÉLAGAGE des portes de CIRCULATION redondantes : une pièce reliée par
+    # PLUSIEURS portes à des distributeurs n'en garde qu'UNE (dégagement > entrée >
+    # séjour). L'en-suite parents↔SdB (pas un distributeur) est CONSERVÉ. Sécurité :
+    # ne retire jamais la dernière porte desservante (segment sur frontière), donc
+    # l'état reste MONTRABLE.
+    _remove: set = set()
+    for _rr in rooms:
+        if _rr.type not in _NEEDD:
+            continue
+        _mine = [op for op in _served.get(id(_rr), []) if op.id not in _remove]
+        _circ = []
+        for op in _mine:
+            _st = _straddle.get(op.id, [])
+            _dist = [o for o in _st if o is not _rr and o.type in _DISTRIB_T]
+            if len(_st) >= 2 and _dist:
+                _circ.append((op, _dist[0]))
+        if len(_circ) <= 1:
+            continue
+        _circ.sort(key=lambda t: _drank.get(t[1].type, 9))
+        for op, _oth in _circ[1:]:
+            _rest = [o for o in _served.get(id(_rr), [])
+                     if o.id != op.id and o.id not in _remove]
+            if _rest:
+                _remove.add(op.id)
+    if _remove:
+        openings = [op for op in openings
+                    if not (op.type == OpeningType.PORTE_INTERIEURE and op.id in _remove)]
+
+    # DEDUP DISTRIBUTEUR↔DISTRIBUTEUR (user 2026-07-27, T4n5 « séparations aux
+    # mauvais endroits ») : deux distributeurs (séjour + dégagement) reliés par
+    # PLUSIEURS portes = le séjour est coupé en deux par le couloir. L'élagage
+    # ci-dessus ne l'attrape pas (il ne traite que les pièces DESSERVIES, or les
+    # deux sont des hubs). On ne garde qu'UNE porte par PAIRE de distributeurs :
+    # la plus proche du centroïde du hub le mieux classé (dégagement) → couloir net,
+    # séjour d'un seul tenant. Les deux étant dans le graphe connexe, en retirer une
+    # ne déconnecte rien (reste MONTRABLE).
+    _cent = {id(_rr): _PrPoly(_rr.polygon_xy).centroid
+             for _rr in rooms if len(_rr.polygon_xy) >= 3}
+    _op_dist = {}                 # op.id → [rooms distributeurs desservis]
+    for _rr in rooms:
+        if _rr.type not in _DISTRIB_T:
+            continue
+        for _op in _served.get(id(_rr), []):
+            if _op.id in _remove:
+                continue
+            _op_dist.setdefault(_op.id, []).append(_rr)
+    _pairs = _dd2(list)           # frozenset(2 ids distrib) → [(op, rank, midpt)]
+    for _op in _int_ops:
+        if _op.id in _remove:
+            continue
+        _ds = _op_dist.get(_op.id, [])
+        if len(_ds) != 2:
+            continue
+        _mp, _seg = _door_seg_pr(_op)
+        if _mp is None:
+            continue
+        _key = frozenset(id(d) for d in _ds)
+        _hub = min(_ds, key=lambda d: _drank.get(d.type, 9))
+        _pairs[_key].append((_op, _cent[id(_hub)].distance(_mp)))
+    _remove2 = set()
+    for _key, _lst in _pairs.items():
+        if len(_lst) <= 1:
+            continue
+        _lst.sort(key=lambda t: t[1])   # plus proche du hub d'abord = gardée
+        for _op, _ in _lst[1:]:
+            # sécurité : ne pas retirer si c'est l'unique porte d'une pièce desservie
+            _still_needed = any(
+                _op in _served.get(id(_rr), [])
+                and _rr.type in _NEEDD
+                and len([o for o in _served.get(id(_rr), [])
+                         if o.id not in _remove and o.id not in _remove2]) <= 1
+                for _rr in rooms)
+            if not _still_needed:
+                _remove2.add(_op.id)
+    if _remove2:
+        openings = [op for op in openings
+                    if not (op.type == OpeningType.PORTE_INTERIEURE
+                            and op.id in _remove2)]
+
     # Palier wall + entry door
     palier_wall_id = {"sud": w_sud.id, "nord": w_nord.id, "ouest": w_ouest.id, "est": w_est.id}[palier_side]
     palier_wall = {"sud": w_sud, "nord": w_nord, "ouest": w_ouest, "est": w_est}[palier_side]
 
-    # Entry door at the entrée room's center on the palier wall
-    entree = next((r for r in rooms if r.type == RoomType.ENTREE), None)
-    if entree:
-        cx = sum(p[0] for p in entree.polygon_xy) / len(entree.polygon_xy)
-        cy = sum(p[1] for p in entree.polygon_xy) / len(entree.polygon_xy)
-        coords = palier_wall.geometry["coords"]
-        wall_len = ((coords[1][0] - coords[0][0]) ** 2 + (coords[1][1] - coords[0][1]) ** 2) ** 0.5
+    # Entry door on the palier (couloir) wall. GABARIT OPEN-PLAN (2026-07-06) :
+    # il n'y a PLUS de pièce ENTREE fermée → la porte d'entrée ouvre DIRECTEMENT
+    # dans le SÉJOUR/CUISINE. On l'ancre au centre du segment du SÉJOUR qui borde
+    # le mur couloir (la pièce à vivre touche le couloir = preuve open-plan).
+    # Fallback : ancienne pièce ENTREE si présente (compat autres templates).
+    from shapely.geometry import LineString as _LS, Polygon as _SP
+    _pcoords = palier_wall.geometry["coords"]
+    _pline = _LS([tuple(_pcoords[0]), tuple(_pcoords[1])])
+    _wall_len = _pline.length
+    _entry_room = next((r for r in rooms if r.type == RoomType.ENTREE), None)
+    if _entry_room is None:
+        # séjour/cuisine touchant le couloir : on prend le plus long recouvrement
+        # entre le mur couloir et une pièce à vivre ouverte.
+        _best_seg, _best_len = None, 0.0
+        for r in rooms:
+            if r.type not in (RoomType.SEJOUR, RoomType.SEJOUR_CUISINE):
+                continue
+            try:
+                _inter = _SP(r.polygon_xy).boundary.intersection(_pline.buffer(0.20))
+            except Exception:
+                continue
+            _ln = getattr(_inter, "length", 0.0)
+            if _ln > _best_len:
+                _best_len, _best_seg = _ln, r
+        _entry_room = _best_seg
+    if _entry_room is not None:
+        cx = sum(p[0] for p in _entry_room.polygon_xy) / len(_entry_room.polygon_xy)
+        cy = sum(p[1] for p in _entry_room.polygon_xy) / len(_entry_room.polygon_xy)
+        # projeter le centroïde de la pièce d'accueil sur le mur couloir.
         if palier_side in ("sud", "nord"):
-            proj = cx - coords[0][0]
+            proj = cx - _pcoords[0][0]
         else:
-            proj = cy - coords[0][1]
-        door_pos_cm = max(40, min(int(wall_len * 100) - 40, int(abs(proj) * 100)))
+            proj = cy - _pcoords[0][1]
+        door_pos_cm = max(50, min(int(_wall_len * 100) - 50, int(abs(proj) * 100)))
         openings.append(Opening(
             id=f"{slot_id}_op_entree",
             type=OpeningType.PORTE_ENTREE,
@@ -713,6 +970,19 @@ def build_walls_and_openings(
     # Exterior sides only — never place a window on a wall that faces a
     # corridor / another apt (those sides are NOT in ``orientations``).
     exterior_set = set(orientations or []) if orientations else None
+    # BLIND party walls: never emit a window/porte-fenêtre on a MITOYEN side (a
+    # footprint-perimeter edge that is NOT a voirie). Drop mitoyen sides from
+    # the exterior set used for openings so corner apts don't get a window on
+    # the neighbour's party wall (non-conforme). Cour + rue sides stay.
+    if exterior_set is not None and voiries and footprint is not None:
+        _fxmin, _fymin, _fxmax, _fymax = footprint.bounds
+        _sx0, _sy0, _sx1, _sy1 = slot_bounds
+        _perim = {
+            "ouest": abs(_sx0 - _fxmin) < 0.6, "est": abs(_sx1 - _fxmax) < 0.6,
+            "sud": abs(_sy0 - _fymin) < 0.6, "nord": abs(_sy1 - _fymax) < 0.6,
+        }
+        _mitoyen = {s for s, on in _perim.items() if on and s not in set(voiries)}
+        exterior_set = exterior_set - _mitoyen
 
     # Pre-compute, for each of the 4 slot sides, (a) the fraction of its
     # length that lies on the footprint perimeter and (b) the USABLE JARDIN
@@ -881,6 +1151,49 @@ def build_walls_and_openings(
             sejour_side = _preferred if _preferred in _pool else max(_pool, key=lambda s: (perimeter_frac.get(s, 0.0), -_priority[s]))
         break
 
+    # ── PORTE-FENÊTRE SUR LOGGIA (défaut user 2026-07-15 : les apts LOGGIA
+    #    avaient 0 ouverture → pièces borgnes). Leurs chambres/séjour sont RECULÉS
+    #    derrière la loggia : ils ne touchent plus le périmètre, donc la logique
+    #    fenêtre-façade (ci-dessous) les ignore. Ici on donne à CHAQUE pièce à
+    #    vivre jouxtant la LOGGIA une PORTE-FENÊTRE sur le mur partagé (lumière +
+    #    accès à la loggia, elle-même ouverte sur l'extérieur). UNE par pièce, sur
+    #    le plus long mur pièce↔loggia ≥ 1,2 m. Universel (toute orientation).
+    if any(r.type == RoomType.LOGGIA for r in rooms):
+        # (NB : `_wall_len` a été RÉASSIGNÉ en float plus haut — on recalcule ici
+        #  les longueurs de mur dans un dict local dédié pour éviter le shadowing.)
+        _wlen_pf = {
+            w.id: (((w.geometry["coords"][1][0] - w.geometry["coords"][0][0]) ** 2
+                    + (w.geometry["coords"][1][1] - w.geometry["coords"][0][1]) ** 2) ** 0.5)
+            for w in walls}
+        _best_pf: dict = {}   # id(room) → (wid, wlen)
+        for _wid, _ra, _rb in wall_room_pairs:
+            if _ra.type == RoomType.LOGGIA and _rb.type in living_types:
+                _liv = _rb
+            elif _rb.type == RoomType.LOGGIA and _ra.type in living_types:
+                _liv = _ra
+            else:
+                continue
+            _wl = _wlen_pf.get(_wid, 0.0)
+            if _wl < 1.2:
+                continue
+            _cur = _best_pf.get(id(_liv))
+            if _cur is None or _wl > _cur[1]:
+                _best_pf[id(_liv)] = (_wid, _wl)
+        _pf_idx = 0
+        for _rid, (_wid, _wl) in _best_pf.items():
+            openings.append(Opening(
+                id=f"{slot_id}_pf_loggia_{_pf_idx}",
+                type=OpeningType.PORTE_FENETRE,
+                wall_id=_wid,
+                position_along_wall_cm=max(20, int(_wl * 50) - 70),
+                width_cm=min(320, max(120, int(_wl * 100) - 40)),
+                height_cm=220,
+                allege_cm=0,
+                swing="slide",
+                has_vitrage=True,
+            ))
+            _pf_idx += 1
+
     for room in rooms:
         if room.type not in living_types:
             continue
@@ -937,14 +1250,59 @@ def build_walls_and_openings(
         wcoords = wall.geometry["coords"]
         wall_len = ((wcoords[1][0] - wcoords[0][0]) ** 2 + (wcoords[1][1] - wcoords[0][1]) ** 2) ** 0.5
 
-        # Window position = midpoint of room projection on that wall
+        # Window position = milieu du CONTACT RÉEL de la pièce avec le mur de
+        # façade (pas le milieu de la bbox : une pièce en L ne touche la façade
+        # que sur une sous-partie ; poser la fenêtre au milieu de la bbox la
+        # mettait sur la portion de mur d'une AUTRE pièce → séjour "sans fenêtre
+        # cour" au contrôle). On projette les arêtes de la pièce collinéaires au
+        # mur pour trouver l'intervalle de contact, puis on centre dessus.
+        room_xs = [p[0] for p in room.polygon_xy]
+        room_ys = [p[1] for p in room.polygon_xy]
+        _wx0, _wy0 = wcoords[0]
         if side in ("sud", "nord"):
-            room_xs = [p[0] for p in room.polygon_xy]
-            pos_m = (min(room_xs) + max(room_xs)) / 2 - wcoords[0][0]
+            _wy = _wy0
+            _pts = room.polygon_xy
+            _contact = [pt[0] for pt in _pts if abs(pt[1] - _wy) < 0.2]
+            if len(_contact) >= 2:
+                c_lo, c_hi = min(_contact), max(_contact)
+            else:
+                c_lo, c_hi = min(room_xs), max(room_xs)
+            pos_m = (c_lo + c_hi) / 2 - _wx0
         else:
-            room_ys = [p[1] for p in room.polygon_xy]
-            pos_m = (min(room_ys) + max(room_ys)) / 2 - wcoords[0][1]
+            _wx = _wx0
+            _pts = room.polygon_xy
+            _contact = [pt[1] for pt in _pts if abs(pt[0] - _wx) < 0.2]
+            if len(_contact) >= 2:
+                c_lo, c_hi = min(_contact), max(_contact)
+            else:
+                c_lo, c_hi = min(room_ys), max(room_ys)
+            pos_m = (c_lo + c_hi) / 2 - wcoords[0][1]
         pos_cm = max(50, min(int(wall_len * 100) - 50, int(abs(pos_m) * 100)))
+
+        # ── ANTI PORTE-SUR-VIDE ────────────────────────────────────────────
+        # Un mur de façade peut n'être exterieur que sur une SOUS-PLAGE (apt
+        # d'extrémité du bandeau U : une partie de w_sud est derrière la cage,
+        # au-delà de la ligne de cour → mur AVEUGLE). On ne pose une fenêtre que
+        # si la PROJECTION de la pièce chevauche vraiment la sous-plage exterieure
+        # du mur ; sinon la pièce est borgne sur ce côté → aucune fenêtre (une
+        # cuisine ouverte borgne, par ex.). Puis on RECENTRE la fenêtre dans la
+        # partie éclairée pour qu'elle ne tombe jamais sur le segment aveugle.
+        _sub = exterior_sub_range.get(side)
+        if _sub is not None:
+            _slo, _shi = _sub
+            _origin = wcoords[0][0] if side in ("sud", "nord") else wcoords[0][1]
+            # On borne au CONTACT RÉEL pièce↔façade (c_lo/c_hi calculés plus haut)
+            # intersecté avec la sous-plage extérieure du mur. Le bbox de la pièce
+            # surestime (pièce en L) et poussait la fenêtre sur le mur d'une autre
+            # pièce → recouvrement éclairé calculé sur le vrai contact.
+            _olo, _ohi = max(c_lo, _slo), min(c_hi, _shi)
+            if _ohi - _olo < 0.6:
+                # La pièce ne voit pas la façade extérieure ici → borgne, pas de
+                # fenêtre (évite la fenêtre sur le mur aveugle du coin).
+                continue
+            # Recentre la fenêtre au milieu du recouvrement éclairé.
+            pos_cm = int(abs(((_olo + _ohi) / 2) - _origin) * 100)
+            pos_cm = max(50, min(int(wall_len * 100) - 50, pos_cm))
 
         if room.type in (RoomType.SEJOUR, RoomType.SEJOUR_CUISINE):
             op_type = OpeningType.PORTE_FENETRE

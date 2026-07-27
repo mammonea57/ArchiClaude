@@ -12,6 +12,7 @@ from typing import Literal
 from shapely.geometry import Polygon as ShapelyPolygon
 
 from core.building_model.layout_l import LLayoutResult, compute_l_layout
+from core.building_model.layout_u import compute_u_layout, decompose_u
 from core.building_model.schemas import Typologie
 
 Topology = Literal["rect", "L", "T", "U", "other"]
@@ -45,7 +46,11 @@ def classify_footprint_topology(footprint: ShapelyPolygon) -> Topology:
 
     - rect: bbox-filling polygon (fill_ratio >= 0.92)
     - L:    exactly 1 reflex vertex
-    - T/U/other: 2+ reflex vertices, not handled yet → "other"
+    - U:    exactly 2 reflex vertices formant un U propre (les 2 angles
+            rentrants partagent une coordonnée = la ligne d'ouverture de la
+            cour ; décomposable en bandeau + 2 ailes). Vérifié via
+            ``decompose_u`` pour éviter les faux positifs (T, +, etc.).
+    - T/other: 2+ reflex vertices non-U → "other"
 
     Unknown topologies fall back to the legacy wing-par-wing layout.
     """
@@ -60,6 +65,12 @@ def classify_footprint_topology(footprint: ShapelyPolygon) -> Topology:
     reflex_count = _count_reflex_vertices(footprint)
     if reflex_count == 1:
         return "L"
+    if reflex_count == 2:
+        # Détection U ROBUSTE : on ne se fie pas au seul comptage (un T a
+        # aussi 2 reflexes). On confirme via la décomposition géométrique —
+        # si elle donne un bandeau + 2 ailes valides, c'est un U.
+        if decompose_u(footprint) is not None:
+            return "U"
     return "other"
 
 
@@ -69,6 +80,7 @@ def dispatch_layout(
     core_surface_m2: float,
     corridor_width: float = 1.6,
     id_prefix: str = "",
+    voirie_orientations: tuple[str, ...] | None = None,
 ) -> LLayoutResult | None:
     """Topology-aware layout dispatcher.
 
@@ -83,6 +95,15 @@ def dispatch_layout(
     topology = classify_footprint_topology(footprint)
     if topology == "L":
         return compute_l_layout(
+            footprint=footprint,
+            mix_typologique=mix_typologique,
+            core_surface_m2=core_surface_m2,
+            corridor_width=corridor_width,
+            id_prefix=id_prefix,
+            voirie_orientations=voirie_orientations,
+        )
+    if topology == "U":
+        return compute_u_layout(
             footprint=footprint,
             mix_typologique=mix_typologique,
             core_surface_m2=core_surface_m2,

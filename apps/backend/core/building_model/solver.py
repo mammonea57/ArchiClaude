@@ -126,6 +126,7 @@ def _compute_circulation_network(
     footprint: ShapelyPolygon,
     wings: list[ShapelyPolygon],
     core: "CorePlacement",
+    voiries: tuple = ("sud",),
 ) -> ShapelyPolygon:
     """Union of the core + every wing corridor + connectors core↔corridor.
 
@@ -160,6 +161,26 @@ def _compute_circulation_network(
 
     polys = [core.polygon]
     DUAL_THRESHOLD = 14.5
+    fxmin, fymin, fxmax, fymax = footprint.bounds
+
+    def _mitoyen_side(wxmin, wymin, wxmax, wymax, vertical):
+        """Return the wing's OUTER perimeter side ('west'/'east'/'south'/'north')
+        when that side is a MITOYEN (footprint boundary NOT on voirie). The
+        corridor is then placed on that mitoyen side so apartments open onto
+        the cour/rue side instead — otherwise a mitoyen-flanked wing gives
+        every apt a blind party-wall façade (all its living rooms windowless)."""
+        if vertical:
+            if abs(wxmin - fxmin) < 0.6 and "ouest" not in voiries:
+                return "west"
+            if abs(wxmax - fxmax) < 0.6 and "est" not in voiries:
+                return "east"
+        else:
+            if abs(wymin - fymin) < 0.6 and "sud" not in voiries:
+                return "south"
+            if abs(wymax - fymax) < 0.6 and "nord" not in voiries:
+                return "north"
+        return None
+
     for wing in wings:
         wxmin, wymin, wxmax, wymax = wing.bounds
         ww = wxmax - wxmin
@@ -230,7 +251,12 @@ def _compute_circulation_network(
         is_dual = perp >= DUAL_THRESHOLD
         if wing_long_horizontal:
             axis = "horizontal"
-            if is_dual:
+            mit = _mitoyen_side(wxmin, wymin, wxmax, wymax, vertical=False)
+            if mit == "south":
+                cy_axis = wymin + half       # corridor on mitoyen south → apts face north
+            elif mit == "north":
+                cy_axis = wymax - half
+            elif is_dual:
                 cy_axis = (wymin + wymax) / 2
             else:
                 cy_axis = wymax - half if cy > (wymin + wymax) / 2 else wymin + half
@@ -240,7 +266,12 @@ def _compute_circulation_network(
             ])
         else:
             axis = "vertical"
-            if is_dual:
+            mit = _mitoyen_side(wxmin, wymin, wxmax, wymax, vertical=True)
+            if mit == "west":
+                cx_axis = wxmin + half       # corridor on mitoyen west → apts face east (cour)
+            elif mit == "east":
+                cx_axis = wxmax - half
+            elif is_dual:
                 cx_axis = (wxmin + wxmax) / 2
             else:
                 cx_axis = wxmax - half if cx > (wxmin + wxmax) / 2 else wxmin + half
@@ -435,6 +466,57 @@ class ApartmentSlot:
     position_in_floor: str  # "angle" | "milieu" | "extremite"
 
 
+def _decompose_u(
+    footprint: ShapelyPolygon,
+    reflexes: list[tuple[float, float]],
+    min_depth: float = 8.0,
+) -> list[ShapelyPolygon] | None:
+    """Split an axis-aligned U/C footprint (exactly 2 reflex vertices that
+    share a coordinate) into 3 rectangular wings: one bar + two arms.
+
+    A U opening up/down has its two reflexes on a common y-line; a U opening
+    left/right shares a common x-line. The bar is the closed side; the two
+    arms flank the open notch. Returns None when the two reflexes don't form
+    a clean U (caller falls back to bbox).
+    """
+    from shapely.geometry import Point as _Point
+    from shapely.geometry import box as shp_box
+
+    minx, miny, maxx, maxy = footprint.bounds
+    (ax, ay), (bx, by) = reflexes[0], reflexes[1]
+    buf = footprint.buffer(0.1)
+    tol = 1.0
+
+    if abs(ay - by) < tol:  # vertical U (opens up or down), reflex line y=ry
+        ry = (ay + by) / 2
+        xl, xr = sorted((ax, bx))
+        opens_up = not buf.contains(_Point((xl + xr) / 2, ry + 0.5))
+        if opens_up:
+            wings = [shp_box(minx, miny, maxx, ry),
+                     shp_box(minx, ry, xl, maxy), shp_box(xr, ry, maxx, maxy)]
+        else:
+            wings = [shp_box(minx, ry, maxx, maxy),
+                     shp_box(minx, miny, xl, ry), shp_box(xr, miny, maxx, ry)]
+    elif abs(ax - bx) < tol:  # horizontal U (opens left or right), line x=rx
+        rx = (ax + bx) / 2
+        yb, yt = sorted((ay, by))
+        opens_right = not buf.contains(_Point(rx + 0.5, (yb + yt) / 2))
+        if opens_right:
+            wings = [shp_box(minx, miny, rx, maxy),
+                     shp_box(rx, miny, maxx, yb), shp_box(rx, yt, maxx, maxy)]
+        else:
+            wings = [shp_box(rx, miny, maxx, maxy),
+                     shp_box(minx, miny, rx, yb), shp_box(minx, yt, rx, maxy)]
+    else:
+        return None
+
+    for w in wings:
+        wb = w.bounds
+        if w.area <= 0 or min(wb[2] - wb[0], wb[3] - wb[1]) < min_depth:
+            return None
+    return wings
+
+
 def _decompose_into_wings(footprint: ShapelyPolygon) -> list[ShapelyPolygon]:
     """Split an axis-aligned L / rectangle footprint into up to 2 wings.
 
@@ -493,6 +575,11 @@ def _decompose_into_wings(footprint: ShapelyPolygon) -> list[ShapelyPolygon]:
         cr = (p1[0] - p0[0]) * (p2[1] - p1[1]) - (p1[1] - p0[1]) * (p2[0] - p1[0])
         if cr < -0.5:
             reflexes.append(p1)
+
+    # Two reflexes sharing a coordinate → U/C shape: split into 3 wings.
+    if len(reflexes) == 2:
+        u_wings = _decompose_u(footprint, reflexes)
+        return u_wings if u_wings is not None else [bbox]
 
     # Only handle the single-reflex (L-shape) case reliably; higher
     # complexity falls back to bbox.
@@ -594,6 +681,7 @@ def compute_apartment_slots(
     core: CorePlacement,
     mix_typologique: dict[Typologie, float],
     voirie_side: str,
+    voirie_orientations: tuple | None = None,
 ) -> list[ApartmentSlot]:
     """Divide footprint into slots per mix.
 
@@ -617,6 +705,10 @@ def compute_apartment_slots(
         footprint=grid.footprint,
         mix_typologique=mix_typologique,
         core_surface_m2=core.surface_m2,
+        voirie_orientations=(
+            tuple(voirie_orientations) if voirie_orientations
+            else (voirie_side,)
+        ),
     )
     if l_result is not None:
         return l_result.slots
@@ -664,7 +756,8 @@ def compute_apartment_slots(
     # Pre-compute the expected circulation network (corridors + core +
     # core↔corridor connectors) so apt slots can be cut away from it.
     # This guarantees apts never overlap the stairs, lift, or corridors.
-    circulation_network = _compute_circulation_network(grid.footprint, wings, core)
+    _voiries = tuple(voirie_orientations) if voirie_orientations else (voirie_side,)
+    circulation_network = _compute_circulation_network(grid.footprint, wings, core, _voiries)
 
     slots: list[ApartmentSlot] = []
     slot_idx = 0
@@ -835,38 +928,44 @@ def compute_apartment_slots(
             slice_length = wing_w if slice_x else wing_h
             perp_length = wing_h if slice_x else wing_w
 
-            # 1. Typologies whose DEPTH range can host this perp_length
+            # 1. Typologies whose DEPTH range can host this perp_length.
+            #    This is the correct gate: at a given depth only some typos
+            #    fit (a shallow band can't host a T5, a deep band can't host
+            #    a shallow T2 well). Variable depth per WING (deep arms host
+            #    T4/T5 traversant, shallow bar hosts T2/T3) is what lets the
+            #    whole-building mix span T2→T5.
             fitting_typos = [
                 t for t in mix_norm
                 if _TYPO_DIM_RANGE[t][2] * 0.85 <= perp_length <= _TYPO_DIM_RANGE[t][3] * 1.15
             ]
             if not fitting_typos:
                 continue
+            smallest_typo = min(fitting_typos, key=lambda t: typo_surface_targets[t])
 
-            # 2. Compute slot width using the BUDGETED slot count, clamped
-            #    to per-typo width ranges. This packs each sub-wing at the
-            #    building-level apt density rather than letting mix-weighted
-            #    widths under-pack narrow wings.
+            # 2. Slot COUNT from the MIX's average apartment WIDTH at this
+            #    depth — NOT a fixed density budget. At a given perp_length a
+            #    large typo needs a wide slot (T5 ≈ 105/perp m); sizing the
+            #    count to the mix-average width leaves room for those wide
+            #    slots so the imposed 20/50/30 survives instead of collapsing
+            #    to many narrow T2/T3. Clamped to physical width bounds.
+            cand_ratio = sum(mix_norm[t] for t in fitting_typos)
+            avg_surf = (
+                sum(mix_norm[t] * typo_surface_targets[t] for t in fitting_typos)
+                / cand_ratio if cand_ratio > 0 else typo_surface_targets[smallest_typo]
+            )
+            avg_w = max(0.5, avg_surf / max(perp_length, 0.1))
             min_w_global = min(_TYPO_DIM_RANGE[t][0] * 0.85 for t in fitting_typos)
             max_w_global = max(_TYPO_DIM_RANGE[t][1] * 1.15 for t in fitting_typos)
-            budget_here = sub_budgets[sub_idx]
             max_nb = max(1, int(slice_length / min_w_global))
             min_nb = max(1, math.ceil(slice_length / max_w_global))
-            nb_slots_in_wing = max(min_nb, min(budget_here, max_nb))
+            nb_slots_in_wing = max(min_nb, min(max(1, round(slice_length / avg_w)), max_nb))
             actual_slot_width = slice_length / nb_slots_in_wing
-            smallest_typo_for_fb = min(fitting_typos, key=lambda t: typo_surface_targets[t])
 
-            smallest_typo = smallest_typo_for_fb
-
-            # 3. Re-filter candidates against the ACTUAL slot dimensions
-            candidates: list[Typologie] = []
-            for typo in sorted(mix_norm.keys(), key=lambda t: -mix_norm[t]):
-                wmin, wmax, dmin, dmax = _TYPO_DIM_RANGE[typo]
-                if (wmin * 0.85 <= actual_slot_width <= wmax * 1.15
-                        and dmin * 0.85 <= perp_length <= dmax * 1.15):
-                    candidates.append(typo)
-            if not candidates:
-                candidates = [smallest_typo]
+            # 3. Candidates = the depth-fitting typos. Width is realised
+            #    per-slot by the variable-width sizing (step 5), so we do NOT
+            #    pre-filter on the MEAN width — that excluded T4/T5 whenever
+            #    the average slot was narrow and dropped the 30% large share.
+            candidates = list(fitting_typos)
 
             # 4. Distribute slots across candidates proportional to mix
             wing_typos: list[Typologie] = []
@@ -891,14 +990,39 @@ def compute_apartment_slots(
                 return clipped
 
             n = len(wing_typos)
+            # Variable slot sizes: each slot's extent along the slice axis is
+            # sized so its area (extent × perp_length) matches its TARGET
+            # typology's surface. Uniform widths made every slot the same area
+            # → _reclassify_by_surface collapsed the whole wing to ONE typo and
+            # the requested mix (e.g. 20% T1-T2 / 50% T3 / 30% T4-T5, Nogent B)
+            # was ignored. Widths are clamped to per-typo ranges then scaled to
+            # exactly fill the wing.
+            def _raw_width(_t):
+                _wmin, _wmax = _TYPO_DIM_RANGE[_t][0], _TYPO_DIM_RANGE[_t][1]
+                _wt = typo_surface_targets.get(_t, _TYPO_TARGET_SURFACE_M2[_t]) / max(perp_length, 0.1)
+                return min(_wmax * 1.15, max(_wmin * 0.85, _wt))
+
+            _raw = [_raw_width(t) for t in wing_typos]
+            # If the mix-sized slots overflow the wing, DROP slots (keeping mix
+            # proportions) rather than shrinking every slot — shrinking pushes
+            # areas below target and _reclassify downgrades everything to T2,
+            # wrecking the requested distribution. Dropping keeps apts at their
+            # target size and honors the mix (trades a few units for accuracy).
+            while len(wing_typos) > 1 and sum(_raw) > slice_length * 1.03:
+                wing_typos.pop()
+                _raw.pop()
+            n = len(wing_typos)
+            _scale = (slice_length / sum(_raw)) if sum(_raw) > 0 else 1.0
+            extents = [w * _scale for w in _raw]
             if slice_x:
-                slot_w = wing_w / n
+                cursor = wxmin
                 for i, typo in enumerate(wing_typos):
-                    x_cursor = wxmin + i * slot_w
+                    sw = extents[i]
                     rect = ShapelyPolygon([
-                        (x_cursor, wymin), (x_cursor + slot_w, wymin),
-                        (x_cursor + slot_w, wymax), (x_cursor, wymax),
+                        (cursor, wymin), (cursor + sw, wymin),
+                        (cursor + sw, wymax), (cursor, wymax),
                     ])
+                    cursor += sw
                     slot_poly = _finalise_slot(rect)
                     if slot_poly is None:
                         continue
@@ -912,13 +1036,14 @@ def compute_apartment_slots(
                     ))
                     slot_idx += 1
             else:
-                slot_h = wing_h / n
+                cursor = wymin
                 for i, typo in enumerate(wing_typos):
-                    y_cursor = wymin + i * slot_h
+                    sh = extents[i]
                     rect = ShapelyPolygon([
-                        (wxmin, y_cursor), (wxmax, y_cursor),
-                        (wxmax, y_cursor + slot_h), (wxmin, y_cursor + slot_h),
+                        (wxmin, cursor), (wxmax, cursor),
+                        (wxmax, cursor + sh), (wxmin, cursor + sh),
                     ])
+                    cursor += sh
                     slot_poly = _finalise_slot(rect)
                     if slot_poly is None:
                         continue
