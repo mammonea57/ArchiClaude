@@ -26,6 +26,18 @@ class GeocodingResult:
     postcode: str | None = None
     housenumber: str | None = None
     street: str | None = None
+    ban_id: str | None = None
+    """BAN identifier (e.g. ``94052_4430_00080``).
+
+    Critical for resolving the **correct** cadastral parcelle via the
+    ``BAN-PLUS:lien_adresse_parcelle`` WFS layer (see
+    :func:`core.sources.cadastre.resolve_parcelle_via_ban_link`).
+
+    The lat/lng returned by BAN sits on the street threshold of the
+    building — a strict point-in-polygon query against the cadastre will
+    routinely miss the real parcelle and snap to a neighbour. Always
+    prefer ``ban_id`` → IDU → parcelle when available.
+    """
 
 
 async def geocode(query: str, *, limit: int = 5) -> list[GeocodingResult]:
@@ -67,6 +79,7 @@ async def geocode(query: str, *, limit: int = 5) -> list[GeocodingResult]:
                 postcode=props.get("postcode"),
                 housenumber=props.get("housenumber"),
                 street=props.get("street"),
+                ban_id=props.get("id"),
             )
         )
 

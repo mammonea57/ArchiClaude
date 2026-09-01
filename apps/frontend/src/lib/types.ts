@@ -99,6 +99,13 @@ export interface BuildingModelCellule {
    *  the frontend renders this polygon directly instead of extruding
    *  the jardin from the apt's exterior walls. */
   jardin_polygon_xy?: Array<[number, number]> | null;
+  /** Balcon (saillie, côté cour/jardin) ou loggia (retrait, côté rue) calculé
+   *  par le backend. Source de vérité unique du rendu extérieur (2D = 3D). */
+  loggia?: {
+    surface_m2: number;
+    polygon_xy: Array<[number, number]>;
+    kind?: "balcon" | "loggia";
+  } | null;
 }
 
 export interface BuildingModelCirculation {
@@ -116,6 +123,25 @@ export interface BuildingModelNiveau {
   surface_plancher_m2: number;
   cellules: BuildingModelCellule[];
   circulations_communes?: BuildingModelCirculation[];
+  /** Cour intérieure ouverte (trou traversant à ciel ouvert au centre d'un
+   *  immeuble sur cour L/U). Vide dans le plancher, rendu comme espace planté
+   *  ouvert par-dessus la circulation. null = pas de cour. */
+  cour_polygon_xy?: Array<[number, number]> | null;
+  /** Espace vert COMMUN au RDC : résidu de la cour arrière que personne n'atteint
+   *  proprement devant sa façade (fond de coin), planté et partagé — distinct des
+   *  jardins privatifs (rendu vert avec hachure différente + label « jardin
+   *  commun »). null = pas de résidu (privatifs couvrent tout). */
+  jardin_commun_polygon_xy?: Array<[number, number]> | null;
+  /** PARTI ATRIUM PLANTÉ : quand true, la cour est un ATRIUM sous verrière avec le
+   *  noyau esc+ASC planté EN SON CENTRE (on monte à travers un jardin). Rendu :
+   *  anneau vert planté + noyau dessiné dedans + label « ATRIUM » + note verrière /
+   *  puits de lumière. false/absent = cour ouverte simple. */
+  atrium_verriere?: boolean | null;
+  /** PARTI v23 FINANÇABLE (défaut) : escalier ENCLOISONNÉ adossé à un angle de la
+   *  cour, PAROI VITRÉE côté cour (on voit le vert en montant) ; cour à ciel ouvert
+   *  plantée (cœur d'îlot). Rendu : label « COUR PLANTÉE » + note escalier vitré /
+   *  paliers plantés. Exclusif d'atrium_verriere. */
+  cage_vitree_cour?: boolean | null;
 }
 
 export interface BuildingModelConformiteAlert {

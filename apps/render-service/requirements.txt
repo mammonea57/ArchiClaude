@@ -28,3 +28,15 @@ httpx==0.28.0
 
 # Logging + dev
 python-dotenv==1.0.1
+
+# LoRA training pipeline (modal_lora_endpoint.py + photogrammetry/style_dataset.py)
+# Most are CPU-side helpers for dataset assembly ; Modal images install
+# their own pinned versions of torch/diffusers in modal_lora_endpoint.py.
+peft>=0.13
+datasets>=3.0
+imagehash>=4.3       # perceptual hash dedup in style_dataset.build_combined_dataset
+bitsandbytes>=0.43; sys_platform == "linux"   # 8-bit AdamW, CUDA-only
+# huggingface-hub (pinned above at 0.27.0) is used by style_dataset.py for the
+# HPSv3 auth check (HF_TOKEN env / ~/.cache/huggingface/token discovery).
+# CLIP zero-shot filter for style_dataset.clip_filter_archviz uses
+# transformers.CLIPModel (already pinned above) — no extra dep needed.

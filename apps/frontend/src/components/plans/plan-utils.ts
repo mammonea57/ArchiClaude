@@ -89,6 +89,81 @@ export function polygonCentroid(pts: Coord[]): Coord {
   return [x / pts.length, y / pts.length];
 }
 
+/** True if point (x,y) lies inside the polygon ring (ray casting). */
+export function pointInPolygon(pt: Coord, ring: Coord[]): boolean {
+  const [x, y] = pt;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    const intersect = ((yi > y) !== (yj > y)) &&
+      (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/** Shortest distance from a point to the polygon boundary (edge segments). */
+function distToBoundary(pt: Coord, ring: Coord[]): number {
+  const [px, py] = pt;
+  let best = Infinity;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [ax, ay] = ring[j];
+    const [bx, by] = ring[i];
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const cx = ax + t * dx, cy = ay + t * dy;
+    const d = Math.hypot(px - cx, py - cy);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/**
+ * "Pole of inaccessibility" — a point GUARANTEED inside the polygon, chosen as
+ * the interior point farthest from the boundary (center of the largest inscribed
+ * circle, approximated by grid refinement). Unlike the centroid, this stays on
+ * the ribbon of a non-convex corridor (L/U shaped circulation) instead of
+ * landing in the concave void, so an inline label never floats in empty space.
+ */
+export function polygonLabelPoint(ring: Coord[]): Coord {
+  if (ring.length < 3) return polygonCentroid(ring);
+  const bb = bboxOf(ring);
+  if (!bb) return polygonCentroid(ring);
+  const { minx, miny, maxx, maxy } = bb;
+  const w = maxx - minx, h = maxy - miny;
+  if (w <= 0 || h <= 0) return polygonCentroid(ring);
+  // Coarse grid over the bbox → keep the interior sample with max clearance.
+  let best: Coord = polygonCentroid(ring);
+  let bestD = pointInPolygon(best, ring) ? distToBoundary(best, ring) : -1;
+  const N = 24;
+  for (let ix = 0; ix <= N; ix++) {
+    for (let iy = 0; iy <= N; iy++) {
+      const p: Coord = [minx + (w * ix) / N, miny + (h * iy) / N];
+      if (!pointInPolygon(p, ring)) continue;
+      const d = distToBoundary(p, ring);
+      if (d > bestD) { bestD = d; best = p; }
+    }
+  }
+  // One local refinement pass around the best cell for a tighter center.
+  const step = Math.min(w, h) / N;
+  for (let k = 0; k < 3; k++) {
+    const r = step / Math.pow(2, k);
+    const cand: Coord[] = [
+      [best[0] + r, best[1]], [best[0] - r, best[1]],
+      [best[0], best[1] + r], [best[0], best[1] - r],
+    ];
+    for (const p of cand) {
+      if (!pointInPolygon(p, ring)) continue;
+      const d = distToBoundary(p, ring);
+      if (d > bestD) { bestD = d; best = p; }
+    }
+  }
+  return best;
+}
+
 /** Parse GeoJSON Polygon coordinates to a flat ring of Coord. */
 export function coordsFromGeoJSON(geojson: unknown): Coord[] {
   if (!geojson || typeof geojson !== "object") return [];
@@ -167,6 +242,7 @@ const LABELS_FR: Record<string, string> = {
   cellier: "Cellier",
   placard_technique: "Placard tech.",
   loggia: "Loggia",
+  degagement_nuit: "Dégagement",
 };
 
 export function roomLabelFr(type: string, fallback?: string): string {
@@ -182,6 +258,7 @@ export function roomLabelShort(type: string): string {
     chambre_supp: "Chambre",
     placard_technique: "Placard",
     salle_de_douche: "SdD",
+    degagement_nuit: "Dégagement",
   };
   return SHORT[type] ?? roomLabelFr(type);
 }
@@ -203,6 +280,7 @@ export function roomLabelTiny(type: string): string {
     cellier: "Cel.",
     placard_technique: "Plac.",
     loggia: "Log.",
+    degagement_nuit: "Dég.",
   };
   return TINY[type] ?? type.slice(0, 4);
 }

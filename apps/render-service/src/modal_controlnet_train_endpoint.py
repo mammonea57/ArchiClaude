@@ -212,6 +212,10 @@ def upload_cli(limit: int = 0):
     image=image,
     gpu="A100-80GB",
     timeout=24 * 3600,
+    # Préemption-résilient : Modal relance la fonction (jusqu'à 10×) et, grâce
+    # au commit périodique du Volume + --resume_from_checkpoint latest, ça
+    # REPREND du dernier checkpoint au lieu de repartir de zéro.
+    retries=modal.Retries(max_retries=10, backoff_coefficient=1.0, initial_delay=5.0),
     volumes={
         "/root/.cache/huggingface": hf_cache,
         "/data": dataset_vol,
@@ -283,6 +287,7 @@ def train_controlnet(
         "--lr_scheduler", lr_scheduler,
         "--lr_warmup_steps", str(lr_warmup_steps),
         "--checkpointing_steps", str(checkpointing_steps),
+        "--resume_from_checkpoint", "latest",   # reprise auto après préemption
         "--proportion_empty_prompts", str(proportion_empty_prompts),
         "--mixed_precision", "bf16",
         "--seed", str(seed),
@@ -301,7 +306,25 @@ def train_controlnet(
     sys.stdout.flush()
 
     t0 = time.time()
-    proc = subprocess.run(cmd, env=env)
+    # Popen + commit périodique : persiste les checkpoints de /ckpt toutes les
+    # ~3 min, pour qu'une préemption (puis retry + resume) reprenne du dernier
+    # checkpoint au lieu de tout reperdre.
+    import threading
+    proc = subprocess.Popen(cmd, env=env)
+    _stop = threading.Event()
+
+    def _periodic_commit():
+        while not _stop.wait(180):
+            try:
+                ckpt_vol.commit()
+                print("  [vol] commit checkpoint périodique", flush=True)
+            except Exception as _e:
+                print(f"  [vol] commit warn: {_e}", flush=True)
+
+    _th = threading.Thread(target=_periodic_commit, daemon=True)
+    _th.start()
+    proc.wait()
+    _stop.set()
     elapsed = (time.time() - t0) / 60
     ckpt_vol.commit()
 
@@ -508,16 +531,21 @@ def train_cli(
     train_batch_size: int = 4,
     grad_accum: int = 4,
     lr: float = 1e-5,
+    checkpointing_steps: int = 500,
+    validation_steps: int = 1000,
 ):
     """Lance le RUN COMPLET. NE PAS lancer sans intention (coûte plusieurs heures A100)."""
     print(f"→ RUN COMPLET ControlNet-canny SDXL : {output_name}")
     print(f"  steps={max_train_steps} bs={train_batch_size} grad_accum={grad_accum} "
-          f"eff_batch={train_batch_size * grad_accum} lr={lr}")
+          f"eff_batch={train_batch_size * grad_accum} lr={lr} "
+          f"ckpt={checkpointing_steps} val={validation_steps}")
     out = train_controlnet.remote(
         output_name=output_name,
         max_train_steps=max_train_steps,
         train_batch_size=train_batch_size,
         grad_accum=grad_accum,
         lr=lr,
+        checkpointing_steps=checkpointing_steps,
+        validation_steps=validation_steps,
     )
     print(f"✓ terminé : {out}")

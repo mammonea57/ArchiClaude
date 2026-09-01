@@ -10,7 +10,7 @@ import type {
   BuildingModelRoom,
 } from "@/lib/types";
 import {
-  bboxOf, makeProjector, polygonCentroid, ringToPath,
+  bboxOf, makeProjector, polygonLabelPoint, ringToPath,
   roomLabelFr, roomLabelShort, roomLabelTiny,
   type Coord,
 } from "./plan-utils";
@@ -288,6 +288,17 @@ export function NiveauPlan({
           </g>
         );
       })}
+
+      {/* COUR INTÉRIEURE OUVERTE — trou traversant à ciel ouvert au centre de
+          l'immeuble sur cour. Rendue APRÈS le couloir (donc PAR-DESSUS) pour
+          masquer le centre de circulation : elle apparaît comme un espace
+          planté ouvert (pelouse + liseré), présente à TOUS les niveaux. Le core
+          (cage) se dessine ENSUITE, donc reste visible au bord de la cour. */}
+      {niveau.cour_polygon_xy && niveau.cour_polygon_xy.length >= 3 && (
+        <CourLayer polygonXy={niveau.cour_polygon_xy} project={project} scale={scale}
+          atrium={Boolean(niveau.atrium_verriere)}
+          cageVitree={Boolean(niveau.cage_vitree_cour)} />
+      )}
 
       {/* Core (escalier top-left, ASC top-right, palier strip bottom).
           The palier sits SOUTH of the stairs/ASC so it flows naturally
@@ -604,6 +615,8 @@ function floorPattern(type: string): string {
     case "cellier":
     case "placard_technique":
       return "pat-tiles";
+    case "degagement_nuit":
+      return "pat-parquet";  // couloir de nuit = sol neutre, PAS bleu (pièce d'eau)
     default:
       return "pat-parquet";
   }
@@ -728,7 +741,11 @@ function OpeningMark({
 function RoomLabel({ room, scale, project }: { room: BuildingModelRoom; scale: number; project: (c: Coord) => Coord }) {
   const bbox = bboxOf(room.polygon_xy);
   if (!bbox) return null;
-  const [cxw, cyw] = polygonCentroid(room.polygon_xy);
+  // POLE OF INACCESSIBILITY (pas le centroïde) : garde le label À L'INTÉRIEUR de la
+  // pièce, y compris pour les pièces en L / non convexes. Corrige le défaut « le
+  // label WC déborde sur Séjour/Cuisine » (apt 09) : le centroïde d'un petit bloc
+  // collé au refend tombait près de la frontière → texte sur la pièce voisine.
+  const [cxw, cyw] = polygonLabelPoint(room.polygon_xy);
   const [cx, cy] = project([cxw, cyw]);
   const widthPx = (bbox.maxx - bbox.minx) * scale;
   const depthPx = (bbox.maxy - bbox.miny) * scale;
@@ -736,6 +753,10 @@ function RoomLabel({ room, scale, project }: { room: BuildingModelRoom; scale: n
   // Decide labeling strategy based on room pixel dimensions
   const rotate = widthPx < 60 && depthPx > widthPx * 1.4;
   const longDim = rotate ? depthPx : widthPx;
+  // dimension TRANSVERSE disponible pour le texte (largeur si non pivoté, sinon
+  // profondeur) : sert à MASQUER la ligne surface et à borner la taille de police
+  // pour qu'un label ne déborde JAMAIS sur la pièce voisine.
+  const crossPx = rotate ? widthPx : depthPx;
 
   let label: string;
   let fontSize: number;
@@ -758,6 +779,24 @@ function RoomLabel({ room, scale, project }: { room: BuildingModelRoom; scale: n
     fontSize = 11;
     showSurface = true;
   }
+
+  // CLAMP ANTI-DÉBORDEMENT (défaut user 2026-07-06 : labels qui chevauchent). Le
+  // texte ne doit pas dépasser la pièce. On estime la largeur du label (~0,58×
+  // fontSize par caractère) et, s'il dépasse ~92 % de la longue dimension de la
+  // pièce, on réduit la police (jusqu'à 6,5). Une pièce trop petite pour même le
+  // label court passe en label MINUSCULE (roomLabelTiny). La ligne surface est
+  // masquée si la hauteur de 2 lignes ne tient pas dans la dimension transverse.
+  const estW = (s: string, fs: number) => s.length * fs * 0.58;
+  if (estW(label, fontSize) > longDim * 0.92 && longDim > 0) {
+    const tiny = roomLabelTiny(room.type);
+    if (estW(tiny, fontSize) <= longDim * 0.92) {
+      label = tiny;
+    } else {
+      fontSize = Math.max(6.5, (longDim * 0.92) / (label.length * 0.58));
+    }
+  }
+  // masque la surface si les 2 lignes (label + surface) ne tiennent pas en travers.
+  if (showSurface && crossPx < fontSize * 2.3) showSurface = false;
 
   const surface = room.surface_m2.toFixed(1).replace(".", ",");
   const transform = rotate ? `rotate(-90 ${cx} ${cy})` : undefined;
@@ -1011,18 +1050,119 @@ function FurnitureInRoom({
 
 /* ═══════════════════════════ CORE + PALIER ═══════════════════════════ */
 
+/** COUR INTÉRIEURE OUVERTE — trou traversant à ciel ouvert au cœur d'un immeuble
+ *  sur cour (L/U). Rendue en espace planté OUVERT (pelouse + arbre + liseré vert),
+ *  distincte de toute dalle de circulation grise. Présente à tous les niveaux. */
+function CourLayer({ polygonXy, project, scale, atrium = false, cageVitree = false }: {
+  polygonXy: Coord[];
+  project: (c: Coord) => Coord;
+  scale: number;
+  atrium?: boolean;
+  cageVitree?: boolean;
+}) {
+  const d = ringToPath(polygonXy, project);
+  const [lx, ly] = project(polygonLabelPoint(polygonXy));
+  const xs = polygonXy.map((p) => p[0]);
+  const ys = polygonXy.map((p) => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const wM = maxX - minX;
+  const hM = maxY - minY;
+  const treeR = Math.max(6, Math.min(wM, hM) * 0.16 * scale);
+  if (atrium) {
+    // ── ATRIUM PLANTÉ SOUS VERRIÈRE ────────────────────────────────────────
+    // Le noyau esc+ASC est PLANTÉ au centre de la cour (dessiné PAR-DESSUS par
+    // <CoreLayer>). Ici on peint l'ANNEAU vert planté qui l'entoure + un liseré
+    // de verrière (puits de lumière au-dessus) + le label ATRIUM. On NE dessine
+    // PAS de gros arbre central (le noyau prend le centre) : le vert est un socle
+    // planté (RDC) / vide vertical planté (étages) tout autour du noyau.
+    const [px0, py0] = project([minX, minY]);
+    const [px1, py1] = project([maxX, maxY]);
+    const rx = Math.min(px0, px1), ry = Math.min(py0, py1);
+    const rw = Math.abs(px1 - px0), rh = Math.abs(py1 - py0);
+    return (
+      <g pointerEvents="none">
+        {/* Fond crème pour effacer la circulation grise, puis pelouse plantée. */}
+        <path d={d} fill="#fafaf9" stroke="none" />
+        <path d={d} fill="url(#pat-lawn)" stroke="#4f6d3a"
+              strokeWidth={Math.max(1.4, 0.07 * scale)} />
+        {/* VERRIÈRE / puits de lumière : liseré pointillé bleuté + croisillons
+            fins = toit vitré traversant AU-DESSUS de l'atrium (aménité rendu 3D). */}
+        <rect x={rx + 1} y={ry + 1} width={Math.max(0, rw - 2)} height={Math.max(0, rh - 2)}
+              fill="none" stroke="#5b8fb0" strokeWidth={1.2} strokeDasharray="5 3" opacity={0.9} />
+        <line x1={rx + rw / 2} y1={ry} x2={rx + rw / 2} y2={ry + rh}
+              stroke="#7fb0ce" strokeWidth={0.7} strokeDasharray="3 3" opacity={0.7} />
+        <line x1={rx} y1={ry + rh / 2} x2={rx + rw} y2={ry + rh / 2}
+              stroke="#7fb0ce" strokeWidth={0.7} strokeDasharray="3 3" opacity={0.7} />
+        {/* Massifs plantés dans les 4 coins de l'anneau (autour du noyau). */}
+        {[[rx + rw * 0.16, ry + rh * 0.18], [rx + rw * 0.84, ry + rh * 0.18],
+          [rx + rw * 0.16, ry + rh * 0.82], [rx + rw * 0.84, ry + rh * 0.82]].map(
+          ([cx, cy], i) => (
+            <circle key={i} cx={cx} cy={cy} r={Math.max(3, treeR * 0.42)}
+                    fill="#6bbe70" stroke="#3d8f44" strokeWidth={0.6} opacity={0.9} />
+          ))}
+        {/* Label ATRIUM en haut + note verrière. Placés en HAUT de l'anneau pour
+            ne pas être masqués par le noyau central. */}
+        <text x={rx + rw / 2} y={ry + Math.max(11, rh * 0.13)} textAnchor="middle"
+              fontSize={10.5} fontWeight={800} fill="#1e3a23" opacity={0.92}>
+          ATRIUM
+        </text>
+        <text x={rx + rw / 2} y={ry + Math.max(22, rh * 0.13) + 10} textAnchor="middle"
+              fontSize={7.8} fontWeight={600} fill="#4a6b83" opacity={0.9}>
+          verrière au-dessus
+        </text>
+      </g>
+    );
+  }
+  return (
+    <g pointerEvents="none">
+      {/* Fond crème d'abord pour EFFACER la circulation grise dessous, puis
+          pelouse : la cour se lit comme un vide planté ouvert, pas un couloir. */}
+      <path d={d} fill="#fafaf9" stroke="none" />
+      <path d={d} fill="url(#pat-lawn)" stroke="#4f6d3a" strokeWidth={Math.max(1.2, 0.06 * scale)} />
+      {/* Arbre / massif planté central — signale « à ciel ouvert ». */}
+      <circle cx={lx} cy={ly} r={treeR} fill="#6bbe70" stroke="#3d8f44" strokeWidth={0.8} opacity={0.9} />
+      <circle cx={lx} cy={ly} r={treeR * 0.6} fill="#4ea055" opacity={0.85} />
+      <text x={lx} y={ly + treeR + 12} textAnchor="middle" fontSize={10.5}
+            fontWeight={700} fill="#1e3a23" opacity={0.85}>
+        {cageVitree ? "COUR PLANTÉE" : "COUR"}
+      </text>
+      {/* v23 : escalier encloisonné VITRÉ sur cour + paliers plantés (aménité 3D). */}
+      {cageVitree && (
+        <text x={lx} y={ly + treeR + 24} textAnchor="middle" fontSize={7.6}
+              fontWeight={600} fill="#4a6b83" opacity={0.9}>
+          escalier vitré · paliers plantés
+        </text>
+      )}
+    </g>
+  );
+}
+
 function PalierLayer({ circulation, scale, project }: {
   circulation: BuildingModelCirculation;
   scale: number;
   project: (c: Coord) => Coord;
 }) {
-  const centroid = polygonCentroid(circulation.polygon_xy);
-  const [lx, ly] = project(centroid);
+  // A corridor in L/U shape is non-convex: its centroid can fall in the
+  // concave void (e.g. the L-notch), making the "palier NNN cm" label float in
+  // empty space. Use the pole of inaccessibility — a point GUARANTEED on the
+  // ribbon (farthest from the walls) — so the label always reads on the corridor.
+  const labelPt = polygonLabelPoint(circulation.polygon_xy);
+  const [lx, ly] = project(labelPt);
   // Hall/corridor/palier circulations share edges; using the previous
   // thick stroke drew a double-line at every junction that read as a
   // wall. Render with a thinner stroke so adjacent circulations visually
   // connect (passage from palier to corridors).
-  const isCorePalier = (circulation.id ?? "").toLowerCase().startsWith("palier");
+  const cid = (circulation.id ?? "").toLowerCase();
+  const isCorePalier = cid.startsWith("palier");
+  // CAGE (2026-07-06) : une circulation "cage_*" est une cage d'escalier (esc +
+  // ASC + palier PMR ABSORBÉ). Elle n'est PAS un « palier » vide : on y dessine
+  // l'escalier + l'ASC. La cage #1 (cage_*_1) est déjà dessinée en détail par
+  // <CoreLayer> par-dessus → on n'y met qu'un fond léger. Les cages secondaires
+  // (cage_*_2, …) n'ont pas de CoreLayer → on y dessine le glyphe esc+ASC ici.
+  const isCage = cid.startsWith("cage");
+  const isPrimaryCage = /cage_[a-z0-9]+_1$/.test(cid);
+  const isCorridor = cid.startsWith("couloir") || cid.startsWith("hall");
   const stroke = Math.max(1, 0.05 * scale);
   // `hidden_edges` is a list of edge indices (edge i goes from vertex i to
   // vertex (i+1)%n) whose stroke should not render. Lets the user remove a
@@ -1059,9 +1199,50 @@ function PalierLayer({ circulation, scale, project }: {
         stroke="transparent"
         strokeWidth={0}
       />
-      {/* Only the core-palier and hall keep their label inline — corridors
-          already have their width annotated via the plan legend. */}
-      {!isCorePalier && (
+      {/* SECONDARY CAGE (cage_*_2, …) : draw a compact escalier + ASC glyph so it
+          reads as a real stair cage, NOT an empty grey "palier" block. The
+          primary cage (cage_*_1) is drawn in detail by <CoreLayer> on top, so we
+          skip its glyph here to avoid a double draw. */}
+      {isCage && !isPrimaryCage && (() => {
+        const xs = pts.map((p) => p[0]); const ys = pts.map((p) => p[1]);
+        const wx0 = Math.min(...xs), wx1 = Math.max(...xs);
+        const wy0 = Math.min(...ys), wy1 = Math.max(...ys);
+        const [sxa, sya] = project([wx0, wy0]);
+        const [sxb, syb] = project([wx1, wy1]);
+        const rx = Math.min(sxa, sxb), ry = Math.min(sya, syb);
+        const rw = Math.abs(sxb - sxa), rh = Math.abs(syb - sya);
+        const portrait = rh >= rw;
+        // Escalier occupies ~55% (treads), ASC ~40%, split along the long axis.
+        const escR = portrait
+          ? { x: rx + rw * 0.06, y: ry + rh * 0.04, w: rw * 0.88, h: rh * 0.52 }
+          : { x: rx + rw * 0.04, y: ry + rh * 0.06, w: rw * 0.52, h: rh * 0.88 };
+        const ascR = portrait
+          ? { x: rx + rw * 0.24, y: ry + rh * 0.60, w: rw * 0.52, h: rh * 0.34 }
+          : { x: rx + rw * 0.60, y: ry + rh * 0.24, w: rw * 0.34, h: rh * 0.52 };
+        const NB = 9;
+        return (
+          <g pointerEvents="none">
+            {/* Escalier box + tread lines + UP arrow */}
+            <rect x={escR.x} y={escR.y} width={escR.w} height={escR.h} fill="#e2e8f0" stroke="#0f172a" strokeWidth={Math.max(0.8, stroke * 0.7)} />
+            {Array.from({ length: NB }).map((_, i) => {
+              const frac = (i + 0.5) / NB;
+              return portrait ? (
+                <line key={i} x1={escR.x + escR.w * frac} y1={escR.y + 2} x2={escR.x + escR.w * frac} y2={escR.y + escR.h - 2} stroke="#475569" strokeWidth={0.5} />
+              ) : (
+                <line key={i} x1={escR.x + 2} y1={escR.y + escR.h * frac} x2={escR.x + escR.w - 2} y2={escR.y + escR.h * frac} stroke="#475569" strokeWidth={0.5} />
+              );
+            })}
+            {/* ASC box with cross */}
+            <rect x={ascR.x} y={ascR.y} width={ascR.w} height={ascR.h} fill="#f8fafc" stroke="#0f172a" strokeWidth={Math.max(0.8, stroke * 0.6)} />
+            <text x={ascR.x + ascR.w / 2} y={ascR.y + ascR.h / 2 + 3} textAnchor="middle" fontSize={7.5} fontWeight={700} fill="#334155">ASC</text>
+            <text x={rx + rw / 2} y={ry - 2} textAnchor="middle" fontSize={8} fontWeight={600} fill="#475569">cage</text>
+          </g>
+        );
+      })()}
+      {/* Corridors (couloir / hall) : NO "palier" text — a thin PMR ribbon,
+          width annotated in the plan legend. Only a legacy palier id keeps
+          the inline label (backward compat). */}
+      {!isCorePalier && !isCage && !isCorridor && (
         <>
           <text x={lx} y={ly + 3} textAnchor="middle" fontSize={10} fontWeight={600} fill="#475569">
             palier
@@ -1149,11 +1330,13 @@ function CoreLayer({
   const cxCore = (xMin + xMax) / 2;
   const cyCore = (yMin + yMax) / 2;
 
-  // Step 2 — arrange escalier + ASC inside the core rect.
-  // Portrait (taller than wide): escalier west half, ASC east half.
-  // Landscape (wider than tall): escalier south half, ASC north half.
-  // Gap ~0.04 along the split axis so walls read separately.
-  const portrait = coreH >= coreW;
+  // Step 2 — arrange escalier + ASC SIDE BY SIDE inside the core rect so the
+  // pair TILES the rectangle compactly (no T / peninsula, no ASC perched on
+  // the stairs). We always split along the LONGER axis: escalier takes the
+  // larger portion, ASC a ~2.0 m cabine next to it, BOTH spanning the full
+  // shorter dimension (~96 %). This reads as one compact rectangular core.
+  // Gap ~0.04 along the split axis so the two walls read separately.
+  const splitAlongWidth = coreW >= coreH;  // wider than tall → split L/R
   let stairC: [number, number];
   let ascC: [number, number];
   let STAIR_W_M: number;
@@ -1161,26 +1344,28 @@ function CoreLayer({
   let ASC_W_M: number;
   let ASC_H_M: number;
 
-  if (portrait) {
-    // Escalier = west half (minus 0.04*coreW gap); spans ~96 % of height.
-    STAIR_W_M = coreW * 0.48;
+  if (splitAlongWidth) {
+    // Landscape core (our L-plan case: 4.3×3.0): escalier WEST, ASC EAST,
+    // both full height. ASC cabine ~2.0 m (bounded to half the width);
+    // escalier fills the remaining width so the two tile the rect.
+    const gap = Math.max(0.06, coreW * 0.03);
+    const ASC_FIXED = Math.min(2.0, coreW * 0.5 - gap);
+    ASC_W_M = ASC_FIXED;
+    ASC_H_M = Math.min(coreH * 0.96, ASC_FIXED);
+    STAIR_W_M = coreW - ASC_FIXED - gap;
     STAIR_H_M = coreH * 0.96;
-    // ASC = 2.0 m cabine centered on east half, centered vertically.
-    const ASC_FIXED = Math.min(2.0, coreW * 0.48);
-    ASC_W_M = ASC_FIXED;
-    ASC_H_M = ASC_FIXED;
-    stairC = [xMin + coreW * 0.25, cyCore];
-    ascC = [xMax - ASC_FIXED / 2 - Math.max(0.1, coreW * 0.04), cyCore];
+    stairC = [xMin + STAIR_W_M / 2, cyCore];
+    ascC = [xMax - ASC_FIXED / 2, cyCore];
   } else {
-    // Landscape: escalier south row, ASC north row (closer to apt
-    // perimeter) — keeps corridor access clean on south.
-    STAIR_W_M = coreW * 0.96;
-    STAIR_H_M = coreH * 0.48;
-    const ASC_FIXED = Math.min(2.0, coreH * 0.48);
-    ASC_W_M = ASC_FIXED;
+    // Portrait core: escalier SOUTH, ASC NORTH, both full width.
+    const gap = Math.max(0.06, coreH * 0.03);
+    const ASC_FIXED = Math.min(2.0, coreH * 0.5 - gap);
+    ASC_W_M = Math.min(coreW * 0.96, ASC_FIXED);
     ASC_H_M = ASC_FIXED;
-    stairC = [cxCore, yMin + coreH * 0.25];
-    ascC = [cxCore, yMax - ASC_FIXED / 2 - Math.max(0.1, coreH * 0.04)];
+    STAIR_W_M = coreW * 0.96;
+    STAIR_H_M = coreH - ASC_FIXED - gap;
+    stairC = [cxCore, yMin + STAIR_H_M / 2];
+    ascC = [cxCore, yMax - ASC_FIXED / 2];
   }
 
   // Allow explicit overrides (drag handles) if provided.

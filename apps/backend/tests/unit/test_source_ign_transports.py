@@ -13,6 +13,12 @@ from pytest_httpx import HTTPXMock
 from core.sources.ign_transports import fetch_arrets_around
 
 _WFS_URL_RE = re.compile(r"https://data\.geopf\.fr/wfs/ows.*")
+_WFS_LEGACY_URL_RE = re.compile(
+    r"https://data\.geopf\.fr/wfs/ows.*zone_d_activites_ou_d_interet.*"
+)
+_WFS_GARES_URL_RE = re.compile(
+    r"https://data\.geopf\.fr/wfs/ows.*POI\.GARES.*"
+)
 
 _LAT = 48.8375
 _LNG = 2.4833
@@ -49,11 +55,30 @@ _EMPTY_RESPONSE = {
 }
 
 
+_OVERPASS_URL_RE = re.compile(r"https://(overpass\.kumi\.systems|.*overpass-api\.de)/api/interpreter.*")
+
+
 async def test_arrets_found(httpx_mock: HTTPXMock) -> None:
     """Returns ArretTC list sorted by distance when WFS returns stops."""
-    httpx_mock.add_response(url=_WFS_URL_RE, json=_ARRETS_RESPONSE)
+    # The fetch implementation queries IGN WFS twice (legacy BDTOPO + POI
+    # Gares) and Overpass concurrently. We stub the gares + Overpass calls
+    # with empty payloads so this test focuses on the legacy BDTOPO path
+    # exercised by the pre-2026 fixture.
+    httpx_mock.add_response(
+        url=_WFS_LEGACY_URL_RE, json=_ARRETS_RESPONSE, is_reusable=True,
+    )
+    httpx_mock.add_response(
+        url=_WFS_GARES_URL_RE,
+        json={"type": "FeatureCollection", "features": []},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        url=_OVERPASS_URL_RE,
+        json={"version": 0.6, "generator": "test", "elements": []},
+        is_reusable=True,
+    )
 
-    arrets = await fetch_arrets_around(lat=_LAT, lng=_LNG, radius_m=500)
+    arrets = await fetch_arrets_around(lat=_LAT, lng=_LNG, radius_m=500, use_cache=False)
 
     assert len(arrets) == 2
     # Sorted by distance ascending
@@ -75,17 +100,23 @@ async def test_arrets_found(httpx_mock: HTTPXMock) -> None:
 
 async def test_no_arrets(httpx_mock: HTTPXMock) -> None:
     """Returns empty list when WFS returns no stops."""
-    httpx_mock.add_response(url=_WFS_URL_RE, json=_EMPTY_RESPONSE)
+    httpx_mock.add_response(url=_WFS_URL_RE, json=_EMPTY_RESPONSE, is_reusable=True)
+    httpx_mock.add_response(
+        url=_OVERPASS_URL_RE,
+        json={"version": 0.6, "generator": "test", "elements": []},
+        is_reusable=True,
+    )
 
-    arrets = await fetch_arrets_around(lat=_LAT, lng=_LNG)
+    arrets = await fetch_arrets_around(lat=_LAT, lng=_LNG, use_cache=False)
 
     assert arrets == []
 
 
 async def test_error_returns_empty(httpx_mock: HTTPXMock) -> None:
     """Returns empty list (graceful degradation) when WFS returns an error."""
-    httpx_mock.add_response(url=_WFS_URL_RE, status_code=503)
+    httpx_mock.add_response(url=_WFS_URL_RE, status_code=503, is_reusable=True)
+    httpx_mock.add_response(url=_OVERPASS_URL_RE, status_code=503, is_reusable=True)
 
-    arrets = await fetch_arrets_around(lat=_LAT, lng=_LNG)
+    arrets = await fetch_arrets_around(lat=_LAT, lng=_LNG, use_cache=False)
 
     assert arrets == []

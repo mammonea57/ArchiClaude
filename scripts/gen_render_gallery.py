@@ -13,8 +13,38 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections import OrderedDict
+from datetime import datetime
 from pathlib import Path
 from html import escape
+
+# Date en tête de nom (YYYY-MM-DD[_HHMMSS]) ou date compacte 202X MM DD en suffixe
+# (ex. B_greenery_carrefour_haut_20260624.png). Sert au TRI CHRONOLOGIQUE réel :
+# le tri par nom de fichier plaçait les rendus sans date en préfixe n'importe où.
+_DATE_LEAD = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:_(\d{2})(\d{2})(\d{2}))?")
+_DATE_COMPACT = re.compile(r"(202\d)(0\d|1[0-2])([0-3]\d)")
+
+
+def render_datetime(png: Path) -> datetime:
+    """Date RÉELLE d'un rendu : parsée du nom si possible, sinon mtime fichier."""
+    name = png.name
+    m = _DATE_LEAD.match(name)
+    if m:
+        try:
+            return datetime(int(m[1]), int(m[2]), int(m[3]),
+                            int(m[4] or 0), int(m[5] or 0), int(m[6] or 0))
+        except ValueError:
+            pass
+    m = _DATE_COMPACT.search(name)
+    if m:
+        try:
+            return datetime(int(m[1]), int(m[2]), int(m[3]))
+        except ValueError:
+            pass
+    try:
+        return datetime.fromtimestamp(png.stat().st_mtime)
+    except OSError:
+        return datetime.min
 
 RENDERS_DIR = Path(__file__).resolve().parent.parent / "refs" / "renders"
 OUT_HTML = RENDERS_DIR / "index.html"
@@ -80,21 +110,30 @@ def load_meta(png_path: Path) -> dict:
 def render_card(png: Path) -> str:
     p = parse_render_name(png.name)
     meta = load_meta(png)
-    verdict = meta.get("verdict", "ok")  # default ok
-    label = meta.get("label", f"#{p['iter']} — {p['kind']} {p['rest']}".strip())
-    desc = meta.get(
-        "description",
-        f"Render {p['kind']} on {p['date']} {p['time']}. Filename: {p['raw']}"
-    )
-    img_src = png.name  # relative path, served alongside HTML
+    # Verdict : UNIQUEMENT si un meta.json le déclare explicitement. On ne colore
+    # plus « ok » (vert = réussi) par défaut — trompeur sur des rendus d'essai/debug.
+    verdict = meta.get("verdict", "")
+    low = png.name.lower()
+    if not verdict and any(k in low for k in ("invente", "compare", "debug", "_ko", "fail")):
+        verdict = "bug"
+    if p["iter"]:
+        label = meta.get("label", f"#{p['iter']} — {p['kind']} {p['rest']}".strip())
+    else:
+        label = meta.get("label", png.stem.replace("_", " "))
+    dt = render_datetime(png)
+    desc = meta.get("description", f"{png.parent.name}/{png.name}")
+    img_src = png.relative_to(RENDERS_DIR).as_posix()  # inclut les sous-dossiers
+    card_cls = f"card {escape(verdict)}" if verdict else "card"
+    badge = (f'<span class="verdict v-{escape(verdict)}">{escape(verdict)}</span>'
+             if verdict else "")
     return f"""
-    <div class="card {escape(verdict)}">
+    <div class="{card_cls}">
       <img src="{escape(img_src)}" onclick="openModal(this.src)" loading="lazy">
       <div class="meta">
         <div class="label">{escape(label)}</div>
         <div class="desc">{escape(desc)}</div>
-        <div class="timestamp">{escape(p['date'])} {escape(p['time'])} · {escape(p['raw'])}</div>
-        <span class="verdict v-{escape(verdict)}">{escape(verdict)}</span>
+        <div class="timestamp">{escape(dt.strftime('%Y-%m-%d %H:%M'))} · {escape(img_src)}</div>
+        {badge}
       </div>
     </div>
     """
@@ -104,43 +143,32 @@ def main() -> int:
     if not RENDERS_DIR.exists():
         print(f"!! renders dir does not exist : {RENDERS_DIR}", file=sys.stderr)
         return 1
-    pngs = sorted(RENDERS_DIR.glob("*.png"), reverse=True)   # newest first
+    # Scan RÉCURSIF : inclut les rendus rangés en sous-dossiers (finals
+    # nogent_B_canny_final/, ultimate_parisian_consistency/, POC_verdict/, …) qui
+    # étaient INVISIBLES avec l'ancien glob plat. On écarte les doublons Finder
+    # « … 2.png » et la vignette d'index.
+    pngs = [p for p in RENDERS_DIR.rglob("*.png")
+            if " 2.png" not in p.name and p.name not in ("index.png",)]
     if not pngs:
         print(f"!! no PNGs in {RENDERS_DIR}", file=sys.stderr)
         return 1
 
-    # Group by iter (when present) so blender base + FLUX finish appear together.
-    by_iter: dict[str, list[Path]] = {}
-    no_iter: list[Path] = []
+    # TRI CHRONOLOGIQUE RÉEL (demande user) : par date décroissante (nom sinon
+    # mtime), puis GROUPÉ PAR JOUR — le jour le plus récent en haut. Fini le tri
+    # par iter# qui mélangeait l'ordre.
+    pngs.sort(key=render_datetime, reverse=True)
+    by_day: "OrderedDict[str, list[Path]]" = OrderedDict()
     for png in pngs:
-        info = parse_render_name(png.name)
-        if info["iter"]:
-            by_iter.setdefault(info["iter"], []).append(png)
-        else:
-            no_iter.append(png)
+        day = render_datetime(png).strftime("%Y-%m-%d")
+        by_day.setdefault(day, []).append(png)
 
-    # Build HTML
     cards_html = ""
-    if no_iter:
-        cards_html += "<h2>Unsorted (no iter tag)</h2>\n<div class=\"grid\">\n"
-        for png in no_iter:
+    for day, items in by_day.items():
+        cards_html += f'<h2>{escape(day)} · {len(items)} rendu(s)</h2>\n<div class="grid">\n'
+        for png in items:
             cards_html += render_card(png)
         cards_html += "</div>\n"
-    # Iters newest first by iter number (numeric sort desc).
-    # Defensive : skip non-numeric iter keys (regex sometimes captures suffix
-    # chars like a/b/? from manual naming).
-    def _safe_int(s: str) -> int:
-        try:
-            return int(s)
-        except (TypeError, ValueError):
-            return -1
-    iter_keys = [k for k in by_iter.keys() if _safe_int(k) >= 0]
-    iter_keys.sort(key=lambda x: -_safe_int(x))
-    for ik in iter_keys:
-        cards_html += f"<h2>iter #{ik}</h2>\n<div class=\"grid\">\n"
-        for png in by_iter[ik]:
-            cards_html += render_card(png)
-        cards_html += "</div>\n"
+    iter_keys = by_day  # pour le message final (nb de groupes = nb de jours)
 
     history_link = ""
     history_md = RENDERS_DIR / "HISTORY.md"
@@ -177,7 +205,7 @@ function openModal(src) {{
 </html>"""
 
     OUT_HTML.write_text(html)
-    print(f"✓ wrote {OUT_HTML} ({len(pngs)} renders, {len(iter_keys)} iter groups)")
+    print(f"✓ wrote {OUT_HTML} ({len(pngs)} renders, {len(iter_keys)} jours)")
     return 0
 
 

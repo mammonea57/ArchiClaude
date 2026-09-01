@@ -2,19 +2,27 @@
 
 Strategy : the backend already exposes the PLU API + an extracted-rules table
 (`plu_zone_rules_numeric`) — the right long-term move is to query that. For
-the first pass we use an internal lookup table indexed by (commune, sector),
-seeded from the project's memory-known facts (e.g. Nogent UA1 = 80% emprise,
-H 18m, R+5).
+the first pass we use a two-layer lookup, both indexed by (commune, sector) :
 
-The table is intentionally a JSON dict so it can grow without code changes
-as new communes / sectors are added. When the backend's `/plu/zone/.../rules`
-endpoint becomes structured enough, swap `_lookup_local` with `_lookup_api`.
+  1. ``_LOCAL_PLU_RULES`` — hard-coded defaults seeded from project memory
+     (e.g. Nogent UA1 = 80% emprise, H 18m, R+5). Acts as a safety net.
+  2. ``plu_rules_cache.json`` — auto-extracted rules written by
+     ``apps/backend/scripts/pull_plu.py`` for any commune × zone in France.
+     Loaded once at module import. **Cache wins on conflict.**
+
+When the backend's ``/plu/zone/.../rules`` endpoint becomes structured enough,
+swap ``_lookup_local`` with ``_lookup_api``.
 """
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
 from typing import Any
 
 from .reasoning import PluConstraints
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Local PLU rule database — seeded from project memory + official PLU PDFs.
@@ -47,6 +55,57 @@ _LOCAL_PLU_RULES: dict[tuple[str, str], dict[str, Any]] = {
         "article_refs": [],
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# JSON cache (auto-extracted by apps/backend/scripts/pull_plu.py).
+# Loaded once at module import — restart the render-service to pick up changes.
+# Cache wins on conflict with `_LOCAL_PLU_RULES`.
+# ---------------------------------------------------------------------------
+
+_CACHE_PATH = Path(__file__).with_name("plu_rules_cache.json")
+
+
+def _load_cache() -> dict[tuple[str, str], dict[str, Any]]:
+    """Read plu_rules_cache.json and return it indexed by (commune, sector)."""
+    if not _CACHE_PATH.exists():
+        return {}
+    try:
+        data = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("plu_rules_cache unreadable, ignoring: %s", exc)
+        return {}
+
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if not isinstance(entries, dict):
+        return {}
+
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for key, rules in entries.items():
+        if not isinstance(rules, dict) or "|" not in key:
+            continue
+        commune, sector = key.split("|", 1)
+        out[(commune.strip().lower(), sector.strip().upper())] = rules
+    return out
+
+
+_CACHE_PLU_RULES: dict[tuple[str, str], dict[str, Any]] = _load_cache()
+
+
+def _merged_rules(commune: str, sector: str) -> dict[str, Any] | None:
+    """Return cache ∪ local for (commune, sector), with cache winning."""
+    key = (commune, sector)
+    local = _LOCAL_PLU_RULES.get(key)
+    cached = _CACHE_PLU_RULES.get(key)
+    if local is None and cached is None:
+        return None
+    merged: dict[str, Any] = {}
+    if local:
+        merged.update(local)
+    if cached:
+        # Drop _meta from the merged constraint dict — caller doesn't need it
+        merged.update({k: v for k, v in cached.items() if k != "_meta"})
+    return merged
 
 
 def _commune_from_bm(bm: dict[str, Any], project_id: str | None = None) -> str | None:
@@ -104,11 +163,11 @@ def fetch_plu_constraints(bm: dict[str, Any], project_id: str | None = None) -> 
 
     rules: dict[str, Any] | None = None
     if commune and sector:
-        rules = _LOCAL_PLU_RULES.get((commune, sector))
+        rules = _merged_rules(commune, sector)
     if rules is None and sector:
         # Fall back on default for the sector family (UA, UB, UC...)
         sector_family = sector[:2]  # "UA1" → "UA"
-        rules = _LOCAL_PLU_RULES.get(("__default__", sector_family))
+        rules = _merged_rules("__default__", sector_family)
 
     if rules is None:
         return PluConstraints(sector=sector)

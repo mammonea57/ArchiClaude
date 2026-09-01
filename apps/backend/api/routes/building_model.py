@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from api.deps import CurrentUserDep
 from core.building_model.pipeline import GenerationInputs, generate_building_model
+from core.building_model.validator.conformite import BusinessRules
 from core.feasibility.schemas import Brief
 from core.plu.schemas import NumericRules
 from db.models.building_models import BuildingModelRow

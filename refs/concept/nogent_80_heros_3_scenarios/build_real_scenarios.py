@@ -45,6 +45,13 @@ print(f"parcelle réelle simplifiée : {len(PARCEL)} sommets")
 from shapely.geometry import Polygon as _Poly
 _cour_pts = json.loads((HERE / "_real_site/cour_local.json").read_text())
 COUR_POLY = _Poly(_cour_pts).buffer(0)
+# NB MAXIMISATION emprise → 80% : décision user prise, MAIS atteindre 80% sur
+# cette parcelle impose une COUR INTÉRIEURE (toute réduction de la cour ouverte
+# la détache du bord → trou interne → le modèle FP=anneau extérieur rendrait un
+# bloc plein = emprise réelle ~99% = NON conforme). Il faut d'abord supporter
+# une cour intérieure (vide central + façades intérieures + toit ajouré) dans le
+# modèle. À FAIRE proprement (pas un buffer brutal). Pour l'instant : cour ouverte
+# d'origine (~57%, conforme). Le toit (≤18m) + R+5 sont déjà corrigés/maximisés.
 _L = _Poly(PARCEL).buffer(0).difference(COUR_POLY)
 if _L.geom_type == "MultiPolygon":
     _L = max(_L.geoms, key=lambda g: g.area)   # drop slivers ~0m²
@@ -1334,7 +1341,9 @@ SCEN = {
     #     branche flat_roof + roof_terrace_garden, supprime mansarde/lucarnes/cheminées)
     #   style="contemporain" → modénature MINIMALE (pas de corniche/bandeaux lourds),
     #     garde-corps métal noir fin, grandes baies verticales (cf. bloc build()).
-    "B": dict(stories=5, h=18.0, roof="terrasse", body="pierre_taille", soub="pierre_taille",
+    # MAXIMISATION (décision user) : R+5 = 6 niveaux dans 18m (RDC 3.5 + 5×2.9m),
+    # au lieu de R+4 (5 niveaux) → +1 étage vendable. roof=terrasse contemporain.
+    "B": dict(stories=6, h=18.0, roof="terrasse", body="pierre_taille", soub="pierre_taille",
               trim="pierre_taille", style="contemporain"),
     "Cbis": dict(stories=5, h=18.0, roof="terrasse", body="brique_rouge", soub="pierre_taille", trim="pierre_taille"),
 }
@@ -1372,7 +1381,8 @@ def build(scen_key):
     glass, rev, rails = [], [], []
     balcon_floors = []      # étages courants + noble (balcon profond)
     att_floors = []         # attique (balcon plus fin, sur plan reculé)
-    ATT_INSET = 0.7         # recul de l'attique (dernier étage rue)
+    ATT_INSET = 2.5         # recul attique élargi → vraie TERRASSE-jardin accessible
+                            # sur le retrait (dans l'enveloppe 18m), conforme UA.10/UA.15
     # plan reculé de l'attique : footprint rue translaté de -ATT_INSET vers l'intérieur
     att_walls, att_ledge = [], []
     # CONTEMPORAIN : grandes baies verticales toute hauteur, trame plus large
@@ -1525,20 +1535,17 @@ def build(scen_key):
         people, cars, cafe = street_life(SITE["roads"], JUNCTION, FP)
         add("voisin", people)               # piétons (pas de terrasse café : RDC logement)
         add("zinc_anthracite", cars)        # voitures sombres
-    if s["roof"] != "mansard":          # toit terrasse → jardin
-        if contemporain:
-            # CONTEMPORAIN : plantation RECULÉE au cœur du toit (buffer -1.6m) →
-            # la silhouette de l'ATTIQUE épuré + la terrasse plate restent lisibles
-            # au bord (pas de haie d'arbres qui masque l'attique). Acrotère fin déjà posé.
-            from shapely.geometry import Polygon as _RP
-            _roof_inner = _RP(FP).buffer(-1.6)
-            if not _roof_inner.is_empty:
-                if _roof_inner.geom_type == "MultiPolygon":
-                    _roof_inner = max(_roof_inner.geoms, key=lambda g: g.area)
-                _rfp = list(_roof_inner.exterior.coords)[:-1]
-                add("vegetation", roof_terrace_garden(_rfp, h_eaves))
-        else:
-            add("vegetation", roof_terrace_garden(FP, h_eaves))
+    if s["roof"] != "mansard":          # toit terrasse
+        # CONFORMITÉ UA.10/UA.15 (décision user) : le toit à 18m (h_eaves) est un
+        # toit plat VÉGÉTALISÉ NON ACCESSIBLE, RAS — RIEN au-dessus de 18m (le
+        # roof_terrace_garden qui montait à 19.5m est SUPPRIMÉ). L'agrément
+        # terrasse-jardin est reporté sur le RETRAIT D'ATTIQUE (att_floors,
+        # ~15.1m), où des jardinières BASSES (≤0.5m → ~15.6m) restent dans
+        # l'enveloppe 18m. Le toit plat green est déjà posé (roof_mat=vegetation).
+        if att_floors:
+            add("vegetation", balcony_planters(FP, att_floors, idx_rue, depth=0.6, box_h=0.5))
+            # quelques bacs côté cour aussi (terrasse partagée), bas
+            add("vegetation", balcony_planters(FP, att_floors, list(idx_cour), depth=0.6, box_h=0.5))
     # ground
     add("terre_neutre", [[[-200,-200,-0.05],[200,-200,-0.05],[200,200,-0.05],[-200,200,-0.05]]])
     tot = sum(len(v) for v in qbm.values())

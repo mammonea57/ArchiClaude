@@ -291,6 +291,130 @@ def rdc_windows_quads(
     return quads
 
 
+def facade_windows_quads(
+    footprint: Sequence[Coord2],
+    sides: list[str],
+    *,
+    stories: int,
+    hauteur_rdc_m: float = 3.5,
+    hauteur_etage_m: float = 3.0,
+    window_width_m: float = 1.2,
+    window_height_m: float = 1.5,
+    window_pitch_m: float = 3.0,
+    sill_offset_m: float = 0.9,
+    recess_depth_m: float = 0.2,
+) -> tuple[list[Quad], list[Quad]]:
+    """Recessed windows on every UPPER floor (above RDC), per facade side.
+
+    Generalises `rdc_windows_quads` to a full window grid : for each storey
+    above the ground floor, a row of punched windows is placed on each
+    requested side. Without this the upper facades are blank flat walls and
+    a direct Cycles render of the model reads as an unfinished massing block.
+
+    Returns (glass_quads, reveal_quads) so the caller can tag the inner
+    glass face with a glass material and the jambs/lintels/sills with the
+    body (stone/brick) material.
+    """
+    if not footprint or not sides or stories < 2:
+        return [], []
+    fp = _dedupe(footprint)
+    n = len(fp)
+    if n < 3:
+        return [], []
+    xs = [p[0] for p in fp]
+    ys = [p[1] for p in fp]
+    minx, maxx = min(xs), max(xs)
+    miny, maxy = min(ys), max(ys)
+
+    glass: list[Quad] = []
+    reveals: list[Quad] = []
+    for f in range(1, stories):  # upper floors only (RDC handled separately)
+        floor_base = hauteur_rdc_m + (f - 1) * hauteur_etage_m
+        sill_z = floor_base + sill_offset_m
+        z_top = min(sill_z + window_height_m, floor_base + hauteur_etage_m - 0.3)
+        if z_top <= sill_z:
+            continue
+        for side in sides:
+            s = side.lower()
+            for i in range(n):
+                a = fp[i]
+                b = fp[(i + 1) % n]
+                ex = b[0] - a[0]
+                ey = b[1] - a[1]
+                length = (ex * ex + ey * ey) ** 0.5
+                if length < window_width_m + 1.0:
+                    continue
+                horizontal = abs(ex) > abs(ey)
+                mx = (a[0] + b[0]) / 2
+                my = (a[1] + b[1]) / 2
+                keep = (
+                    (s in ("sud", "south", "s") and horizontal and (my - miny) < 2.0)
+                    or (s in ("nord", "north", "n") and horizontal and (maxy - my) < 2.0)
+                    or (s in ("est", "east", "e") and not horizontal and (maxx - mx) < 2.0)
+                    or (s in ("ouest", "west", "w") and not horizontal and (mx - minx) < 2.0)
+                )
+                if not keep:
+                    continue
+                tx = ex / length
+                ty = ey / length
+                nx = ey / length
+                ny = -ex / length
+                if s in ("sud", "south", "s") and ny > 0:
+                    nx, ny = -nx, -ny
+                elif s in ("nord", "north", "n") and ny < 0:
+                    nx, ny = -nx, -ny
+                elif s in ("est", "east", "e") and nx < 0:
+                    nx, ny = -nx, -ny
+                elif s in ("ouest", "west", "w") and nx > 0:
+                    nx, ny = -nx, -ny
+
+                n_windows = max(1, int(length // window_pitch_m))
+                for k in range(n_windows):
+                    t_centre = (k + 0.5) / n_windows
+                    cx = a[0] + t_centre * ex
+                    cy = a[1] + t_centre * ey
+                    half_w = window_width_m / 2
+                    p_left = (cx - tx * half_w, cy - ty * half_w)
+                    p_right = (cx + tx * half_w, cy + ty * half_w)
+                    p_left_in = (p_left[0] - nx * recess_depth_m, p_left[1] - ny * recess_depth_m)
+                    p_right_in = (p_right[0] - nx * recess_depth_m, p_right[1] - ny * recess_depth_m)
+                    # Inner glass face
+                    glass.append(Quad(
+                        v0=(p_left_in[0], p_left_in[1], sill_z),
+                        v1=(p_right_in[0], p_right_in[1], sill_z),
+                        v2=(p_right_in[0], p_right_in[1], z_top),
+                        v3=(p_left_in[0], p_left_in[1], z_top),
+                    ))
+                    # Top reveal (lintel)
+                    reveals.append(Quad(
+                        v0=(p_left[0], p_left[1], z_top),
+                        v1=(p_right[0], p_right[1], z_top),
+                        v2=(p_right_in[0], p_right_in[1], z_top),
+                        v3=(p_left_in[0], p_left_in[1], z_top),
+                    ))
+                    # Bottom reveal (sill)
+                    reveals.append(Quad(
+                        v0=(p_left[0], p_left[1], sill_z),
+                        v1=(p_left_in[0], p_left_in[1], sill_z),
+                        v2=(p_right_in[0], p_right_in[1], sill_z),
+                        v3=(p_right[0], p_right[1], sill_z),
+                    ))
+                    # Side reveals (jambs) — left and right
+                    reveals.append(Quad(
+                        v0=(p_left[0], p_left[1], sill_z),
+                        v1=(p_left[0], p_left[1], z_top),
+                        v2=(p_left_in[0], p_left_in[1], z_top),
+                        v3=(p_left_in[0], p_left_in[1], sill_z),
+                    ))
+                    reveals.append(Quad(
+                        v0=(p_right[0], p_right[1], sill_z),
+                        v1=(p_right_in[0], p_right_in[1], sill_z),
+                        v2=(p_right_in[0], p_right_in[1], z_top),
+                        v3=(p_right[0], p_right[1], z_top),
+                    ))
+    return glass, reveals
+
+
 def parked_cars_quads(
     parcelle: Sequence[Coord2],
     voirie_sides: list[str],
@@ -1894,4 +2018,140 @@ def roads_bdtopo_to_quads(
                 continue
             ring2 = [(p[0], p[1]) for p in ring[:-1]]
             quads.extend(_extrude_simple(ring2, height))
+    return quads
+
+
+# ─── Jour 4 — voisinage source switch ──────────────────────────────────────
+# Lightweight indirection so callers (modal_blender_endpoint, test scripts,
+# any future renderer) can flip between :
+#   * "bdtopo_legacy"      — live WFS, height = properties.hauteur, all
+#                            stamped at z=0
+#   * "ign_photogrammetry" — cached BDTOPO LOD2 GeoJSON, per-vertex z
+#                            (true LOD2 roof altitude), with z_base offset
+#                            from the parcelle centroid's ground.
+
+
+def voisin_quads_from_context_source(
+    *,
+    context_source: str = "bdtopo_legacy",
+    project_id: str | None = None,
+    address: str | None = None,
+    parcel_center_local: tuple[float, float] = (0.0, 0.0),
+    skip_overlap_with: Sequence[Coord2] | None = None,
+    camera_pos_xy: tuple[float, float] | None = None,
+    block_camera_sight: bool = True,
+    max_distance_m: float = 100.0,
+    min_height_m: float = 3.0,
+    max_height_m: float = 18.0,
+    radius_m: float = 180.0,
+) -> tuple[list[tuple[list[Coord2], float, float]], object | None]:
+    """Return (voisins, origin) for the requested source.
+
+    `voisins` is a list of `(footprint_local, height_m, z_base_m)`. For the
+    legacy source `z_base_m` is always 0.0 (voisins are stamped on the
+    flat z=0 plane). For the IGN source `z_base_m` is the elevation offset
+    of each voisin's foot relative to the parcelle's ground NGF.
+
+    `origin` is the `GeoOrigin` used to project WGS84 → local meters, so
+    callers can re-use it for roads/trees/lamps fetched from the same WFS.
+    Returns `None` for `origin` when the IGN source is used and the
+    geocoder is not invoked (the origin is read from the manifest's centroid
+    instead).
+    """
+    from .voisinage_mesh import (
+        GeoOrigin,
+        fetch_voisins_bdtopo,
+        geocode_address,
+        load_ign_bdtopo_geojson,
+        voisins_from_ign_geojson,
+        voisins_to_local_polygons,
+    )
+
+    if context_source == "ign_photogrammetry":
+        if project_id is None:
+            raise ValueError("ign_photogrammetry context source requires project_id")
+        # The IGN manifest records the centroid (lat,lng) of the parcelle — read
+        # it from disk so we don't re-geocode (which would drift by a few meters
+        # vs the WFS bbox the geojson was captured at).
+        from pathlib import Path
+        import json as _json
+        refs_root = Path(__file__).resolve().parent.parent.parent.parent / "refs" / "photogrammetry"
+        manifest_path = refs_root / project_id / "build_context_manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"No build_context_manifest.json for {project_id}; build the IGN context first."
+            )
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            man = _json.load(f)
+        origin = GeoOrigin(lat=float(man["lat"]), lng=float(man["lng"]))
+        triples = voisins_from_ign_geojson(
+            project_id=project_id,
+            origin=origin,
+            parcel_center_local=parcel_center_local,
+            skip_overlap_with=skip_overlap_with,
+            camera_pos_xy=camera_pos_xy,
+            block_camera_sight=block_camera_sight,
+            max_distance_m=max_distance_m,
+            min_height_m=min_height_m,
+            max_height_m=max_height_m,
+        )
+        return triples, origin
+
+    # Legacy path — unchanged behaviour. Geocode + WFS fetch.
+    if address is None:
+        raise ValueError("bdtopo_legacy context source requires address")
+    origin = geocode_address(address)
+    feats = fetch_voisins_bdtopo(origin, radius_m=radius_m)
+    pairs = voisins_to_local_polygons(
+        feats, origin, parcel_center_local,
+        skip_overlap_with=skip_overlap_with,
+        camera_pos_xy=camera_pos_xy,
+        block_camera_sight=block_camera_sight,
+        max_distance_m=max_distance_m,
+        min_height_m=min_height_m,
+        max_height_m=max_height_m,
+    )
+    triples = [(fp, h, 0.0) for fp, h in pairs]
+    return triples, origin
+
+
+def extruded_voisin_quads_with_base(
+    footprint: Sequence[Coord2],
+    height_m: float,
+    z_base_m: float = 0.0,
+) -> list[Quad]:
+    """Extrude a voisin polygon from z_base to z_base + height_m.
+
+    Mirrors `_extrude_simple` from depth_map but with a non-zero z floor so
+    voisins on streets that slope down a few meters relative to the
+    parcelle's ground sit at the correct elevation in the scene.
+    """
+    fp = _dedupe(footprint)
+    n = len(fp)
+    if n < 3:
+        return []
+    z0 = float(z_base_m)
+    z1 = z0 + float(height_m)
+    quads: list[Quad] = []
+    # Side walls (CCW)
+    for i in range(n):
+        a = fp[i]
+        b = fp[(i + 1) % n]
+        quads.append(Quad(
+            v0=(a[0], a[1], z0),
+            v1=(b[0], b[1], z0),
+            v2=(b[0], b[1], z1),
+            v3=(a[0], a[1], z1),
+        ))
+    # Fan-triangulate the roof from fp[0] (degenerate Quad with v3==v0 for tris).
+    v0 = fp[0]
+    for i in range(1, n - 1):
+        a = fp[i]
+        b = fp[i + 1]
+        quads.append(Quad(
+            v0=(v0[0], v0[1], z1),
+            v1=(a[0], a[1], z1),
+            v2=(b[0], b[1], z1),
+            v3=(v0[0], v0[1], z1),
+        ))
     return quads

@@ -47,7 +47,7 @@ if pgrep -f "next dev -p 3010" >/dev/null; then
 else
     echo "→ starting frontend (next dev :3010)"
     cd "$ROOT/apps/frontend"
-    nohup /usr/local/bin/npm run dev > /tmp/frontend.log 2>&1 < /dev/null &
+    NEXT_TELEMETRY_DISABLED=1 nohup /usr/local/bin/npm run dev > /tmp/frontend.log 2>&1 < /dev/null &
     disown
     cd "$ROOT"
     sleep 1

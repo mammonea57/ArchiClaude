@@ -15,6 +15,7 @@ import { PlanSituation } from "@/components/plans/PlanSituation";
 import { Photomontages } from "@/components/plans/Photomontages";
 import { EtudeOmbres } from "@/components/plans/EtudeOmbres";
 import { NoticePC4 } from "@/components/plans/NoticePC4";
+import { ServicesStatus } from "@/components/ServicesStatus";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -187,9 +188,12 @@ export default function PlansPage({ params }: { params: Promise<{ id: string }> 
           <Link href="/" className="font-display text-xl font-semibold text-slate-900">
             ArchiClaude
           </Link>
-          <Link href="/projects" className="text-sm text-slate-500 hover:text-slate-700">
-            Mes projets
-          </Link>
+          <div className="flex items-center gap-4">
+            <ServicesStatus />
+            <Link href="/projects" className="text-sm text-slate-500 hover:text-slate-700">
+              Mes projets
+            </Link>
+          </div>
         </div>
       </nav>
 
