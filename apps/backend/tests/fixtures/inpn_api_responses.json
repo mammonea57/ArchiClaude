@@ -1,0 +1,67 @@
+{
+  "zsc_nogent": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": {
+          "sitecode": "FR1100795",
+          "sitename": "Bois de Vincennes",
+          "directive": "Habitats"
+        },
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [[[2.4400, 48.8400], [2.4600, 48.8400], [2.4600, 48.8500], [2.4400, 48.8500], [2.4400, 48.8400]]]
+        }
+      }
+    ]
+  },
+  "zps_empty": {
+    "type": "FeatureCollection",
+    "features": []
+  },
+  "znieff1_nogent": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": {
+          "id_mnhn": "110001234",
+          "nom": "Marnes-la-Coquette — pelouses calcaires",
+          "type": "1"
+        },
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [[[2.4750, 48.8300], [2.4870, 48.8300], [2.4870, 48.8400], [2.4750, 48.8400], [2.4750, 48.8300]]]
+        }
+      }
+    ]
+  },
+  "znieff2_empty": {
+    "type": "FeatureCollection",
+    "features": []
+  },
+  "ebc_empty": {
+    "type": "FeatureCollection",
+    "features": []
+  },
+  "ebc_present": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": {
+          "nom": "Forêt domaniale de Vincennes"
+        },
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [[[2.44, 48.84], [2.46, 48.84], [2.46, 48.85], [2.44, 48.85], [2.44, 48.84]]]
+        }
+      }
+    ]
+  },
+  "all_empty": {
+    "type": "FeatureCollection",
+    "features": []
+  }
+}
