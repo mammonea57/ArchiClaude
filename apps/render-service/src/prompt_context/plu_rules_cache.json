@@ -1,0 +1,174 @@
+{
+  "__schema__": {
+    "version": 2,
+    "description": "Auto-extracted PLU rules per (commune, zone) + per-project overlays (ABF, PPRI, RGA, linéaire commercial, hauteur graphique…). Merged on top of _LOCAL_PLU_RULES in plu_context.py — cache wins on conflict. Written by apps/backend/scripts/pull_plu.py and apps/backend/scripts/pull_overlays.py.",
+    "key_format": "<commune-slug>|<ZONE_CODE>",
+    "project_overlays_key_format": "<project_slug> (e.g. 'nogent_80_heros') — looked up by core/building_model/validator/overlay_cache.py against BuildingModel.metadata.project_id or address.",
+    "value_fields": {
+      "emprise_max_pct": "Coefficient d'emprise au sol (0.0–1.0)",
+      "hauteur_max_m": "Hauteur maximale en mètres",
+      "hauteur_max_storeys": "Nombre de niveaux maximum (R+n+1)",
+      "retrait_voirie_m": "Recul minimal par rapport à la voirie (m)",
+      "retrait_lat_m": "Recul latéral minimal aux limites (m)",
+      "retrait_fond_m": "Recul minimal en fond de parcelle (m)",
+      "retrait_limites_m": "Recul agrégé latéral ou fond (compat)",
+      "lls_quota_pct": "Quota minimum logements sociaux (0.0–1.0)",
+      "lls_seuil_logements": "Seuil de déclenchement LLS (nb logements)",
+      "lls_seuil_sdp_m2": "Seuil de déclenchement LLS (m² SDP)",
+      "pleine_terre_pct": "Pleine terre minimum (0.0–1.0)",
+      "materials_prescribed": "Matériaux façade prescrits (liste de canonical keys)",
+      "toiture_prescribed": "Toitures prescrites (liste de canonical keys)",
+      "article_refs": "Références d'articles citées (UA1.9, UA1.10…)",
+      "_meta": "Source PDF, sha256, extracted_at, model used, confidence"
+    },
+    "sample_entry": {
+      "nogent-sur-marne|UA1": {
+        "emprise_max_pct": 0.8,
+        "hauteur_max_m": 18.0,
+        "hauteur_max_storeys": 5,
+        "retrait_voirie_m": 0.0,
+        "retrait_lat_m": 3.0,
+        "retrait_fond_m": 6.0,
+        "retrait_limites_m": 3.0,
+        "lls_quota_pct": 0.3,
+        "lls_seuil_logements": 12,
+        "pleine_terre_pct": 0.1,
+        "materials_prescribed": [
+          "pierre_meuliere",
+          "enduit_clair",
+          "brique"
+        ],
+        "toiture_prescribed": [
+          "zinc",
+          "tuile_plate"
+        ],
+        "article_refs": [
+          "UA1.9",
+          "UA1.10",
+          "UA1.11"
+        ],
+        "_meta": {
+          "source_pdf": "https://www.parisestmarnebois.fr/...",
+          "source_sha256": "ab12...",
+          "extracted_at": "2026-06-07T12:00:00Z",
+          "extraction_confidence": 0.92,
+          "warnings": []
+        }
+      }
+    }
+  },
+  "project_overlays": {
+    "__doc__": "Per-project urbanism overlays extracted from agent recherche (refs/plu/*_overlays_*.md). Loaded by core.building_model.validator.overlay_cache.OverlayContext.from_project_slug(slug) → drives the V2 conformite gate (ABF AC1, PPRI PHEC, RGA, linéaire commercial L.151-16, hauteur graphique HG, stationnement PDU…). Each field maps 1:1 onto OverlayContext fields; nulls mean 'unknown' (corresponding check → skipped).",
+    "nogent_80_heros": {
+      "__meta": {
+        "address": "80 Rue des Héros Nogentais, 94130 Nogent-sur-Marne",
+        "parcels": ["940520000G0123", "940520000G0124", "940520000G0125"],
+        "zone_plu": "UA1",
+        "lat": 48.838,
+        "lon": 2.486,
+        "source_markdown": "refs/plu/nogent_80_heros_overlays_exhaustifs.md",
+        "extracted_at": "2026-06-07",
+        "extraction_method": "agent_recherche_PLUi_PEMB_2025_4-3_4-4_grille_5_12_1h"
+      },
+      "in_perimetre_ac1": true,
+      "abf_distance_mh_m": 390,
+      "abf_mh_reference": "PA00079894 Église Saint-Saturnin classée MH 1862 — centroid ~48.8371/2.4872",
+      "abf_avis_obtenu": false,
+      "in_lineaire_l151_16": true,
+      "lineaire_l151_16_source": "Carte 4-4 PLUi PEMB côté Mairie rue des Héros — quasi-certain",
+      "in_l151_19": true,
+      "voisin_l151_19_references": ["n°88 Mairie de Nogent", "n°95 immeuble brique"],
+      "l151_19_modification_autorisee": null,
+      "ppri_zone": "bleu",
+      "ppri_cote_phec_ngf": 33.5,
+      "ppri_delta_securite_m": 0.20,
+      "ppri_source": "DRIEAT PPRI Marne — secteur central Nogent (à confirmer carte officielle)",
+      "rga_niveau": "moyen",
+      "rga_source": "Géorisques RGA — Bartonien/Stampien IDF",
+      "rga_etude_g2_realisee": false,
+      "stationnement_perimetre_bonne_desserte": true,
+      "stationnement_pl_max_per_log": 1.0,
+      "stationnement_source": "Périmètre bonne desserte RER A Nogent-sur-Marne (< 800m) — carte 4-4 PLUi PEMB",
+      "hauteur_graphique_carte_4_4_m": null,
+      "hauteur_graphique_status": "À CONFIRMER carte 4-4 — probable 12m côté Mairie pour préserver covisibilité Saint-Saturnin",
+      "in_perimetre_pprt": false,
+      "in_bande_sup_i1": false,
+      "in_bande_sup_i3": false,
+      "in_basias": null,
+      "in_basol": null,
+      "in_sis": null,
+      "in_ebc": false,
+      "in_natura2000": false,
+      "in_zone_a_n": false,
+      "in_spr_psmv": false,
+      "in_oap_sectorielle": null,
+      "sismicite_zone": 1,
+      "radon_categorie": 1,
+      "_overlays_documented_total": 20,
+      "_overlays_encoded_in_v2_gate": [
+        "in_perimetre_ac1",
+        "in_lineaire_l151_16",
+        "in_l151_19",
+        "ppri_zone+ppri_cote_phec_ngf",
+        "rga_niveau",
+        "stationnement_perimetre_bonne_desserte",
+        "hauteur_graphique_carte_4_4_m",
+        "in_perimetre_pprt",
+        "in_bande_sup_i1+i3",
+        "in_ebc",
+        "in_natura2000",
+        "in_zone_a_n",
+        "in_spr_psmv"
+      ],
+      "_overlays_markdown_only": [
+        "alignement_force_voirie (codé via PLU UA.6 recul=0)",
+        "recul_obligatoire_carte_4_4 (variable 2-7m, à carto)",
+        "PDA_specifique (UDAP94, non couvert)",
+        "cavites_souterraines (Géorisques, non couvert)",
+        "ER_n12_voirie (4-2, non couvert)",
+        "EBC_arbres_alignements_rue (4-3, non couvert)",
+        "cone_de_vue_L151_19 (4-3, non couvert)"
+      ]
+    }
+  },
+  "entries": {
+    "nogent-sur-marne|UA1": {
+      "emprise_max_pct": 0.80,
+      "hauteur_max_m": 18.0,
+      "hauteur_max_m_bonus_toiture": 20.0,
+      "hauteur_max_storeys": 5,
+      "retrait_voirie_m": 0.0,
+      "retrait_lat_m": 4.0,
+      "retrait_lat_h_div": 3.0,
+      "retrait_fond_max_h_on_limit_m": 3.0,
+      "retrait_limites_m": 4.0,
+      "mitoyennete_autorisee_sans_baie": true,
+      "lls_quota_pct": 0.30,
+      "lls_seuil_logements": 12,
+      "lls_seuil_sdp_m2": 800,
+      "pleine_terre_pct": 0.15,
+      "stationnement_log_max_per_log": 1.0,
+      "stationnement_lls_max_per_log": 0.5,
+      "stationnement_ve_pct": 0.10,
+      "materials_prescribed": ["pierre_meuliere", "enduit_clair", "brique"],
+      "toiture_prescribed": ["zinc", "tuile_plate"],
+      "article_refs": ["UA.4", "UA.6", "UA.7", "UA.9", "UA.10", "UA.11", "UA.14", "UA.15", "UA.17"],
+      "_meta": {
+        "source_pdf": "https://www.parisestmarnebois.fr/sites/default/files/2025-06/5-2_PEMB-PLUi_UA_REGLEMENT.pdf",
+        "source_pdf_nogent_consolide": "https://ville-nogentsurmarne.com/wp-content/uploads/2025/06/fd938f415ff640fb32c52e3cafc492cd.pdf",
+        "idurba": "200057941_PLUi_20251014",
+        "datvalid": "20231212",
+        "ms1_date": "2025-05-19",
+        "extracted_at": "2026-06-07",
+        "extraction_confidence": 0.95,
+        "extraction_method": "agent_recherche_cross_referenced_PLUi_PEMB_2025",
+        "warnings": [
+          "Confirmation par agent recherche officielle 2026-06-07 — règlement écrit PLUi PEMB",
+          "Carte 4-4 prescriptions particulières non encore croisée par parcelle (HG hauteur graphique probable 12m côté Mairie)",
+          "Linéaire commercial L.151-16 à vérifier carte 4-4 sur rue des Héros",
+          "Périmètre ABF 500m Église Saint-Saturnin MH1862 probable applicable"
+        ]
+      }
+    }
+  }
+}
