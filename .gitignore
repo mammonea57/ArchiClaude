@@ -79,3 +79,7 @@ apps/render-service/ue5/textures/textures_cache/
 
 # Backend scripts that are project-specific
 apps/backend/scripts/insert_bm_v5.py
+
+# venv isolé du solveur CP-SAT (refonte plan-engine)
+.venv_solver/
+*.bak
