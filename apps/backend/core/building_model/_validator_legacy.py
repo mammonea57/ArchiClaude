@@ -67,9 +67,19 @@ def _can_inscribe_circle(polygon: list[tuple[float, float]], diameter_m: float) 
 
 
 def validate_pmr_building(bm: BuildingModel) -> list[ConformiteAlert]:
-    """Validate PMR rules that require the whole building (e.g. ascenseur)."""
+    """Validate PMR rules that require the whole building (e.g. ascenseur).
+
+    Defensive against duck-typed envelope-only stubs (used by the pre-render
+    MAX-envelope gate, which has no Core/Niveau yet). When ``bm.core`` is
+    absent we return ``[]`` so the check is effectively *skipped* — the
+    real validator is re-run after the full BuildingModel is generated.
+    """
     alerts: list[ConformiteAlert] = []
-    if bm.envelope.niveaux - 1 >= _PMR_ASCENSEUR_REQUIRED_FROM_NIVEAU and bm.core.ascenseur is None:
+    core = getattr(bm, "core", None)
+    if core is None:
+        return alerts
+    ascenseur = getattr(core, "ascenseur", None)
+    if bm.envelope.niveaux - 1 >= _PMR_ASCENSEUR_REQUIRED_FROM_NIVEAU and ascenseur is None:
         alerts.append(ConformiteAlert(
             level="error", category="pmr",
             message=f"Ascenseur requis pour R+{bm.envelope.niveaux - 1} (obligation PMR ≥R+2)",
